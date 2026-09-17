@@ -6,17 +6,17 @@ import { useUIStore } from "@/stores/uiStore";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { getConnectionIcon, getConnectionIconColor } from "@/utils/icons";
-import { getSyncState, onSyncStateChange, type SyncStatus } from "@/services/sync";
-import { selectEffectiveSyncStatus, syncStatusColor } from "@/services/syncStatus";
-import { useGistSyncState } from "@/hooks/useGistSyncState";
+import type { SyncStatus } from "@/services/sync";
+import { syncStatusColor } from "@/services/syncStatus";
+import { useSyncProviders } from "@/hooks/useSyncProviders";
 import { useRipple } from "@/hooks/useRipple";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
 import { ShareMenu } from "@/components/terminal/ShareMenu";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { usePfToastBridge } from "@/hooks/usePfToastBridge";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
-import { usePluginRegistryStore } from "@/stores/pluginRegistryStore";
 import { SyncDropdown } from "@/components/layout/SyncDropdown";
+import { usePluginInstaller } from "@/components/settings/usePluginInstaller";
 import { NewSessionPopover } from "@/components/layout/NewSessionPopover";
 import { useDragStore } from "@/stores/dragStore";
 import { useMcpOwnershipStore } from "@/stores/mcpOwnershipStore";
@@ -36,6 +36,7 @@ import { STATUS_TONE_COLOR, sessionStatusTone } from "@/utils/statusTone";
 import { sessionLabel, splitTabLabel } from "@/utils/sessionLabel";
 import { focusSession } from "@/hooks/useTerminal";
 import { splitTabMenuItems } from "@/utils/splitTabMenuItems";
+import { fadeMask, useTabStripScroll } from "@/hooks/useTabStripScroll";
 
 const appWindow = getCurrentWindow();
 
@@ -74,21 +75,10 @@ export default function TitleBar() {
 
   usePfToastBridge();
 
-  const [syncState, setSyncState] = useState(getSyncState);
-  useEffect(() => { return onSyncStateChange(() => setSyncState(getSyncState())); }, []);
+  const { providers: syncProviders, effective: sync } = useSyncProviders();
+  const syncInstaller = usePluginInstaller();
 
-  const gistSyncState = useGistSyncState();
-
-  const gistPluginEnabled = usePluginRegistryStore((s) => s.isEnabled("plugin-gist-sync", false));
   const accountMode = useSubscriptionStore((s) => s.accountMode);
-  const isPro = useSubscriptionStore((s) => s.isPro);
-
-  const {
-    configured: effectiveConfigured,
-    status: effectiveSyncStatus,
-    lastSync: effectiveLastSync,
-    error: effectiveError,
-  } = selectEffectiveSyncStatus({ voltius: syncState, gist: gistSyncState, accountMode, isPro, gistPluginEnabled });
 
   const { pos: tabMenuPos, open: openTabMenu, close: closeTabMenu } = useContextMenu();
   const [menuTarget, setMenuTarget] = useState<{ kind: "session" | "split"; id: string } | null>(null);
@@ -154,6 +144,16 @@ export default function TitleBar() {
     const item = titlebarItemMap.get(key);
     return item ? [item] : [];
   });
+
+  const activeItemKey = activeNav !== "terminal" || sftpPanelOpen
+    ? null
+    : splitTabActive ? `split:${activeSplitTabId}` : `session:${activeSessionId}`;
+  const tabStrip = useTabStripScroll(`${activeItemKey}|${visibleItemKeys.length}`);
+  const isDraggingIntoTitlebar = isDraggingTitlebarItem || isDraggingPane;
+
+  useEffect(() => {
+    if (!isDraggingIntoTitlebar) tabStrip.stopAutoScroll();
+  }, [isDraggingIntoTitlebar, tabStrip.stopAutoScroll]);
 
   useEffect(() => {
     syncTitlebarOrder(visibleItemKeys);
@@ -228,6 +228,7 @@ export default function TitleBar() {
   const updateTitlebarDropTarget = (e: React.MouseEvent<HTMLDivElement>) => {
     const drag = useDragStore.getState();
     if (drag.dragType !== "pane" && drag.dragType !== "tab") return;
+    tabStrip.autoScrollNear(e.clientX);
     const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-titlebar-key]");
     if (!tab || !e.currentTarget.contains(tab)) {
       useDragStore.getState().setDropTarget({ type: "titlebar", targetKey: null, placement: "after" });
@@ -342,9 +343,8 @@ export default function TitleBar() {
           <div className="shrink-0 w-px h-[1.667rem] bg-(--t-bg-card-hover)" />
         )}
 
-        {/* Scrollable session tabs */}
         <div
-          className="flex items-center gap-1.5 overflow-x-auto flex-1 h-full min-w-0 rounded-xl transition-colors"
+          className="flex items-center gap-1.5 flex-1 h-full min-w-0 rounded-xl transition-colors"
           style={{
             background: titlebarDropActive
               ? "color-mix(in srgb, var(--t-accent) 10%, transparent)"
@@ -353,8 +353,14 @@ export default function TitleBar() {
           onMouseEnter={updateTitlebarDropTarget}
           onMouseMove={updateTitlebarDropTarget}
           onMouseLeave={() => {
+            tabStrip.stopAutoScroll();
             if (useDragStore.getState().dropTarget?.type === "titlebar") useDragStore.getState().setDropTarget(null);
           }}
+        >
+        <div
+          ref={tabStrip.ref}
+          className="flex items-center gap-1.5 h-full min-w-0 overflow-x-auto scrollbar-none"
+          style={fadeMask(tabStrip.overflow)}
         >
         {titlebarItems.map((item) => {
           if (item.type === "split") {
@@ -390,6 +396,7 @@ export default function TitleBar() {
                 ) : (
                 <button
                   data-titlebar-key={item.key}
+                  data-strip-active={isActiveSplitTab}
                   onClick={() => handleUnifiedTabClick(tab.id)}
                   onContextMenu={(e) => { setMenuTarget({ kind: "split", id: tab.id }); openTabMenu(e); }}
                   onDoubleClick={() => setRenaming({ kind: "split", id: tab.id })}
@@ -479,6 +486,7 @@ export default function TitleBar() {
               ) : (
               <button
                 data-titlebar-key={item.key}
+                data-strip-active={isActive}
                 onClick={() => handleTabClick(session.id)}
                 onContextMenu={(e) => { setMenuTarget({ kind: "session", id: session.id }); openTabMenu(e); }}
                 onDoubleClick={() => setRenaming({ kind: "session", id: session.id })}
@@ -533,8 +541,8 @@ export default function TitleBar() {
         })}
 
         {renderTitlebarDropCue(null, "after")}
+        </div>
 
-        {/* New tab button */}
         <NewTabButton />
         </div>
       </div>
@@ -566,21 +574,22 @@ export default function TitleBar() {
       {/* Sync indicator */}
       <SyncIndicator
         anchorRef={syncButtonRef}
-        status={effectiveSyncStatus}
-        lastSync={effectiveLastSync}
-        error={effectiveError}
+        status={sync.status}
+        lastSync={sync.lastSync}
+        error={sync.error}
+        errorSource={sync.errorSource}
         active={syncDropdownOpen}
-        configured={effectiveConfigured}
+        configured={sync.configured}
         onClick={() => setSyncDropdownOpen((o) => !o)}
       />
       <SyncDropdown
         anchorRef={syncButtonRef}
         open={syncDropdownOpen}
         onClose={() => setSyncDropdownOpen(false)}
-        cloudActive={syncState.cloudActive}
-        gistPluginEnabled={gistPluginEnabled}
-        accountMode={accountMode}
+        providers={syncProviders}
+        installer={syncInstaller}
       />
+      {syncInstaller.modal}
 
       {/* Watching / Ended badge — guest in a multiplayer session */}
       {showTerminal && isActiveSessionMultiplayer && (
@@ -870,6 +879,7 @@ function SyncIndicator({
   status: engineStatus,
   lastSync,
   error,
+  errorSource,
   active,
   configured,
   onClick,
@@ -878,6 +888,7 @@ function SyncIndicator({
   status: SyncStatus;
   lastSync: Date | null;
   error: string | null;
+  errorSource: string | null;
   active: boolean;
   configured: boolean;
   onClick: () => void;
@@ -891,7 +902,9 @@ function SyncIndicator({
   const title = !configured ? t("layout.sync.status.notConfigured") :
     status === "syncing" ? t("layout.sync.status.syncing") :
     status === "success" ? (lastSync ? t("layout.sync.status.syncedAt", { time: lastSync.toLocaleTimeString() }) : t("layout.sync.status.synced")) :
-    status === "error"   ? t("layout.sync.status.errorDetail", { error: error ?? t("layout.sync.status.unknown") }) :
+    status === "error"   ? (errorSource
+      ? t("layout.sync.status.errorDetailFrom", { source: errorSource, error: error ?? t("layout.sync.status.unknown") })
+      : t("layout.sync.status.errorDetail", { error: error ?? t("layout.sync.status.unknown") })) :
     status === "offline" ? t("layout.sync.status.offline") :
                            t("layout.sync.status.default");
 

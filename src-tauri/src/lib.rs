@@ -20,6 +20,7 @@ mod linux_gfx;
 mod local;
 pub mod mcp;
 mod metrics;
+mod network_watch;
 mod port_forward;
 mod processes;
 mod proxmox;
@@ -518,6 +519,7 @@ pub fn run() {
             app.manage(Arc::new(PendingConflicts::new()));
             app.manage(PortForwardManager::new(app.handle().clone()));
             app.manage(Arc::new(mcp::McpState::new()));
+            network_watch::start(app.handle().clone());
 
             #[cfg(all(desktop, not(debug_assertions)))]
             {
@@ -731,7 +733,6 @@ pub fn run() {
             commands::snippets::snippet_update,
             commands::snippets::snippet_adopt,
             commands::snippets::snippet_delete,
-            commands::snippets::snippet_inject,
             commands::snippets::snippet_folder_list,
             commands::snippets::snippet_folder_create,
             commands::snippets::snippet_folder_update,
