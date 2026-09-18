@@ -4,7 +4,9 @@
  */
 export { Icon } from "@iconify/react";
 export { InfoTooltip } from "@/components/shared/InfoTooltip";
+export { FormSelect } from "@/components/shared/FormSelect";
 export { useAutosave } from "@/hooks/useAutosave";
+export { useCopiedFlash } from "@/hooks/useCopiedFlash";
 // Every mobile plugin screen needs both — re-render on a locale change, and track
 // one session by id rather than the foreground tab. Each bundle used to carry its
 // own byte-identical copy.

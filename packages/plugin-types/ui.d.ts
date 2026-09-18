@@ -5,6 +5,13 @@ declare module "@voltius/ui" {
   import type { PluginAPI, PluginSession } from "@voltius/plugin-types";
   export const Icon: ComponentType<{ icon: string; width?: number | string; className?: string }>;
   export const InfoTooltip: ComponentType<{ text: string; children?: ReactNode }>;
+  export const FormSelect: ComponentType<{
+    value: string;
+    options: { value: string; label: string }[];
+    onChange: (value: string) => void;
+    className?: string;
+    ariaLabel?: string;
+  }>;
   export const BottomSheet: ComponentType<{ title?: string; onClose: () => void; children?: ReactNode }>;
   export const MobileScreenHeader: ComponentType<{
     title: string;
@@ -13,6 +20,7 @@ declare module "@voltius/ui" {
     children?: ReactNode;
   }>;
   export function useAutosave<T>(value: T, save: (v: T) => void | Promise<void>, delayMs?: number): void;
+  export function useCopiedFlash(durationMs: number): { copied: boolean; flash: (persist?: boolean) => void };
   export function useT(api: PluginAPI): PluginAPI["i18n"]["t"];
   export function useSessionById(api: PluginAPI, sessionId: string): PluginSession | null;
   export function useActiveSession(api: PluginAPI | null): PluginSession | null;
