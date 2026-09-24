@@ -24,6 +24,7 @@ mod network_watch;
 mod port_forward;
 mod processes;
 mod proxmox;
+mod scratch;
 mod serial;
 mod sftp;
 mod shell_integration;
@@ -797,6 +798,8 @@ pub fn run() {
             serial::connect::serial_list_ports,
             serial::connect::serial_connect,
             serial::connect::serial_write,
+            serial::connect::serial_set_line,
+            serial::connect::serial_send_break,
             serial::connect::serial_disconnect,
             commands::mcp::mcp_bridge_reply,
             commands::mcp::mcp_consumer_ready,
@@ -804,8 +807,14 @@ pub fn run() {
             commands::mcp::mcp_status,
             commands::mcp::mcp_notify_tools_changed,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                app.state::<SerialSessionManager>().release_all();
+            }
+        });
 }
 
 #[cfg(all(test, desktop))]
