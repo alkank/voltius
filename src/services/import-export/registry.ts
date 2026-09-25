@@ -2,7 +2,7 @@ import { getSecret } from "@/services/vault";
 import type { Connection, Folder, PortForwardingRule } from "@/types";
 import type { ExportBundle, FolderExport } from "./formats";
 import type { ExportCtx, ImportCtx, ReloadFns, SelectionProps, StoreSlices } from "./context";
-import { existingConnectionsForVault } from "./context";
+import { existingConnectionsForVault, hasSelection } from "./context";
 import type { DataTypeHandler } from "./handler";
 import { keysHandler } from "./handlers/keys";
 import { identitiesHandler } from "./handlers/identities";
@@ -68,6 +68,7 @@ export async function buildBundle(
   vaultIds: string[],
   selection: SelectionProps,
   canViewSecrets: (vaultId: string) => boolean,
+  { includeRelatedCredentials = false }: { includeRelatedCredentials?: boolean } = {},
 ): Promise<ExportBundle> {
   // 1. Resolve cascade for identities/keys (connections pull in their identities, etc.)
   const selectedByKey: Record<string, unknown[]> = {};
@@ -97,29 +98,31 @@ export async function buildBundle(
   }
 
   // Cascade: connections → identities → keys (including jump host identities)
-  const connItems = selectedByKey["connections"] as Connection[];
-  const cascadedIdentityIds = new Set([
-    ...(selectedByKey["identities"] as { id: string }[]).map(i => i.id),
-    ...connItems.map(c => c.identity_id).filter((id): id is string => !!id),
-    ...connItems.flatMap(c => (c.jump_hosts ?? []).map(jh => jh.identity_id).filter((id): id is string => !!id)),
-  ]);
-  if (enabled["identities"] || cascadedIdentityIds.size > 0) {
-    const effectiveIdentities = stores.identities.filter(i => cascadedIdentityIds.has(i.id));
-    if (effectiveIdentities.length > (selectedByKey["identities"] as unknown[]).length) {
-      selectedByKey["identities"] = effectiveIdentities;
+  if (includeRelatedCredentials) {
+    const connItems = selectedByKey["connections"] as Connection[];
+    const cascadedIdentityIds = new Set([
+      ...(selectedByKey["identities"] as { id: string }[]).map(i => i.id),
+      ...connItems.map(c => c.identity_id).filter((id): id is string => !!id),
+      ...connItems.flatMap(c => (c.jump_hosts ?? []).map(jh => jh.identity_id).filter((id): id is string => !!id)),
+    ]);
+    if (enabled["identities"] || cascadedIdentityIds.size > 0) {
+      const effectiveIdentities = stores.identities.filter(i => cascadedIdentityIds.has(i.id));
+      if (effectiveIdentities.length > (selectedByKey["identities"] as unknown[]).length) {
+        selectedByKey["identities"] = effectiveIdentities;
+      }
     }
-  }
 
-  const idItems = selectedByKey["identities"] as { id: string; key_id?: string }[];
-  const cascadedKeyIds = new Set([
-    ...(selectedByKey["keys"] as { id: string }[]).map(k => k.id),
-    ...idItems.map(i => i.key_id).filter((id): id is string => !!id),
-    ...connItems.map(c => c.key_id).filter((id): id is string => !!id),
-  ]);
-  if (enabled["keys"] || cascadedKeyIds.size > 0) {
-    const effectiveKeys = stores.keys.filter(k => cascadedKeyIds.has(k.id));
-    if (effectiveKeys.length > (selectedByKey["keys"] as unknown[]).length) {
-      selectedByKey["keys"] = effectiveKeys;
+    const idItems = selectedByKey["identities"] as { id: string; key_id?: string }[];
+    const cascadedKeyIds = new Set([
+      ...(selectedByKey["keys"] as { id: string }[]).map(k => k.id),
+      ...idItems.map(i => i.key_id).filter((id): id is string => !!id),
+      ...connItems.map(c => c.key_id).filter((id): id is string => !!id),
+    ]);
+    if (enabled["keys"] || cascadedKeyIds.size > 0) {
+      const effectiveKeys = stores.keys.filter(k => cascadedKeyIds.has(k.id));
+      if (effectiveKeys.length > (selectedByKey["keys"] as unknown[]).length) {
+        selectedByKey["keys"] = effectiveKeys;
+      }
     }
   }
 
@@ -128,6 +131,7 @@ export async function buildBundle(
   const snippetFolderIds = new Set<string>();
   for (const h of HANDLERS) {
     h.accumulateFolderIds(selectedByKey[h.key], mainFolderIds, snippetFolderIds);
+    if (enabled[h.key] && !hasSelection(selection)) h.accumulateVaultFolderIds(stores, vaultIds, mainFolderIds, snippetFolderIds);
   }
 
   // 3. Walk parent chains
@@ -223,19 +227,45 @@ function neededFolderEids(bundle: ExportBundle, ctx: ImportCtx): Set<string> {
       if (r._folder_eid) needed.add(r._folder_eid);
   }
 
-  // Expand to include all ancestor folders
+  return withAncestors(needed, bundle.folders);
+}
+
+function withAncestors(eids: Set<string>, folders: FolderExport[]): Set<string> {
   let changed = true;
   while (changed) {
     changed = false;
-    for (const f of bundle.folders) {
-      if (needed.has(f._eid) && f.parent_folder_eid && !needed.has(f.parent_folder_eid)) {
-        needed.add(f.parent_folder_eid);
+    for (const f of folders) {
+      if (eids.has(f._eid) && f.parent_folder_eid && !eids.has(f.parent_folder_eid)) {
+        eids.add(f.parent_folder_eid);
         changed = true;
       }
     }
   }
+  return eids;
+}
 
-  return needed;
+function itemFolderEids(bundle: ExportBundle): Set<string> {
+  const items = [...bundle.connections, ...bundle.keys, ...bundle.identities, ...bundle.snippets, ...bundle.portForwardingRules];
+  return new Set(items.flatMap(i => i._folder_eid ? [i._folder_eid] : []));
+}
+
+// Folders of `original` worth importing once items were dropped to make `kept`:
+// ancestors of a kept item, and empty leaf folders with their ancestors.
+export function importableFolders(original: ExportBundle, kept: ExportBundle): FolderExport[] {
+  const holding = itemFolderEids(original);
+  const keptHolding = itemFolderEids(kept);
+  const parents = new Set(original.folders.map(f => f.parent_folder_eid));
+  const seeds = original.folders
+    .filter(f => keptHolding.has(f._eid) || (!holding.has(f._eid) && !parents.has(f._eid)))
+    .map(f => f._eid);
+  const keep = withAncestors(new Set(seeds), original.folders);
+  return original.folders.filter(f => keep.has(f._eid));
+}
+
+function matchingFolder(ctx: ImportCtx, folder: FolderExport, parentId: string | undefined): Folder | undefined {
+  return ctx.existingFolders.find(e =>
+    !e.deleted_at && (e.vault_id ?? "personal") === ctx.vault_id && e.object_type === folder.object_type &&
+    e.name === folder.name && (e.parent_folder_id ?? undefined) === parentId);
 }
 
 // ─── Import orchestrator ──────────────────────────────────────────────────────
@@ -247,9 +277,9 @@ export async function runImport(
   let imported = 0;
   let errors = 0;
 
-  // 1. Folders — only create those referenced by items that will actually be imported
-  const needed = neededFolderEids(bundle, ctx);
-  const pending = bundle.folders.filter(f => needed.has(f._eid));
+  // 1. Folders — reused when the vault already has one of the same name, type and parent
+  const needed = ctx.skipDupes ? neededFolderEids(bundle, ctx) : null;
+  const pending = bundle.folders.filter(f => !needed || needed.has(f._eid));
   let maxPasses = pending.length + 1;
   while (pending.length > 0 && maxPasses-- > 0) {
     const remaining: FolderExport[] = [];
@@ -259,6 +289,11 @@ export async function runImport(
       if (!folder.parent_folder_eid || parentMap.has(folder.parent_folder_eid)) {
         try {
           const parentId = folder.parent_folder_eid ? parentMap.get(folder.parent_folder_eid) : undefined;
+          const existing = matchingFolder(ctx, folder, parentId);
+          if (existing) {
+            parentMap.set(folder._eid, existing.id);
+            continue;
+          }
           const saveFn = isSnippet ? ctx.stores.saveSnippetFolder : ctx.stores.saveFolder;
           const saved = await saveFn({ name: folder.name, object_type: folder.object_type, parent_folder_id: parentId, vault_id: ctx.vault_id });
           parentMap.set(folder._eid, saved.id);

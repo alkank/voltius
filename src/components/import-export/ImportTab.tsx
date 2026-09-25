@@ -5,11 +5,12 @@ import LogoSvg from "/logo.svg?react";
 import { useDefaultVaultId, resolveVaultIdForSave } from "@/hooks/useWritableVaultIds";
 import { decryptText, fromJSON } from "@/services/import-export/formats";
 import type { ConnectionExport, ExportBundle, FolderExport, IdentityExport, KeyExport, PortForwardingRuleExport, SnippetExport } from "@/services/import-export/formats";
-import { runImport, reloadAll } from "@/services/import-export/registry";
-import { existingConnectionsForVault } from "@/services/import-export/context";
+import { importableFolders, runImport, reloadAll } from "@/services/import-export/registry";
+import { existingConnectionsForVault, newImportCtx } from "@/services/import-export/context";
 import { IMPORTERS, parseImport } from "@/services/import-export/importers";
 import { useImportStores, useReloadFns, useStoreSlices, useDeleteStores } from "./useStores";
 import { ActionBtn, VaultChipSelect, useVaultList } from "./shared";
+import { CheckboxBox } from "@/components/shared/Checkbox";
 import { FileInputArea } from "./FileInputArea";
 
 type ItemAction = "include" | "skip" | "overwrite";
@@ -40,20 +41,6 @@ function getFolderPath(eid: string | undefined, folders: FolderExport[]): string
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
-function ItemCheckbox({ checked }: { checked: boolean }) {
-  return (
-    <span
-      className="flex items-center justify-center w-4 h-4 rounded-sm shrink-0 transition-colors"
-      style={{
-        background: checked ? "var(--t-accent)" : "var(--t-bg-input)",
-        border: `1px solid ${checked ? "var(--t-accent)" : "var(--t-border-hover)"}`,
-      }}
-    >
-      {checked && <Icon icon="lucide:check" width={10} color="white" />}
-    </span>
-  );
-}
 
 function DupeControl({ action, onChange }: { action: ItemAction; onChange: (a: ItemAction) => void }) {
   const { t } = useTranslation();
@@ -105,7 +92,7 @@ function ItemRow({ icon, title, sub, folderPath, isDupe, action, onToggle, onAct
         opacity: action === "skip" ? 0.45 : 1,
       }}
     >
-      {!isDupe && <ItemCheckbox checked={action !== "skip"} />}
+      {!isDupe && <CheckboxBox checked={action !== "skip"} />}
       <Icon icon={icon} width={13} style={{ color: "var(--t-text-dim)", flexShrink: 0 }} />
       <div className="flex flex-col min-w-0 flex-1">
         <span className="text-sm text-(--t-text-primary) truncate">{title}</span>
@@ -384,8 +371,9 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
           snippets: status.bundle.snippets.filter((_, i) => getAction(`snippets:${i}`) !== "skip"),
           portForwardingRules: status.bundle.portForwardingRules.filter((_, i) => getAction(`pfRules:${i}`) !== "skip"),
         };
+        filteredBundle.folders = importableFolders(status.bundle, filteredBundle);
 
-        const result = await runImport(filteredBundle, {
+        const result = await runImport(filteredBundle, newImportCtx({
           vault_id,
           tag: addTag.trim(),
           skipDupes: false,
@@ -394,13 +382,9 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
           existingIdentities: storeSlices.identities,
           existingSnippets: storeSlices.snippets,
           existingPfRules: storeSlices.pfRules,
-          folderEidMap: new Map(),
-          snippetFolderEidMap: new Map(),
-          keyEidMap: new Map(),
-          identityEidMap: new Map(),
-          connectionEidMap: new Map(),
+          existingFolders: [...storeSlices.folders, ...storeSlices.snippetFolders],
           stores: importStores,
-        });
+        }));
         imported += result.imported;
         errors += result.errors;
       }

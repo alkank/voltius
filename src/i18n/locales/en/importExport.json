@@ -26,8 +26,13 @@
       "showPreview": "Show preview",
       "selectedItem_one": "{{count}} selected item",
       "selectedItem_other": "{{count}} selected items",
-      "autoIncludeIdentity": "{{count}} identity",
-      "autoIncludeKey": "{{count}} key",
+      "autoInclude": {
+        "connections_one": "{{count}} connection",
+        "connections_other": "{{count}} connections"
+      },
+      "autoIncludeHint": "Also included: used by the exported items, so they keep working after import",
+      "relatedCredentials": "Include linked credentials",
+      "relatedCredentialsHint": "The identities and SSH keys these connections use. Leave off to export connection settings only and assign credentials after import.",
       "checkboxLabel": {
         "connections_one": "Connection ({{count}})",
         "connections_other": "Connections ({{count}})",

@@ -28,14 +28,15 @@
       "selectedItem_few": "{{count}} выбранных элемента",
       "selectedItem_many": "{{count}} выбранных элементов",
       "selectedItem_other": "{{count}} выбранных элементов",
-      "autoIncludeIdentity_one": "{{count}} личность",
-      "autoIncludeIdentity_few": "{{count}} личности",
-      "autoIncludeIdentity_many": "{{count}} личностей",
-      "autoIncludeIdentity_other": "{{count}} личностей",
-      "autoIncludeKey_one": "{{count}} ключ",
-      "autoIncludeKey_few": "{{count}} ключа",
-      "autoIncludeKey_many": "{{count}} ключей",
-      "autoIncludeKey_other": "{{count}} ключей",
+      "autoInclude": {
+        "connections_one": "{{count}} подключение",
+        "connections_few": "{{count}} подключения",
+        "connections_many": "{{count}} подключений",
+        "connections_other": "{{count}} подключений"
+      },
+      "autoIncludeHint": "Также включено: используется экспортируемыми элементами, чтобы они работали после импорта",
+      "relatedCredentials": "Включить связанные учётные данные",
+      "relatedCredentialsHint": "Личности и SSH-ключи, которые используют эти подключения. Оставьте выключенным, чтобы экспортировать только настройки подключений и назначить учётные данные после импорта.",
       "checkboxLabel": {
         "connections_one": "Подключение ({{count}})",
         "connections_few": "Подключения ({{count}})",
