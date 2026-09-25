@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sync-upstream-main
@@ -18,11 +18,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check sync credentials
+        env:
+          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::Add the UPSTREAM_SYNC_TOKEN repository secret with Contents and Workflows write access to alkank/voltius."
+            exit 1
+          fi
+
       - name: Check out fork
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Merge upstream changes
         run: |
