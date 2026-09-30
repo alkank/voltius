@@ -26,6 +26,7 @@ import { PanelActionsMenu } from "@/components/shared/PanelActionsMenu";
 import { PinButton } from "@/components/shared/PinButton";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { buildConnectionMenuItems } from "@/utils/connectionMenuItems";
+import { useCanConnect } from "@/hooks/useCanConnect";
 import { VaultPicker } from "@/components/shared/VaultPicker";
 import { Toggle } from "@/components/shared/Toggle";
 import { FormSelect } from "@/components/shared/FormSelect";
@@ -36,6 +37,7 @@ import ProxyFields from "./ProxyFields";
 import { selectVaultScopedItems } from "@/utils/vaultScopedItems";
 import { getConnectionIcon, getConnectionIconColor, getConnectionIconLabel, glossyTileStyle, normalizeDistro } from "@/utils/icons";
 import { DistroIconPicker } from "./DistroIconPicker";
+import { PermissionsSection } from "@/components/permissions/PermissionsSection";
 import {
   PanelShell,
   PanelHeader,
@@ -390,6 +392,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
     }
   }, [applyDetectedDistro, host, identityId, keyId, initial, legacyAlgorithms, passphrase, password, port, privateKey, proxyOverride, proxyPassword, selectedIdentity, username]);
 
+  const canConnect = useCanConnect({ id: initial?.id ?? "", vault_id: initial?.vault_id ?? "" });
   const panelItems = initial ? buildConnectionMenuItems({
     t,
     canEdit,
@@ -397,7 +400,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
     vaults,
     isSynced,
     pingDisabled,
-    onConnect: () => onConnect?.(),
+    onConnect: canConnect ? () => onConnect?.() : undefined,
     onDuplicate: () => onDuplicate?.(),
     onMoveToVault,
     onCopyToVault,
@@ -723,6 +726,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
           </FormSection>
 
           <NotesSection value={notes} onChange={(v) => { markDirty(); setNotes(v); }} readOnly={!canEdit} />
+          {initial && <PermissionsSection objectId={initial.id} vaultId={initial.vault_id} type="connection" />}
         </div>
       </div>
     </PanelShell>

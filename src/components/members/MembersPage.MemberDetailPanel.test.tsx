@@ -111,15 +111,15 @@ afterEach(() => cleanup());
 
 test("canManageMembers=false: no role-toggle buttons and no remove button", () => {
   render(<MemberDetailPanel {...baseProps} canManageMembers={false} />);
-  expect(screen.queryByRole("button", { name: "editor" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "member" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "members.roleName.editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "members.roleName.member" })).toBeNull();
   expect(screen.queryByRole("button", { name: "members.removeFromTeam" })).toBeNull();
 });
 
 test("isMe=true: role-toggle buttons and remove button absent even though canManageMembers=true", () => {
   render(<MemberDetailPanel {...baseProps} isMe={true} />);
-  expect(screen.queryByRole("button", { name: "editor" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "member" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "members.roleName.editor" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "members.roleName.member" })).toBeNull();
   expect(screen.queryByRole("button", { name: "members.removeFromTeam" })).toBeNull();
 });
 
@@ -133,13 +133,13 @@ test("isTargetOwner=true with owner role: remove button absent; owner role never
   const ownerMember = { ...baseMember, role_ids: ["r-owner"] };
   render(<MemberDetailPanel {...baseProps} member={ownerMember} isTargetOwner={true} />);
   expect(screen.queryByRole("button", { name: "members.removeFromTeam" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "owner" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "members.roleName.owner" })).toBeNull();
   expect(h.remove).not.toHaveBeenCalled();
 });
 
 test("assign path: click editor toggle when member lacks it", async () => {
   render(<MemberDetailPanel {...baseProps} />);
-  fireEvent.click(screen.getByRole("button", { name: "editor" }));
+  fireEvent.click(screen.getByRole("button", { name: "members.roleName.editor" }));
   await waitFor(() => expect(baseProps.onUpdated).toHaveBeenCalled());
   expect(h.assign).toHaveBeenCalledWith("t1", "u1", "r-ed");
   expect(h.remove).not.toHaveBeenCalled();
@@ -148,7 +148,7 @@ test("assign path: click editor toggle when member lacks it", async () => {
 
 test("remove-role path: click member toggle when member has it", async () => {
   render(<MemberDetailPanel {...baseProps} />);
-  fireEvent.click(screen.getByRole("button", { name: "member" }));
+  fireEvent.click(screen.getByRole("button", { name: "members.roleName.member" }));
   await waitFor(() => expect(baseProps.onUpdated).toHaveBeenCalled());
   expect(h.remove).toHaveBeenCalledWith("t1", "u1", "r-mem");
   expect(h.assign).not.toHaveBeenCalled();
@@ -260,7 +260,7 @@ function permProps(overrides: Partial<{
 test("permission overrides: renders one row per permission and sends the new masks", async () => {
   render(<MemberDetailPanel {...permProps()} />);
 
-  expect(screen.getAllByRole("radiogroup")).toHaveLength(16);
+  expect(screen.getAllByRole("radiogroup")).toHaveLength(18);
 
   const row = screen.getByRole("radiogroup", { name: "members.permission.EDIT_KEYS" });
   fireEvent.click(within(row).getByRole("radio", { name: /deny/i }));
@@ -279,7 +279,7 @@ test("permission overrides: renders one row per permission and sends the new mas
 test("permission overrides: the filter narrows visible rows and hides empty groups", () => {
   render(<MemberDetailPanel {...permProps()} />);
 
-  expect(screen.getAllByRole("radiogroup")).toHaveLength(16);
+  expect(screen.getAllByRole("radiogroup")).toHaveLength(18);
 
   fireEvent.change(screen.getByPlaceholderText("members.permissions.filterPlaceholder"), {
     target: { value: "secrets" },
@@ -467,14 +467,14 @@ test("choosing allow on a bit the viewer lacks sends no request", async () => {
 
 const keyRole: TeamRole = {
   id: "r-key", team_id: "t1", name: "key-role", is_builtin: false,
-  permissions: PERM_BITS.VIEW_SECRETS, position: 2, created_at: "",
+  permissions: PERM_BITS.CONNECT, position: 2, created_at: "",
 };
 const keyMember: TeamMember = { ...targetMember, role_ids: ["r-key"] };
 
 test("a gate-crossing change opens the dialog and writes nothing yet", async () => {
   render(<MemberDetailPanel {...permProps({ member: keyMember, teamRoles: [viewerRole, keyRole] })} />);
 
-  const row = screen.getByRole("radiogroup", { name: "members.permission.VIEW_SECRETS" });
+  const row = screen.getByRole("radiogroup", { name: "members.permission.CONNECT" });
   fireEvent.click(within(row).getByRole("radio", { name: /deny/i }));
 
   expect(await screen.findByText("members.revokeKeyAccess.title")).toBeTruthy();
@@ -484,7 +484,7 @@ test("a gate-crossing change opens the dialog and writes nothing yet", async () 
 test("every row is inert while the revoke dialog is open", async () => {
   render(<MemberDetailPanel {...permProps({ member: keyMember, teamRoles: [viewerRole, keyRole] })} />);
 
-  const row = screen.getByRole("radiogroup", { name: "members.permission.VIEW_SECRETS" });
+  const row = screen.getByRole("radiogroup", { name: "members.permission.CONNECT" });
   fireEvent.click(within(row).getByRole("radio", { name: /deny/i }));
   await screen.findByText("members.revokeKeyAccess.title");
 
@@ -498,12 +498,12 @@ test("confirming the dialog writes, then kicks rotation after the write resolves
 
   render(<MemberDetailPanel {...permProps({ member: keyMember, teamRoles: [viewerRole, keyRole] })} />);
 
-  const row = screen.getByRole("radiogroup", { name: "members.permission.VIEW_SECRETS" });
+  const row = screen.getByRole("radiogroup", { name: "members.permission.CONNECT" });
   fireEvent.click(within(row).getByRole("radio", { name: /deny/i }));
   fireEvent.click(await screen.findByRole("button", { name: "members.revokeKeyAccess.confirm" }));
 
   await waitFor(() =>
-    expect(h.setPerms).toHaveBeenCalledWith("t1", "u2", 0, PERM_BITS.VIEW_SECRETS),
+    expect(h.setPerms).toHaveBeenCalledWith("t1", "u2", 0, PERM_BITS.CONNECT),
   );
   expect(h.rotate).not.toHaveBeenCalled();
 
@@ -514,7 +514,7 @@ test("confirming the dialog writes, then kicks rotation after the write resolves
 test("cancelling the dialog writes nothing and rotates nothing", async () => {
   render(<MemberDetailPanel {...permProps({ member: keyMember, teamRoles: [viewerRole, keyRole] })} />);
 
-  const row = screen.getByRole("radiogroup", { name: "members.permission.VIEW_SECRETS" });
+  const row = screen.getByRole("radiogroup", { name: "members.permission.CONNECT" });
   fireEvent.click(within(row).getByRole("radio", { name: /deny/i }));
   fireEvent.click(await screen.findByRole("button", { name: "common.action.cancel" }));
 
@@ -540,7 +540,7 @@ test("a rejected write after confirming does not rotate", async () => {
   h.setPerms.mockRejectedValueOnce(new Error("boom"));
   render(<MemberDetailPanel {...permProps({ member: keyMember, teamRoles: [viewerRole, keyRole] })} />);
 
-  const row = screen.getByRole("radiogroup", { name: "members.permission.VIEW_SECRETS" });
+  const row = screen.getByRole("radiogroup", { name: "members.permission.CONNECT" });
   fireEvent.click(within(row).getByRole("radio", { name: /deny/i }));
   fireEvent.click(await screen.findByRole("button", { name: "members.revokeKeyAccess.confirm" }));
 
@@ -550,11 +550,11 @@ test("a rejected write after confirming does not rotate", async () => {
 
 test("clearing an allow grant crosses the gate too", async () => {
   const rolelessMember = {
-    ...targetMember, role_ids: [], permission_allow: PERM_BITS.VIEW_SECRETS, permission_deny: 0,
+    ...targetMember, role_ids: [], permission_allow: PERM_BITS.CONNECT, permission_deny: 0,
   };
   render(<MemberDetailPanel {...permProps({ member: rolelessMember })} />);
 
-  const row = screen.getByRole("radiogroup", { name: "members.permission.VIEW_SECRETS" });
+  const row = screen.getByRole("radiogroup", { name: "members.permission.CONNECT" });
   fireEvent.click(within(row).getByRole("radio", { name: /inherit/i }));
 
   expect(await screen.findByText("members.revokeKeyAccess.title")).toBeTruthy();

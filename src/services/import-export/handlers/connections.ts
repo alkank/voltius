@@ -4,7 +4,7 @@ import type { DataTypeHandler } from "../handler";
 import type { ConnectionExport, JumpHostExport, ExportBundle } from "../formats";
 import type { ExportCtx, ImportCtx, ReloadFns } from "../context";
 import { dupesOf, selectionMethods, skipItem } from "../context";
-import { saveTeamVaultSecretForVault } from "@/services/teamVaultSecrets";
+import { keepCachedOnUploadFailure } from "@/services/secretRouting";
 import { fetchConnectionSecrets, storeConnectionSecrets, resolveConnectionKeyEid, resolveConnectionKeyId } from "../secretsLogic";
 
 export const connectionsHandler: DataTypeHandler = {
@@ -21,7 +21,7 @@ export const connectionsHandler: DataTypeHandler = {
     bundle.connections = await Promise.all(connections.map(async (c, i): Promise<ConnectionExport> => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { id, identity_id, key_id, folder_id, vault_id, pre_snippet_id, post_snippet_id, created_at, last_used_at, updated_at, deleted_at, clocks, distro, jump_hosts, ...passthrough } = c;
-      const secrets = await fetchConnectionSecrets(c.id, ctx.readSecret(c.vault_id));
+      const secrets = await fetchConnectionSecrets(c.id, ctx.readSecret(c));
       return {
         ...passthrough,
         _eid: `c${i}`,
@@ -102,10 +102,9 @@ export const connectionsHandler: DataTypeHandler = {
           jump_hosts: resolvedJumpHosts?.length ? resolvedJumpHosts : undefined,
         });
         if (conn._eid) ctx.connectionEidMap.set(conn._eid, saved.id);
-        await storeConnectionSecrets(conn, saved.id, async (key, value) => {
-          await storeSecret(key, value);
-          await saveTeamVaultSecretForVault(ctx.vault_id, key, value).catch(() => {});
-        });
+        await storeConnectionSecrets(conn, saved.id, (key, value) =>
+          storeSecret(key, value).catch(keepCachedOnUploadFailure("import")),
+        );
         imported++;
       } catch { errors++; }
     }

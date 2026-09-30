@@ -20,12 +20,13 @@ import { buildDynamicContext } from "@/services/snippetRunCore";
 import { PickerSurface } from "@/components/shared/PickerSurface";
 import { MenuItemList, type ContextMenuItem } from "@/components/shared/ContextMenu";
 import { runSnippetSequence, reportSequenceResult } from "@/services/snippetSequence";
-import { snippetScriptText, snippetSearchText } from "@/services/snippetSteps";
+import { snippetMatcher, snippetScriptText, snippetSearchText } from "@/services/snippetSteps";
 import { SnippetVariableModal } from "@/components/terminal/SnippetVariableModal";
 import { SnippetForm } from "@/components/snippets/SnippetForm";
 import { useSyncedFormKey } from "@/hooks/useSyncedFormKey";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { itemsInFolderSubtree } from "@/utils/folderTree";
+import { copyingRulesOf } from "@/services/ruleSetIntent";
 import type { Snippet, Folder, SnippetFormData, FolderFormData } from "@/types";
 import type { Connection } from "@/types";
 
@@ -335,13 +336,7 @@ export function SnippetsPanel() {
 
   const canInject = !!activeSession && activeSession.type !== "multiplayer";
 
-  const allFiltered = snippets.filter(
-    (s) =>
-      !query ||
-      s.name.toLowerCase().includes(query.toLowerCase()) ||
-      snippetSearchText(s).toLowerCase().includes(query.toLowerCase()) ||
-      s.tags.some((t) => t.toLowerCase().includes(query.toLowerCase())),
-  );
+  const allFiltered = snippets.filter(snippetMatcher(query));
 
   async function buildContext(): Promise<DynamicContext> {
     let clipboard = "";
@@ -414,7 +409,7 @@ export function SnippetsPanel() {
   }
 
   async function handleDuplicate(snippet: Snippet) {
-    await createSnippet({
+    await createSnippet(copyingRulesOf({
       name: `${snippet.name} (copy)`,
       steps: snippet.steps,
       description: snippet.description,
@@ -424,7 +419,7 @@ export function SnippetsPanel() {
       only_for_connection_tags: [...snippet.only_for_connection_tags],
       only_for_distros: [...snippet.only_for_distros],
       vault_id: snippet.vault_id,
-    });
+    }, snippet.id));
   }
 
   function toggleFolderCollapse(id: string) {

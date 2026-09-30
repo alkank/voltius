@@ -51,7 +51,9 @@
       "MANAGE_VAULT": "Управление хранилищем",
       "START_TERMINAL_SESSION": "Запуск сессий",
       "JOIN_TERMINAL_SESSION": "Присоединение к сессиям",
-      "VIEW_TERMINAL_SESSIONS": "Просмотр сессий"
+      "VIEW_TERMINAL_SESSIONS": "Просмотр сессий",
+      "VIEW": "Просмотр",
+      "ADMINISTRATOR": "Администратор"
     },
     "permissions": {
       "title": "Разрешения",
@@ -68,6 +70,7 @@
       "overrideMarker": "Есть переопределения разрешений",
       "filterPlaceholder": "Фильтр разрешений…",
       "group": {
+        "administration": "Администрирование",
         "secrets": "Секреты и подключение",
         "vaultContent": "Содержимое хранилища",
         "team": "Команда и хранилище",
@@ -303,6 +306,13 @@
       "leavePointAccessEnds": "Вы потеряете доступ к хостам, ключам и сниппетам этого хранилища на всех устройствах.",
       "leavePointLocalWipe": "Его содержимое будет удалено с этого устройства, включая сохранённые пароли и закрытые ключи.",
       "leavePointIrreversible": "Вернуться можно будет только по новому приглашению."
+    },
+    "roleName": {
+      "owner": "Владелец",
+      "manager": "Менеджер",
+      "editor": "Редактор",
+      "member": "Участник",
+      "connect-only": "Только подключение"
     }
   }
 }

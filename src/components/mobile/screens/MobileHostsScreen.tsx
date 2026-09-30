@@ -27,6 +27,8 @@ import MobileHeader from "../MobileHeader";
 import MobileRemoteDeviceSessions from "../MobileRemoteDeviceSessions";
 import { TeamCredentialsNote } from "@/components/shared/VaultUnavailableNote";
 import { useTeamCredentialsUnavailable } from "@/hooks/useBlockedTeamVault";
+import { compareStrings } from "@/utils/localeFormat";
+import { searchMatcher } from "@/utils/search";
 
 function MobileHostRow({
   c,
@@ -118,9 +120,10 @@ export default function MobileHostsScreen() {
     [allFolders, selectedVaultIds],
   );
   const nav = useFolderNavigation(connFolders);
+  const connFolderIds = useMemo(() => new Set(connFolders.map((f) => f.id)), [connFolders]);
 
   const subFolders = useMemo(
-    () => [...nav.visibleFolders].sort((a, b) => a.name.localeCompare(b.name)),
+    () => [...nav.visibleFolders].sort((a, b) => compareStrings(a.name, b.name)),
     [nav.visibleFolders],
   );
 
@@ -130,20 +133,15 @@ export default function MobileHostsScreen() {
   );
 
   const visible = useMemo(() => {
-    const scoped = scopeItems(inVault, nav.activeFolderId);
-    const q = search.trim().toLowerCase();
-    const filtered = q
-      ? scoped.filter((c) =>
-          connectionDisplayName(c).toLowerCase().includes(q) ||
-          c.host.toLowerCase().includes(q) ||
-          (c.tags ?? []).some((t) => t.toLowerCase().includes(q)))
-      : scoped;
-    const sorted = [...filtered].sort((a, b) => connectionDisplayName(a).localeCompare(connectionDisplayName(b)));
+    const scoped = scopeItems(inVault, nav.activeFolderId, connFolderIds);
+    const match = searchMatcher(search);
+    const filtered = scoped.filter((c) => match(connectionDisplayName(c), c.host, ...(c.tags ?? [])));
+    const sorted = [...filtered].sort((a, b) => compareStrings(connectionDisplayName(a), connectionDisplayName(b)));
     if (nav.activeFolderId) return sorted;
     const pinned = sorted.filter((c) => isPinnedFn(c, "connection"));
     const rest = sorted.filter((c) => !isPinnedFn(c, "connection"));
     return [...pinned, ...rest];
-  }, [inVault, nav.activeFolderId, search, isPinnedFn]);
+  }, [inVault, nav.activeFolderId, connFolderIds, search, isPinnedFn]);
 
   const handleConnect = (id: string) => {
     // FTP hosts have no terminal — open the file browser instead.

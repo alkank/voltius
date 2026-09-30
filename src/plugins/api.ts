@@ -349,10 +349,10 @@ export interface PluginObjectMoveOutcome {
 
 export interface OmniCommand {
   id: string;
-  label: string;
+  label: PluginLabel;
   icon: string;
   keywords?: string[];
-  section?: string;
+  section?: PluginLabel;
   /** Optional keyboard shortcut. Format: "ctrl+k", "meta+shift+p". First-registered wins on conflict. */
   keybinding?: string;
   /** ID of a core shortcut to resolve as the hint (reactive, updates when user rebinds). */
@@ -636,8 +636,13 @@ export interface I18nAPI {
    *  before rendering anything that resolves keys. */
   register(catalog: PluginI18nCatalog): void;
   /** Resolve `key` against the host's active locale. Falls back to the "en" entry,
-   *  then to `key` itself (visible, never blank) if neither has it. */
+   *  then to `key` itself (visible, never blank) if neither has it. A numeric
+   *  `vars.count` picks a plural form the way i18next does: `key_one`, `key_few`,
+   *  `key_many`… per the locale's CLDR rules, then `key_other`, then `key`. */
   t(key: string, vars?: Record<string, string | number>): string;
+  /** A timestamp relative to now in the active locale ("5 minutes ago", "now"),
+   *  via Intl.RelativeTimeFormat. Call it during render, next to `t()`. */
+  formatRelativeTime(time: Date | number): string;
   /** The host's current active locale. */
   getLocale(): PluginLocale;
   /** Fires whenever the host's active locale changes. Re-call `t()` and re-render

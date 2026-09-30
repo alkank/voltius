@@ -6,6 +6,7 @@ import { isServerMode } from "@/services/account";
 import { reportAuditMutation } from "@/services/auditMutations";
 import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
 import { useHistoryStore } from "@/stores/historyStore";
+import i18n from "@/i18n";
 import { pushCreateHistory } from "@/stores/recreateHistory";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useKeyStore } from "@/stores/keyStore";
@@ -13,6 +14,7 @@ import { useIdentityStore } from "@/stores/identityStore";
 import { usePortForwardingStore } from "@/stores/portForwardingStore";
 import { folderSubtreeIds } from "@/utils/folderTree";
 import { removeTeamVaultObject, saveTeamVaultObject } from "@/services/teamObjectPersistence";
+import { rulesSourceOf } from "@/services/ruleSetIntent";
 import { classifyVaultTransition, migrateVaultObject } from "@/services/teamVaultMigration";
 import { withPin } from "@/stores/withPin";
 import { isTeamVaultId, findTeamEntry, setTeamMapEntry, clearTeamMapEntry, upsertInTeamMap, applyVaultTransition, saveStampedTeamObject } from "@/stores/teamVaultMap";
@@ -81,7 +83,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
         clocks: { created_at: now, updated_at: now },
       };
       const vaultId = data.vault_id;
-      await saveTeamVaultObject(vaultId, "folder", folder);
+      await saveTeamVaultObject(vaultId, "folder", folder, { rulesFrom: rulesSourceOf(data) });
       set((s) => ({ teamFolders: upsertInTeamMap(s.teamFolders, vaultId, folder) }));
       reportAuditMutation("folder", "created", { id: folder.id, name: folder.name, vault_id: folder.vault_id }, { object_type: folder.object_type });
       pushCreateHistory({
@@ -353,7 +355,7 @@ export const useFolderStore = create<FolderStore>((set, get) => ({
     }
 
     useHistoryStore.getState().push({
-      label: `Moved ${objectIds.length} ${objectType}(s) to folder`,
+      label: i18n.t("common.history.movedToFolder", { count: objectIds.length }),
       undo: async () => {
         const groups = new Map<string | null, string[]>();
         prevFolderIds.forEach((prevId, oid) => {

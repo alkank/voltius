@@ -50,7 +50,8 @@ import * as identityService from "@/services/identities";
 import { addKeyToHost } from "@/services/keyExport";
 import { isValidSshPublicKey } from "@/services/sshPublicKey";
 import type { Connection } from "@/types";
-import { storePluginSecret, getPluginSecret, deletePluginSecret, storeSecret, deleteSecret } from "@/services/vault";
+import { storePluginSecret, getPluginSecret, deletePluginSecret, storeSecret, deleteLocalSecret } from "@/services/vault";
+import { keepCachedOnUploadFailure } from "@/services/secretRouting";
 import { appFetch } from "@/services/http";
 import { sseFetch } from "@/services/sseFetch";
 import { registerLxcExecSession } from "@/services/proxmox";
@@ -540,7 +541,7 @@ const objectPorts: ObjectPorts = {
       ]),
     );
   },
-  can: (permission, vaultId) => canFromStores(_myUserId)(permission as Permission, vaultId),
+  can: (permission, vaultId, objectId) => canFromStores(_myUserId)(permission as Permission, vaultId, objectId),
   isTeamVault: isTeamVaultId,
   vaults: () => vaultOptionsFrom(useVaultStore.getState().vaults, useTeamStore.getState().teams),
   /**
@@ -1009,14 +1010,14 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
           throw new Error("publicKey is not a valid SSH public key");
         }
         const key = await keyService.saveKey({ name: data.name, key_type: data.key_type, tags: data.tags ?? [] });
-        await storeSecret(`key:${key.id}:private`, privateKey);
-        if (publicKey) await storeSecret(`key:${key.id}:public`, publicKey);
+        await storeSecret(`key:${key.id}:private`, privateKey).catch(keepCachedOnUploadFailure("plugin: keys.create"));
+        if (publicKey) await storeSecret(`key:${key.id}:public`, publicKey).catch(keepCachedOnUploadFailure("plugin: keys.create"));
         return key as PluginKey;
       },
       async delete(keyId) {
         requirePerm(manifest, "keys:write");
-        await deleteSecret(`key:${keyId}:private`).catch(() => {});
-        await deleteSecret(`key:${keyId}:public`).catch(() => {});
+        await deleteLocalSecret(`key:${keyId}:private`).catch(() => {});
+        await deleteLocalSecret(`key:${keyId}:public`).catch(() => {});
         await keyService.deleteKey(keyId);
       },
       async addToHost({ keyId, connectionId, location, filename }) {
@@ -1963,6 +1964,10 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
       t(key, vars) {
         requirePerm(manifest, "ui");
         return i18nApi.t(key, vars);
+      },
+      formatRelativeTime(time) {
+        requirePerm(manifest, "ui");
+        return i18nApi.formatRelativeTime(time);
       },
       getLocale() {
         requirePerm(manifest, "ui");

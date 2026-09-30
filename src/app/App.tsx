@@ -27,6 +27,8 @@ import { startLiveSessionPublisher } from "@/services/liveSessionPublisher";
 import { startCrossDeviceSessions } from "@/services/crossDeviceSessions";
 import { startNetworkWatch } from "@/stores/reconnectBackoff";
 import { startTeamInbox } from "@/services/teamInbox";
+import { startTeamVaultNames } from "@/services/teamVaultNames";
+import { startTeamDataScrub } from "@/services/teamDataScrub";
 import { startDeepLinks } from "@/services/deepLink";
 import { NotificationToastContainer } from "@/components/notifications/NotificationToastContainer";
 import ThemeCreator from "@/components/theme-creator/ThemeCreator";
@@ -37,6 +39,11 @@ import { EmailVerificationRequiredModal } from "@/components/notifications/Email
 import { DeepLinkConfirmModal } from "@/components/terminal/DeepLinkConfirmModal";
 import { useDeepLinkStore } from "@/stores/deepLinkStore";
 import { GlobalTransferQueue } from "@/components/filetransfer/GlobalTransferQueue";
+import { RuleSetPromptHost } from "@/components/permissions/RuleSetPromptHost";
+import { setRuleSetMoveConfirmer } from "@/services/teamObjectPersistence";
+import { confirmRuleSetMove } from "@/services/ruleSetMoveGuard";
+
+setRuleSetMoveConfirmer(confirmRuleSetMove);
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -53,6 +60,8 @@ function App() {
   useChangelogAutoOpen();
   useEffect(() => { initUpdaterListener(); useUpdaterPrefStore.getState().load(); }, []);
   useEffect(() => startTeamInbox(), []);
+  useEffect(() => startTeamVaultNames(), []);
+  useEffect(() => startTeamDataScrub(), []);
   useEffect(() => startDeepLinks(), []);
   useEffect(() => startNetworkWatch(), []);
   useEffect(() => {
@@ -88,6 +97,7 @@ function App() {
       <WhatsNewModal />
       <EmailVerificationRequiredModal />
       <DeepLinkConfirmModal />
+      <RuleSetPromptHost />
       <GlobalTransferQueue />
 
       {/* Global snippet variable modal — triggered from OmniSearch, the

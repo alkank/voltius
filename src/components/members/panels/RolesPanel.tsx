@@ -8,13 +8,14 @@ import { useSubscriptionStore } from "@/stores/subscriptionStore";
 import { ColorPicker } from "@/components/theme-creator/ColorPicker";
 import { type Permission, PERM_BITS, effectivePermissions } from "@/hooks/usePermission";
 import { PERMISSION_GROUPS, type PermissionGroupKey } from "@/services/permissions";
-import { permissionLabel } from "@/components/members/roleChips";
+import { permissionLabel, roleLabel } from "@/components/members/roleChips";
 import { CheckboxBox } from "@/components/shared/Checkbox";
 
 // ─── Permission metadata ──────────────────────────────────────────────────────
 
 // Maps the canonical group keys onto this screen's own (already-translated) i18n names.
 const GROUP_LABEL_KEY: Record<PermissionGroupKey, string> = {
+  administration: "administration",
   secrets: "dataAccess",
   vaultContent: "connectionManagement",
   team: "teamAdministration",
@@ -113,7 +114,7 @@ export function RoleModal({
   const { t } = useTranslation();
   const { createRole, updateRole } = useTeamStore();
   const [name, setName] = useState(role?.name ?? "");
-  const [permissions, setPermissions] = useState(role?.permissions ?? 0);
+  const [permissions, setPermissions] = useState(role?.permissions ?? PERM_BITS.VIEW);
   const [color, setColor] = useState<string>(role?.color ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -235,6 +236,7 @@ export function RoleModal({
             <label className="block text-xs font-bold uppercase tracking-widest mb-2" style={{ color: "var(--t-text-dim)" }}>
               {t("settings.vaults.rolesPanel.permissionsLabel")}
             </label>
+            <p className="text-xs text-(--t-text-dim) px-3 mb-2">{t("settings.vaults.rolesPanel.objectOverrideNote")}</p>
             <PermissionGrid value={permissions} onChange={setPermissions} />
           </div>
 
@@ -281,7 +283,7 @@ function BuiltinRoleCard({ name, permissions }: { name: string; permissions: num
         onClick={() => setExpanded((v) => !v)}
       >
         <Icon icon="lucide:lock" width={13} style={{ color: "var(--t-text-dim)" }} />
-        <span className="flex-1 text-sm font-medium capitalize" style={{ color: "var(--t-text-primary)" }}>{name}</span>
+        <span className="flex-1 text-sm font-medium capitalize" style={{ color: "var(--t-text-primary)" }}>{roleLabel(t, name)}</span>
         <span className="text-[10px] px-2 py-0.5 rounded-sm" style={{ background: "var(--t-bg-card)", color: "var(--t-text-dim)" }}>{t("settings.vaults.rolesPanel.builtinBadge")}</span>
         <Icon icon={expanded ? "lucide:chevron-up" : "lucide:chevron-down"} width={13} style={{ color: "var(--t-text-dim)" }} />
       </button>

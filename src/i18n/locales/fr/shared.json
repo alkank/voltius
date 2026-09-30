@@ -47,6 +47,7 @@
     },
     "avatarStack": {
       "participantCount_one": "{{count}} participant",
+      "participantCount_many": "{{count}} participants",
       "participantCount_other": "{{count}} participants"
     },
     "presence": {
@@ -69,8 +70,10 @@
       "insertTitle": "Insérer dans...",
       "executeTitle": "Exécuter dans...",
       "insertConfirm_one": "Insérer dans {{count}} cible",
+      "insertConfirm_many": "Insérer dans {{count}} cibles",
       "insertConfirm_other": "Insérer dans {{count}} cibles",
       "executeConfirm_one": "Exécuter dans {{count}} cible",
+      "executeConfirm_many": "Exécuter dans {{count}} cibles",
       "executeConfirm_other": "Exécuter dans {{count}} cibles",
       "noActiveSessions": "Aucune session active",
       "activeSessionsHeader": "Sessions actives",
@@ -103,6 +106,7 @@
       "noTagsMatch": "Aucun tag ne correspond à \"{{search}}\"",
       "deleteTagTitle": "Supprimer le tag \"{{tag}}\" ?",
       "deleteTagBody_one": "Ceci retirera le tag de {{count}} hôte. Les hôtes eux-mêmes ne seront pas supprimés.",
+      "deleteTagBody_many": "Ceci retirera le tag de {{count}} hôtes. Les hôtes eux-mêmes ne seront pas supprimés.",
       "deleteTagBody_other": "Ceci retirera le tag de {{count}} hôtes. Les hôtes eux-mêmes ne seront pas supprimés.",
       "renameTagTitle": "Renommer le tag",
       "deleteTagButtonTitle": "Supprimer le tag"
@@ -130,6 +134,38 @@
     },
     "tunnelStatus": {
       "noRemoteListener": "Rien n'écoute sur le port distant"
+    },
+    "permissions": {
+      "everyone": "@tout le monde",
+      "moveWarning": {
+        "title": "Les permissions vont changer",
+        "body": "Le déplacement applique les permissions de ce dossier :",
+        "bodyUnknown": "Le déplacement applique les permissions de ce dossier.",
+        "line": "{{subject}} · {{permission}} : {{before}} → {{after}}",
+        "confirm": "Déplacer",
+        "cancelled": "Déplacement annulé"
+      },
+      "section": {
+        "title": "Permissions",
+        "titleKey": "Qui peut utiliser cette clé",
+        "titleIdentity": "Qui peut utiliser cette identité",
+        "adminNote": "Les propriétaires et les administrateurs peuvent toujours utiliser toutes les clés.",
+        "syncedWith": "Synchronisé avec {{folder}}",
+        "syncedTeam": "Utilise les permissions de l'équipe",
+        "notSynced": "Non synchronisé",
+        "syncNow": "Synchroniser",
+        "ownPermissions": "Permissions propres",
+        "useTeams": "Utiliser celles de l'équipe",
+        "addSubject": "Ajouter un rôle ou un membre",
+        "searchSubjects": "Rechercher des rôles et des membres…",
+        "noSubjectsLeft": "Tous les rôles et membres sont déjà listés",
+        "use": "Utiliser",
+        "requiresConnect": "Nécessite {{connect}}",
+        "roleCount_one": "{{count}} rôle",
+        "roleCount_many": "{{count}} rôles",
+        "roleCount_other": "{{count}} rôles",
+        "loadFailed": "Impossible de charger les permissions"
+      }
     }
   }
 }

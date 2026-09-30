@@ -1,4 +1,8 @@
 import { useHistoryStore } from "@/stores/historyStore";
+import { SECRET_OBJECT_KINDS, secretKeysFor, type SecretObjectKind } from "@/services/teamVaultSecretKeys";
+import { saveTeamVaultObject, type PersistableTeamObject } from "@/services/teamObjectPersistence";
+import { teamSecretCache } from "@/services/teamSecretCache";
+import type { TeamObjectType } from "@/services/teamObjects";
 
 interface RecreateOptions<T extends { id: string }, D> {
   label: string;
@@ -39,4 +43,56 @@ export function pushCreateHistory<T extends { id: string }, D>(opts: RecreateOpt
 export function pushDeleteHistory<T extends { id: string }, D>(opts: RecreateOptions<T, D>): void {
   const pair = recreatePair(opts);
   useHistoryStore.getState().push({ label: opts.label, undo: pair.recreate, redo: pair.remove });
+}
+
+interface TeamDeleteOptions<T extends PersistableTeamObject> {
+  label: string;
+  teamId: string;
+  type: TeamObjectType;
+  item: T;
+  putBack: (item: T) => void;
+  remove: (id: string) => Promise<void>;
+}
+
+const isSecretKind = (type: TeamObjectType): type is SecretObjectKind =>
+  (SECRET_OBJECT_KINDS as readonly string[]).includes(type);
+
+export function pushTeamDeleteHistory<T extends PersistableTeamObject>(opts: TeamDeleteOptions<T>): void {
+  const { teamId, type, item } = opts;
+  // The server hard-deletes a removed object's secrets, so undo re-uploads the cached values.
+  const secrets = (isSecretKind(type) ? secretKeysFor(type, item.id) : []).flatMap((key) => {
+    const value = teamSecretCache.get(teamId, key);
+    return value ? [[key, value] as const] : [];
+  });
+  useHistoryStore.getState().push({
+    label: opts.label,
+    undo: async () => {
+      await saveTeamVaultObject(teamId, type, item);
+      opts.putBack(item);
+      if (secrets.length === 0) return;
+      const { writeSecretAt, keepCachedOnUploadFailure } = await import("@/services/secretRouting");
+      for (const [key, value] of secrets) {
+        await writeSecretAt(teamId, key, value).catch(keepCachedOnUploadFailure(`restore team secret ${key}`));
+      }
+    },
+    redo: () => opts.remove(item.id),
+  });
+}
+
+interface UpdateOptions<D extends { vault_id?: string | null }> {
+  label: string;
+  kind: SecretObjectKind;
+  id: string;
+  before: D;
+  after: D;
+  update: (id: string, data: D) => Promise<unknown>;
+}
+
+export function pushUpdateHistory<D extends { vault_id?: string | null }>(opts: UpdateOptions<D>): void {
+  const { kind, id, before, after, update } = opts;
+  const replay = (from: D, to: D) => async () => {
+    const { moveWithSecrets } = await import("@/services/vaultObjectSecrets");
+    await moveWithSecrets(kind, { id, vault_id: from.vault_id ?? to.vault_id }, to.vault_id, () => update(id, to));
+  };
+  useHistoryStore.getState().push({ label: opts.label, undo: replay(after, before), redo: replay(before, after) });
 }

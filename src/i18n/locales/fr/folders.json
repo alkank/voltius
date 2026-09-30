@@ -16,15 +16,14 @@
       "enableCloudSync": "Activer la synchronisation cloud",
       "deleteFolder": "Supprimer le dossier",
       "itemCount_one": "{{count}} élément",
+      "itemCount_many": "{{count}} éléments",
       "itemCount_other": "{{count}} éléments"
     },
     "editPanel": {
+      "title": "Modifier le dossier",
+      "general": "Général",
       "nameLabel": "Nom",
-      "cloudSyncLabel": "Synchronisation cloud",
-      "syncedToCloud": "Synchronisé avec le cloud",
-      "notSynced": "Non synchronisé",
-      "syncDisabledGlobally": "La synchronisation des dossiers est désactivée globalement dans Paramètres → Synchronisation cloud.",
-      "createdLabel": "Créé le"
+      "parentLabel": "Dossier parent"
     }
   }
 }

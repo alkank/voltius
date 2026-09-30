@@ -14,8 +14,11 @@ import { useNotificationStore } from "@/stores/notificationStore";
 import { connectionDisplayName } from "@/utils/connectionDisplayName";
 import { writeClipboard } from "@/utils/clipboard";
 import { buildMoveTargets } from "@/components/mobile/folders/mobileFolderCore";
+import { moveConnectionToVault } from "@/services/connectionDuplicate";
+import { compareStrings } from "@/utils/localeFormat";
 import MoveToFolderSheet from "./MoveToFolderSheet";
 import { SheetActionRow, type SheetAction } from "./SheetActionRow";
+import { copyingRulesOf } from "@/services/ruleSetIntent";
 
 type Mode = "menu" | "confirm-delete" | "move" | "move-folder";
 
@@ -38,7 +41,7 @@ export default function HostActionsSheet({ hostId }: { hostId: string }) {
   const effectivePinned = useEffectivePinned(conn ?? { id: hostId }, "connection");
   const allFolders = useAllFolders();
   const moveObjectsToFolder = useFolderStore((s) => s.moveObjectsToFolder);
-  const folderTargets = buildMoveTargets(allFolders, "connection");
+  const folderTargets = buildMoveTargets(allFolders, "connection", compareStrings);
   const [mode, setMode] = useState<Mode>("menu");
 
   if (!conn) return null;
@@ -65,7 +68,7 @@ export default function HostActionsSheet({ hostId }: { hostId: string }) {
       <BottomSheet title={t("mobile.sheets.shared.moveToVault")} onClose={closeSheet} registerBack={false}>
         {moveTargets.map((v) => (
           <Row key={v.id} it={{ icon: "lucide:vault", label: v.name, onTap: () => {
-            void updateConnection(hostId, { ...connectionToFormData(conn), vault_id: v.id });
+            void moveConnectionToVault(conn, v.id, updateConnection);
             closeSheet();
           } }} />
         ))}
@@ -95,7 +98,7 @@ export default function HostActionsSheet({ hostId }: { hostId: string }) {
       closeSheet();
     } }] : []),
     { icon: "lucide:copy", label: t("mobile.sheets.shared.duplicate"), slug: "duplicate", onTap: () => {
-        void saveConnection({ ...connectionToFormData(conn), name: `${name} copy` });
+        void saveConnection(copyingRulesOf({ ...connectionToFormData(conn), name: `${name} copy` }, conn.id));
         closeSheet();
       } },
     { icon: "lucide:folder-tree", label: t("mobile.sheets.shared.moveToFolder"), slug: "move-to-folder", onTap: () => setMode("move-folder") },

@@ -16,7 +16,7 @@ import {
   useVaultObjectFormShell,
 } from "@/components/shared/vaultObjectForm";
 import { VaultPicker } from "@/components/shared/VaultPicker";
-import { storeSecret, getSecret } from "@/services/vault";
+import { unlinkIdentityFromHost } from "@/services/keychainForm";
 import { useStoredSecrets } from "@/hooks/useStoredSecrets";
 import { StoredSecretsNote } from "@/components/shared/VaultUnavailableNote";
 import {
@@ -34,10 +34,11 @@ import { PublicKeyField, isPublicKeyInvalid } from "./PublicKeyField";
 import { useDerivedPublicKey } from "./useDerivedPublicKey";
 import { getConnectionIcon, getConnectionIconColor } from "@/utils/icons";
 import { AvatarTile } from "@/components/shared/AvatarTile";
-import type { AuthType, Connection, Identity, IdentityFormData } from "@/types";
+import type { Connection, Identity, IdentityFormData } from "@/types";
 import { buildKeychainMenuItems } from "@/utils/keychainMenuItems";
 import { selectVaultScopedItems } from "@/utils/vaultScopedItems";
 import { connectionDisplayName } from "@/utils/connectionDisplayName";
+import { PermissionsSection } from "@/components/permissions/PermissionsSection";
 
 // ─────────────────────────────────────────────────────────────────
 
@@ -166,24 +167,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
   );
 
   const handleUnlink = async (conn: Connection) => {
-    if (!initial) return;
-    const identityPassword = await getSecret(`identity:${initial.id}:password`).catch(() => null);
-    const identityPrivKey = initial.key_id
-      ? await getSecret(`key:${initial.key_id}:private`).catch(() => null)
-      : null;
-    const authType: AuthType = identityPrivKey ? "key" : "password";
-    await updateConnection(conn.id, {
-      name: conn.name,
-      host: conn.host,
-      port: conn.port,
-      username: initial.username,
-      auth_type: authType,
-      tags: conn.tags,
-      identity_id: undefined,
-      folder_id: conn.folder_id,
-    });
-    if (identityPassword) await storeSecret(`password:${conn.id}`, identityPassword);
-    if (identityPrivKey) await storeSecret(`key:${conn.id}`, identityPrivKey);
+    if (initial) await unlinkIdentityFromHost(initial, conn, updateConnection);
   };
 
   const isInline = keyId === "__inline__";
@@ -427,6 +411,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
             </div>
           </FormSection>
         )}
+        {initial && <PermissionsSection objectId={initial.id} vaultId={initial.vault_id} type="identity" />}
       </div>
     </PanelShell>
   );

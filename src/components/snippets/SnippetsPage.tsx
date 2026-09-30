@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import i18n from "@/i18n";
 import { Icon } from "@iconify/react";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { useSnippetStore } from "@/stores/snippetStore";
@@ -30,7 +29,7 @@ import {
   parseVariables,
   needsUserInput,
 } from "@/services/snippetParser";
-import { snippetScriptText, snippetSearchText } from "@/services/snippetSteps";
+import { snippetMatcher, snippetScriptText } from "@/services/snippetSteps";
 import { runSnippetIntoSessions } from "@/services/snippetRun";
 import { snippetToForm } from "@/utils/snippetForm";
 import { usePageClipboard } from "@/hooks/usePageClipboard";
@@ -58,7 +57,7 @@ import type { SortMode } from "@/components/shared/ToolbarViewControls";
 import { buildTeamVaultTransferPlan, type TransferOperation } from "@/services/teamVaultPermissions";
 import { useSnippetRecentStore, type RecentSnippetExecution, type RecentTarget } from "@/stores/snippetRecentStore";
 import { selectRecentSnippetEntries } from "@/utils/snippetRecent";
-import { descendantFolders, itemsInFolderSubtree } from "@/utils/folderTree";
+import { descendantFolders, foldersOutsideSubtree, itemsInFolderSubtree } from "@/utils/folderTree";
 import { folderDeleteMessages } from "@/utils/folderDeleteMessages";
 import { useVaultOptions } from "@/hooks/useVaultOptions";
 import { useScopedFolders } from "@/hooks/useScopedFolders";
@@ -67,6 +66,8 @@ import { FolderBreadcrumb } from "@/components/folders/FolderBreadcrumb";
 import { FolderEjectZone } from "@/components/folders/FolderEjectZone";
 import { cloneFolderTree, copyFolderSubtree } from "@/utils/folderCopy";
 import { moveFolderTreeToVault } from "@/utils/folderMove";
+import { copyingRulesOf } from "@/services/ruleSetIntent";
+import { compareStrings, formatRelative } from "@/utils/localeFormat";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,26 +83,12 @@ function isContextuallyRelevant(snippet: Snippet, conn: Connection | undefined):
 
 function sortSnippets(list: Snippet[], mode: SortMode): Snippet[] {
   return [...list].sort((a, b) => {
-    if (mode === "name-asc")  return a.name.localeCompare(b.name);
-    if (mode === "name-desc") return b.name.localeCompare(a.name);
+    if (mode === "name-asc")  return compareStrings(a.name, b.name);
+    if (mode === "name-desc") return compareStrings(b.name, a.name);
     if (mode === "newest")    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     if (mode === "oldest")    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     return 0;
   });
-}
-
-function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts;
-  const s = Math.floor(diff / 1000);
-  if (s < 5) return i18n.t("snippets.page.relativeTime.justNow");
-  if (s < 60) return i18n.t("snippets.page.relativeTime.secondsAgo", { count: s });
-  const m = Math.floor(s / 60);
-  if (m < 60) return i18n.t("snippets.page.relativeTime.minutesAgo", { count: m });
-  const h = Math.floor(m / 60);
-  if (h < 24) return i18n.t("snippets.page.relativeTime.hoursAgo", { count: h });
-  const d = Math.floor(h / 24);
-  if (d < 7) return i18n.t("snippets.page.relativeTime.daysAgo", { count: d });
-  return new Date(ts).toLocaleDateString();
 }
 
 // ─── Recent section ────────────────────────────────────────────────────────────
@@ -184,7 +171,7 @@ function RecentCard({ entry, snippet, layout, onReplay, onRemove }: RecentCardPr
                 <p className="text-sm font-bold truncate text-(--t-text-bright) flex-1 min-w-0">{label}</p>
                 {modeBadge}
               </div>
-              <p className="text-xs text-(--t-text-muted) truncate">{formatRelativeTime(entry.timestamp)}</p>
+              <p className="text-xs text-(--t-text-muted) truncate">{formatRelative(entry.timestamp, { seconds: true, maxDays: 7 })}</p>
             </div>
           </div>
 
@@ -221,7 +208,7 @@ function RecentCard({ entry, snippet, layout, onReplay, onRemove }: RecentCardPr
           <Icon icon={hostIcon} width={10} className="shrink-0 text-(--t-text-dim)" />
           <span className="text-xs text-(--t-text-muted) truncate">{host}</span>
           <span className="text-xs text-(--t-text-dim)">·</span>
-          <span className="text-xs text-(--t-text-dim)">{formatRelativeTime(entry.timestamp)}</span>
+          <span className="text-xs text-(--t-text-dim)">{formatRelative(entry.timestamp, { seconds: true, maxDays: 7 })}</span>
         </div>
       </div>
 
@@ -405,20 +392,17 @@ export function SnippetsPage() {
   const hasSearch = search.length > 0;
 
   // Base filter: search + vault access
-  const filtered = useMemo(() => sortSnippets(
-    snippets.filter((s) => {
-      const svid = s.vault_id ?? "personal";
-      if (accessibleVaultIds.length > 0 && !accessibleVaultIds.includes(svid)) return false;
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return (
-        s.name.toLowerCase().includes(q) ||
-        snippetSearchText(s).toLowerCase().includes(q) ||
-        s.tags.some((t) => t.toLowerCase().includes(q))
-      );
-    }),
-    sortMode,
-  ), [snippets, search, sortMode, accessibleVaultIds]);
+  const filtered = useMemo(() => {
+    const matches = snippetMatcher(search);
+    return sortSnippets(
+      snippets.filter((s) => {
+        const svid = s.vault_id ?? "personal";
+        if (accessibleVaultIds.length > 0 && !accessibleVaultIds.includes(svid)) return false;
+        return matches(s);
+      }),
+      sortMode,
+    );
+  }, [snippets, search, sortMode, accessibleVaultIds]);
 
   // Snippets visible in the current view (respects folder navigation)
   const viewSnippets = useMemo(() => {
@@ -593,14 +577,14 @@ export function SnippetsPage() {
     const selectedSnippetFolderIds = selectedFolders.map((f) => f.id);
     const { isObjectSynced } = useSyncPrefsStore.getState();
     const allSynced = selectedSnippets.every((s) => isObjectSynced(s.id, "snippet"));
-    const allCanEdit = selectedSnippets.every((s) => can("EDIT_SNIPPETS", s.vault_id ?? "personal"));
+    const allCanEdit = selectedSnippets.every((s) => can("EDIT_SNIPPETS", s.vault_id ?? "personal", s.id));
     const bulkVaultChildren = (operation: TransferOperation): ContextMenuItem[] => vaultOptions
       .filter((v) => [...selectedSnippets.map((s) => s.vault_id ?? "personal"), ...selectedFolders.map((f) => f.vault_id ?? "personal")].some((sourceVaultId) => sourceVaultId !== v.id))
       .filter((v) => buildTeamVaultTransferPlan({
         operation,
         targetVaultId: v.id,
         selected: { snippetIds: selectedSnippets.map((s) => s.id), snippetFolderIds: selectedSnippetFolderIds },
-        can: (permission, vaultId) => can(permission, vaultId),
+        can,
         connections: [],
         identities: [],
         keys: [],
@@ -717,7 +701,7 @@ export function SnippetsPage() {
   }
 
   async function handleDuplicate(snippet: Snippet) {
-    await createSnippet({
+    await createSnippet(copyingRulesOf({
       name: `${snippet.name} (copy)`,
       steps: snippet.steps,
       description: snippet.description,
@@ -727,7 +711,7 @@ export function SnippetsPage() {
       only_for_connection_tags: [...snippet.only_for_connection_tags],
       only_for_distros: [...snippet.only_for_distros],
       vault_id: snippet.vault_id,
-    });
+    }, snippet.id));
   }
 
   async function handleToggleFavorite(snippet: Snippet) {
@@ -795,12 +779,12 @@ export function SnippetsPage() {
 
   async function handleCopyToVault(snippet: Snippet, vaultId: string) {
     const destHasName = snippets.some((s) => (s.vault_id ?? "personal") === vaultId && s.name === snippet.name);
-    await createSnippet({
+    await createSnippet(copyingRulesOf({
       ...snippetToForm(snippet),
       name: destHasName ? `${snippet.name} (copy)` : snippet.name,
       vault_id: vaultId,
       favorite: false,
-    });
+    }, snippet.id));
   }
 
   // ── Folder vault move / copy ──────────────────────────────────────────────
@@ -843,7 +827,7 @@ export function SnippetsPage() {
       for (const s of treeSnippets) {
         const newFolderId = s.folder_id ? (folderIdMap.get(s.folder_id) ?? newRootId) : newRootId;
         const destHasSnippetName = snippets.some((x) => (x.vault_id ?? "personal") === vaultId && x.name === s.name);
-        await createSnippet({ ...snippetToForm(s), name: destHasSnippetName ? `${s.name} (copy)` : s.name, folder_id: newFolderId, vault_id: vaultId, favorite: false });
+        await createSnippet(copyingRulesOf({ ...snippetToForm(s), name: destHasSnippetName ? `${s.name} (copy)` : s.name, folder_id: newFolderId, vault_id: vaultId, favorite: false }, s.id));
       }
     } catch (err) { console.error(err); }
   }
@@ -860,14 +844,14 @@ export function SnippetsPage() {
     folderId: string | null,
     opts: { vaultId?: string; keepName?: boolean } = {},
   ) {
-    return createSnippet({
+    return createSnippet(copyingRulesOf({
       ...snippetToForm(snippet),
       // default name suffix kept in English until all creation sites are localized together (see i18n issue #14)
       name: opts.keepName ? snippet.name : `${snippet.name} (copy)`,
       folder_id: folderId ?? undefined,
       vault_id: opts.vaultId ?? snippet.vault_id,
       favorite: false,
-    });
+    }, snippet.id));
   }
 
   /** Deep-clones a folder subtree under `parentFolderId`, into `vaultId` when given. */
@@ -926,7 +910,7 @@ export function SnippetsPage() {
 
   function renderCard(s: Snippet) {
     const svid = s.vault_id ?? "personal";
-    const canEdit = can("EDIT_SNIPPETS", svid);
+    const canEdit = can("EDIT_SNIPPETS", svid, s.id);
     const otherVaults = vaultOptions.filter((v) => v.id !== svid);
     const syncEnabled = useSyncPrefsStore.getState().isObjectSynced(s.id, "snippet");
     return (
@@ -966,21 +950,25 @@ export function SnippetsPage() {
     <>
     <SidePanelLayout
       panelOpen={ep.panelOpen || folderEp.panelOpen}
-      panelWidth={360}
+      panelWidth={editingFolder !== null ? 320 : 360}
       panel={
         editingFolder !== null ? (
           <FolderEditPanel
             key={editingFolder.id}
             folder={editingFolder}
-            onUpdate={(id, data) => void updateFolder(id, data)}
+            onUpdate={updateFolder}
             onDelete={(f) => setConfirmDeleteFolder(f)}
             onClose={folderEp.closeEdit}
-            canEdit
+            onOpen={() => { navigateInto(editingFolder); folderEp.closeEdit(); }}
+            onSelectSelf={() => selectSingle(editingFolder.id)}
+            parentOptions={foldersOutsideSubtree(scopedFolders, editingFolder.id)}
+            canEdit={can("EDIT_FOLDERS", editingFolder.vault_id ?? "personal", editingFolder.id)}
             syncObjectType="snippet"
             vaults={vaultOptions.filter((v) => v.id !== (editingFolder.vault_id ?? "personal"))}
             onMoveToVault={(vaultId) => void handleMoveFolderToVault(editingFolder, vaultId)}
             onCopyToVault={(vaultId) => void handleCopyFolderToVault(editingFolder, vaultId)}
             onExport={() => useUIStore.getState().openImportExport("export", { bulk: { snippets: snippets.filter((s) => s.folder_id === editingFolder.id).map((s) => s.id) } })}
+            onShare={() => setSharing({ snippets: snippets.filter((s) => s.folder_id === editingFolder.id && !s.deleted_at), packName: editingFolder.name })}
           />
         ) : ep.editing !== null ? (
           <SnippetForm
@@ -1125,7 +1113,7 @@ export function SnippetsPage() {
                         onDelete={(f) => setConfirmDeleteFolder(f)}
                         onSelect={(id) => { if (!selectedIdSet.has(id)) selectSingle(id); }}
                         onEdit={() => { ep.closeEdit(); folderEp.transitionToExisting(folder); }}
-                        canEdit
+                        canEdit={can("EDIT_FOLDERS", folder.vault_id ?? "personal", folder.id)}
                         onPointerDown={(e) => handleFolderDragStart(e, folder.id)}
                         {...folderDropProps(folder.id)}
                         vaults={vaultOptions.filter((v) => v.id !== (folder.vault_id ?? "personal"))}

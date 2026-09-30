@@ -4,7 +4,7 @@ import type { DataTypeHandler } from "../handler";
 import type { ExportBundle, KeyExport, KeyRefExport } from "../formats";
 import type { ExportCtx, ImportCtx, ReloadFns } from "../context";
 import { dupesOf, resolveRefs, selectionMethods, skipItem } from "../context";
-import { saveTeamVaultSecretForVault } from "@/services/teamVaultSecrets";
+import { keepCachedOnUploadFailure } from "@/services/secretRouting";
 import { fetchKeySecrets, storeKeySecrets } from "../secretsLogic";
 
 export const keysHandler: DataTypeHandler = {
@@ -23,7 +23,7 @@ export const keysHandler: DataTypeHandler = {
       name: k.name,
       key_type: k.key_type,
       tags: k.tags,
-      ...(await fetchKeySecrets(k.id, ctx.readSecret(k.vault_id))),
+      ...(await fetchKeySecrets(k.id, ctx.readSecret(k))),
       _folder_eid: k.folder_id ? ctx.folderEidMap.get(k.folder_id) : undefined,
     })));
     const refs = await Promise.all(ctx.keyRefs.map(async (k, i): Promise<KeyRefExport | null> => {
@@ -46,10 +46,9 @@ export const keysHandler: DataTypeHandler = {
           folder_id: key._folder_eid ? ctx.folderEidMap.get(key._folder_eid) : undefined,
           vault_id: ctx.vault_id,
         });
-        await storeKeySecrets(key, saved.id, async (k, value) => {
-          await storeSecret(k, value);
-          await saveTeamVaultSecretForVault(ctx.vault_id, k, value).catch(() => {});
-        });
+        await storeKeySecrets(key, saved.id, (k, value) =>
+          storeSecret(k, value).catch(keepCachedOnUploadFailure("import")),
+        );
         if (key._eid) ctx.keyEidMap.set(key._eid, saved.id);
         imported++;
       } catch { errors++; }

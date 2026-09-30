@@ -4,11 +4,11 @@ import * as api from "@/services/keys";
 import { scheduleSync } from "@/services/sync";
 import { isServerMode } from "@/services/account";
 import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
-import { useHistoryStore } from "@/stores/historyStore";
-import { pushCreateHistory, pushDeleteHistory } from "@/stores/recreateHistory";
+import { pushCreateHistory, pushDeleteHistory, pushUpdateHistory, pushTeamDeleteHistory } from "@/stores/recreateHistory";
 import { isTeamVaultId, findTeamEntry, setTeamMapEntry, clearTeamMapEntry, upsertInTeamMap, removeFromTeamMap, applyVaultTransition, saveStampedTeamObject } from "@/stores/teamVaultMap";
 import { reportAuditMutation } from "@/services/auditMutations";
 import { removeTeamVaultObject, saveTeamVaultObject } from "@/services/teamObjectPersistence";
+import { rulesSourceOf } from "@/services/ruleSetIntent";
 import { useTeamObjectPrefsStore } from "@/stores/teamObjectPrefsStore";
 import { classifyVaultTransition, migrateVaultObject } from "@/services/teamVaultMigration";
 import { withPin } from "@/stores/withPin";
@@ -67,7 +67,7 @@ export const useKeyStore = create<KeyStore>((set, get) => ({
         clocks: { created_at: now, updated_at: now },
       };
       const vaultId = data.vault_id!;
-      await saveTeamVaultObject(vaultId, "key", key);
+      await saveTeamVaultObject(vaultId, "key", key, { rulesFrom: rulesSourceOf(data) });
       set((s) => ({ teamKeys: upsertInTeamMap(s.teamKeys, vaultId, key) }));
       reportAuditMutation("key", "created", { id: key.id, name: key.name ?? "unnamed", vault_id: key.vault_id }, { key_type: key.key_type });
       pushCreateHistory({
@@ -130,12 +130,7 @@ export const useKeyStore = create<KeyStore>((set, get) => ({
         return localKeys ? { keys: localKeys, teamKeys: next } : { teamKeys: next };
       });
       reportAuditMutation("key", "updated", { id: migrated.id, name: migrated.name ?? "unnamed", vault_id: migrated.vault_id }, { key_type: migrated.key_type });
-      const prevData = keyToFormData(prev);
-      useHistoryStore.getState().push({
-        label: `Updated key "${prev.name ?? "unnamed"}"`,
-        undo: async () => { await useKeyStore.getState().updateKey(id, prevData); },
-        redo: async () => { await useKeyStore.getState().updateKey(id, data); },
-      });
+      recordKeyUpdate(prev, data);
       return migrated;
     }
 
@@ -167,14 +162,7 @@ export const useKeyStore = create<KeyStore>((set, get) => ({
     const prefs = useSyncPrefsStore.getState();
     isServerMode().then((s) => { if (s && prefs.isObjectSynced(id, "key")) scheduleSync(); });
     if (prev) reportAuditMutation("key", "updated", { id, name: data.name ?? prev.name ?? "unnamed", vault_id: data.vault_id ?? prev.vault_id }, { key_type: data.key_type ?? prev.key_type });
-    if (prev) {
-      const prevData = keyToFormData(prev);
-      useHistoryStore.getState().push({
-        label: `Updated key "${prev.name ?? "unnamed"}"`,
-        undo: async () => { await useKeyStore.getState().updateKey(id, prevData); },
-        redo: async () => { await useKeyStore.getState().updateKey(id, data); },
-      });
-    }
+    if (prev) recordKeyUpdate(prev, data);
     return key;
   },
 
@@ -210,12 +198,15 @@ export const useKeyStore = create<KeyStore>((set, get) => ({
       await removeTeamVaultObject(teamId, id);
       set((s) => ({ teamKeys: removeFromTeamMap(s.teamKeys, teamId, id) }));
       reportAuditMutation("key", "deleted", { id: prev.id, name: prev.name ?? "unnamed", vault_id: prev.vault_id }, { key_type: prev.key_type });
-      const prevData = keyToFormData(prev);
-      pushDeleteHistory({
+      pushTeamDeleteHistory({
         label: `Deleted key "${prev.name ?? "unnamed"}"`,
-        id,
-        data: prevData,
-        create: (d) => useKeyStore.getState().saveKey(d),
+        teamId,
+        type: "key",
+        item: prev,
+        putBack: (k) => {
+          set((s) => ({ teamKeys: upsertInTeamMap(s.teamKeys, teamId, k) }));
+          reportAuditMutation("key", "created", { id: k.id, name: k.name ?? "unnamed", vault_id: k.vault_id }, { key_type: k.key_type });
+        },
         remove: (kid) => useKeyStore.getState().deleteKey(kid),
       });
       return;
@@ -240,3 +231,14 @@ export const useKeyStore = create<KeyStore>((set, get) => ({
     }
   },
 }));
+
+function recordKeyUpdate(prev: SshKey, data: SshKeyFormData): void {
+  pushUpdateHistory({
+    label: `Updated key "${prev.name ?? "unnamed"}"`,
+    kind: "key",
+    id: prev.id,
+    before: keyToFormData(prev),
+    after: data,
+    update: (id, d) => useKeyStore.getState().updateKey(id, d),
+  });
+}
