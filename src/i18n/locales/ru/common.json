@@ -67,6 +67,9 @@
       "fileSaveFailed": "Не удалось сохранить файл: {{error}}"
     },
     "error": {
+      "identityPickUnavailable": "Ваша личность для {{host}} недоступна",
+      "failedToListIdentityPicks": "Не удалось загрузить выбор личностей ({{status}})",
+      "failedToSaveIdentityPick": "Не удалось сохранить выбор личности ({{status}})",
       "notConnectedToServer": "Нет подключения к серверу",
       "notAuthenticated": "Не выполнена аутентификация",
       "invalidSessionKey": "Ключ сессии должен быть длиной 32 байта",
@@ -87,6 +90,7 @@
       "networkError": "Ошибка сети — {{message}}",
       "emailAlreadyRegistered": "Этот email уже зарегистрирован",
       "registrationFailed": "Не удалось зарегистрироваться: {{status}}",
+      "registrationDisabled": "Регистрация новых аккаунтов на этом сервере отключена. Попросите аккаунт у администратора.",
       "accountNotFound": "Учётная запись не найдена",
       "tooManyAttempts": "Слишком много попыток — подождите минуту и попробуйте снова",
       "noAccountFoundCreateOne": "Учётная запись не найдена. Сначала создайте её.",
@@ -114,6 +118,7 @@
       "cannotModifyBuiltinRoles": "Встроенные роли нельзя изменять",
       "cannotDeleteBuiltinRoles": "Встроенные роли нельзя удалять",
       "noPermissionInviteMembers": "У вас нет прав на приглашение участников",
+      "teamInvitesDisabled": "Администратор этого сервера отключил новые приглашения в команду.",
       "failedToCreateTeam": "Не удалось создать команду: {{status}}",
       "failedToRenameTeam": "Не удалось переименовать команду: {{status}}",
       "failedToDeleteTeam": "Не удалось удалить команду: {{status}}",
@@ -185,7 +190,8 @@
       "failedToRedeemInviteCode": "Не удалось использовать код приглашения: {{status}}",
       "inviteCodeMalformed": "Код указан в неверном формате",
       "inviteCodeNotFound": "Код истёк или указан неверно",
-      "inviteCodeTooManyAttempts": "Слишком много попыток — подождите и попробуйте снова"
+      "inviteCodeTooManyAttempts": "Слишком много попыток — подождите и попробуйте снова",
+      "businessPlanRequired": "Для этого нужен тариф Business команды."
     },
     "clipboard": {
       "cut_one": "Вырезан {{count}} элемент",

@@ -89,7 +89,8 @@
       "localMachineName": "Machine locale",
       "wslSub": "WSL",
       "noHostsConfigured": "Aucun hôte configuré",
-      "noHostsMatch": "Aucun hôte ne correspond"
+      "noHostsMatch": "Aucun hôte ne correspond",
+      "allVaults": "Tous les coffres"
     },
     "sort": {
       "nameAsc": "A → Z",
@@ -113,9 +114,6 @@
     },
     "vaultUnavailable": {
       "note": "Le coffre n'a pas pu être lu, les secrets enregistrés ne sont donc pas affichés ici. Laissez un champ vide pour conserver ce qui est enregistré ; saisir une nouvelle valeur la remplace."
-    },
-    "storedSecrets": {
-      "forbidden": "Votre rôle dans ce coffre ne permet pas de voir les secrets enregistrés : ces champs restent vides. La connexion fonctionne quand même — l'identifiant enregistré est utilisé sans être affiché."
     },
     "teamCredentials": {
       "unavailable": "Les identifiants enregistrés de ce coffre d'équipe n'ont pas pu être chargés : les hôtes qui utilisent un mot de passe, une clé ou une phrase secrète enregistrés échoueront à la connexion. Demandez à un administrateur du coffre d'accorder à votre rôle l'accès aux secrets du coffre."
@@ -166,6 +164,19 @@
         "roleCount_other": "{{count}} rôles",
         "loadFailed": "Impossible de charger les permissions"
       }
+    },
+    "businessLock": {
+      "title": "Fonctionnalité du forfait Business",
+      "upgrade": "Passer à Business",
+      "ownerOnly": "Seul le propriétaire de l'équipe peut changer de forfait.",
+      "removeRules": "Supprimer les règles",
+      "confirmClear": "Cliquez à nouveau pour supprimer",
+      "rolesBody": "Les rôles personnalisés nécessitent le forfait Business de l'équipe.",
+      "memberLapsed": "Forfait Business expiré : les permissions accordées à {{name}} sont désactivées ; les restrictions restent appliquées.",
+      "objectLapsed": "Forfait Business expiré : les règles d'autorisation sont désactivées ; les règles de refus restent appliquées.",
+      "memberLine": "Les permissions par membre nécessitent le forfait Business.",
+      "objectLine": "Les permissions par objet nécessitent le forfait Business.",
+      "removeOverrides": "Supprimer les dérogations"
     }
   }
 }

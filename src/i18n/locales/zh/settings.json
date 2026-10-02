@@ -264,7 +264,7 @@
           "teamVaults": "共享团队保险库",
           "teamSharing": "团队共享（5 个会话 · 10 名访客）",
           "seats": "席位（按订阅数量）",
-          "customRoles": "自定义角色"
+          "granularPermissions": "自定义角色、按成员和按对象的权限"
         }
       },
       "buySeats": {
@@ -367,7 +367,7 @@
       },
       "autoDownload": {
         "title": "自动下载更新",
-        "desc": "在后台检查并下载新版本"
+        "desc": "在后台下载新版本。无论是否开启，Voltius 都会检查更新。"
       },
       "whatsNew": {
         "title": "更新后显示新内容",
@@ -462,9 +462,11 @@
         "deleteVault": {
           "title": "删除保险库",
           "confirmDesc": "将永久删除此保险库及其 {{count}} 个项目。此操作无法撤销。",
+          "confirmDescTeam": "将为所有成员永久删除此保险库及其 {{count}} 个项目。此操作无法撤销。",
           "confirmBtn": "确认删除",
           "deleting": "正在删除…",
-          "failedToast": "未能完成此保险库的删除——保险库仍在，但其中部分项目可能已被删除。{{reason}}"
+          "failedToast": "未能完成此保险库的删除——保险库仍在，但其中部分项目可能已被删除。{{reason}}",
+          "teamFailedToast": "未能删除此保险库——未删除任何内容。{{reason}}"
         },
         "madePrivateToast_one": "保险库现已私有。{{count}} 名成员失去了访问权限。",
         "madePrivateToast_other": "保险库现已私有。{{count}} 名成员失去了访问权限。",
@@ -520,9 +522,6 @@
         "builtinRoles": "内置角色",
         "customRoles": "自定义角色",
         "newRoleBtn": "新建角色",
-        "businessFeature": "Business 套餐功能",
-        "businessFeatureDesc": "具有细粒度权限的自定义角色在 Business 套餐中可用。",
-        "upgradeBtn": "升级到 Business",
         "noCustomRolesCanEdit": "暂无自定义角色。创建一个以分配特定权限。",
         "noCustomRoles": "此团队未定义自定义角色。"
       }
@@ -999,15 +998,6 @@
       "restoreWorkspace": { "label": "启动时恢复工作区" },
       "crossDeviceSessions": { "label": "跨设备会话" },
       "changelogPopup": { "label": "更新后显示新内容" },
-      "category": {
-        "appearance": "外观",
-        "portForwarding": "端口转发",
-        "sftp": "SFTP",
-        "hosts": "主机",
-        "updates": "更新",
-        "plugins": "插件",
-        "integrations": "集成"
-      },
       "pluginInstallReview": { "label": "安装插件前先审查权限" },
       "mcpServer": { "label": "MCP 服务器" }
     },

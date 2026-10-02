@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { useConnectRetry } from "./useConnectRetry";
+import { IdentityPickUnavailableError } from "@/services/credentialPlan";
+import { connectErrorPhase, useConnectRetry } from "./useConnectRetry";
 import { FAST_DELAYS_MS, SLOW_RETRY_MS, STABLE_CONNECTION_MS, connectRetryDelay } from "@/stores/reconnectBackoffCore";
 
-type Phase = { tag: string; message?: string; errorCode?: "vault-locked" };
+type Phase = { tag: string; message?: string; errorCode?: "vault-locked"; final?: boolean };
 
 describe("connectRetryDelay", () => {
   it("follows the fast schedule for transient failures, then slows down", () => {
@@ -19,6 +20,9 @@ describe("connectRetryDelay", () => {
     expect(connectRetryDelay(0, "WARNING: Host key changed for h:22!\nStored   : a")).toBeNull();
     expect(connectRetryDelay(0, "Connection aborted by user.")).toBeNull();
     expect(connectRetryDelay(0, "Vault is locked", "vault-locked")).toBeNull();
+    // A coded failure's message arrives translated, so only its code tells.
+    expect(connectRetryDelay(0, "Mot de passe refusé.", "ssh-password-rejected")).toBeNull();
+    expect(connectRetryDelay(0, "Connexion refusée.", "connection-refused")).toBe(FAST_DELAYS_MS[0]);
   });
 });
 
@@ -63,6 +67,17 @@ describe("useConnectRetry", () => {
     expect(retry).toHaveBeenCalledTimes(FAST_DELAYS_MS.length);
     act(() => { vi.advanceTimersByTime(1); });
     expect(retry).toHaveBeenCalledTimes(FAST_DELAYS_MS.length + 1);
+  });
+
+  it("stops at an unavailable identity pick and keeps its message", () => {
+    const issue = { connectionId: "c1", connectionName: "db-01", via: "pick" as const, reason: "missing" as const, hasFallback: false };
+    const phase = connectErrorPhase(new IdentityPickUnavailableError(issue, "Your identity for db-01 isn't available"));
+    expect(phase).toMatchObject({ tag: "error", message: "Your identity for db-01 isn't available", final: true });
+    const { retry, hook } = setup(phase as Phase);
+    expect(hook.result.current.retrying).toBe(false);
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(retry).not.toHaveBeenCalled();
+    expect(connectErrorPhase(new Error("SSH connection failed: Connection refused")).final).toBe(false);
   });
 
   it("does not retry rejected credentials or a locked vault", () => {

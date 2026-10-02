@@ -19,6 +19,7 @@ import { VaultPicker } from "@/components/shared/VaultPicker";
 import { unlinkIdentityFromHost } from "@/services/keychainForm";
 import { useStoredSecrets } from "@/hooks/useStoredSecrets";
 import { StoredSecretsNote } from "@/components/shared/VaultUnavailableNote";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 import {
   PanelShell, PanelHeader, FormSection,
   formInputClass, formInputStyle, formLabelClass, formLabelStyle, formIdentifierProps,
@@ -28,7 +29,6 @@ import { PickerSurface } from "@/components/shared/PickerSurface";
 import { PickerDivider, PickerOption, PickerTrigger } from "@/components/shared/pickerParts";
 import { PinButton } from "@/components/shared/PinButton";
 import { useIdentityStore } from "@/stores/identityStore";
-import { useTeamStore } from "@/stores/teamStore";
 import { KeyFileDropZone } from "./KeyForm";
 import { PublicKeyField, isPublicKeyInvalid } from "./PublicKeyField";
 import { useDerivedPublicKey } from "./useDerivedPublicKey";
@@ -36,7 +36,7 @@ import { getConnectionIcon, getConnectionIconColor } from "@/utils/icons";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import type { Connection, Identity, IdentityFormData } from "@/types";
 import { buildKeychainMenuItems } from "@/utils/keychainMenuItems";
-import { selectVaultScopedItems } from "@/utils/vaultScopedItems";
+import { useVaultScopedItems } from "@/hooks/useVaultScopedItems";
 import { connectionDisplayName } from "@/utils/connectionDisplayName";
 import { PermissionsSection } from "@/components/permissions/PermissionsSection";
 
@@ -55,16 +55,7 @@ function KeySelector({
 }) {
   const { t } = useTranslation();
   const { keys: personalKeys, teamKeys } = useKeyStore();
-  const teams = useTeamStore((s) => s.teams);
-  const teamVaultIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
-  const effectiveVaultId = vaultId || "personal";
-  const keys = useMemo(() => selectVaultScopedItems({
-    vaultId: effectiveVaultId,
-    localItems: personalKeys,
-    teamItems: teamKeys,
-    teamVaultIds,
-    resolveVaultId: resolveVaultIdForSave,
-  }), [effectiveVaultId, personalKeys, teamKeys, teamVaultIds]);
+  const keys = useVaultScopedItems(vaultId, personalKeys, teamKeys);
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const isInline = value === "__inline__";
@@ -132,20 +123,21 @@ export interface IdentityFormProps {
   flushRef?: { current: (() => void) | null };
   isDirtyRef?: React.MutableRefObject<boolean>;
   vaults?: import("@/types").VaultOption[];
-  canEdit?: boolean;
   onMoveToVault?: (vaultId: string) => void;
   onCopyToVault?: (vaultId: string) => void;
   hideChrome?: boolean;
 }
 
-export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, isDirtyRef, vaults, canEdit, onMoveToVault, onCopyToVault, hideChrome }: IdentityFormProps) {
+export const IdentityForm = withEditAccess("identity", (p: IdentityFormProps) => p.initial, IdentityFormEditor);
+
+function IdentityFormEditor({ initial, onSubmit, onClose, onDelete, flushRef, isDirtyRef, vaults, onMoveToVault, onCopyToVault, hideChrome, readOnly }: IdentityFormProps & EditAccessProps) {
   const { t } = useTranslation();
   const { loadKeys } = useKeyStore();
   const { connections, loadConnections, updateConnection } = useConnectionStore();
   const { setActiveNav, setHomePendingAction } = useUIStore();
   const pinIdentity = useIdentityStore((s) => s.pinIdentity);
   const shell = useVaultObjectFormShell({ initial, folderType: "keychain", objectType: "identity", pin: pinIdentity });
-  const { vaultId, pickVault, isPinned, togglePin } = shell;
+  const { vaultId, pickVault, folderId, keepSavedOnCancel, isPinned, togglePin } = shell;
   const contributions = useUIContributions("identity.panelActions", initial);
   const { toggleExcluded, isObjectSynced } = useSyncPrefsStore();
   const isSynced = initial ? isObjectSynced(initial.id, "identity") : true;
@@ -155,7 +147,6 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [keyId, setKeyId] = useState<string | null | "__inline__">(initial?.key_id ?? null);
-  const [folderId, setFolderId] = useState<string | null>(initial?.folder_id ?? null);
   const [inlineKeyLabel, setInlineKeyLabel] = useState("");
   const [inlinePrivKey, setInlinePrivKey] = useState("");
   const [inlinePublicKey, setInlinePublicKey] = useState("");
@@ -191,17 +182,18 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
       const keyMaterial = isInline
         ? { label: inlineKeyLabel || undefined, privateKey: inlinePrivKey, publicKey: inlinePublicKey }
         : undefined;
-      return onSubmit(
+      return keepSavedOnCancel(onSubmit(
         { name: name.trim() || undefined, username, key_id: isInline ? undefined : (keyId ?? undefined), tags, folder_id: folderId ?? undefined, vault_id: resolveVaultIdForSave(vaultId) },
         passwordDirty.current ? password : null,
         keyMaterial,
-      ) ?? undefined;
+      ));
     },
     // Same rule as KeyForm: an inline public half that is not a key is never
     // persisted, and the inline error under the field says why.
     canSave: () =>
       !!username.trim()
       && (!isInline || (!!inlinePrivKey.trim() && !isPublicKeyInvalid(inlinePublicKey))),
+    readOnly,
   });
   const markDirty = useCallback(() => {
     if (isDirtyRef) isDirtyRef.current = true;
@@ -239,7 +231,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
       <PanelHeader
         icon={initial ? "lucide:pencil" : "lucide:plus"}
         title={initial ? t("keychain.identityForm.titleEdit") : t("keychain.toolbar.newIdentity")}
-        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} />}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} disabled={readOnly} />}
         onClose={handleClose}
         saveState={saveState}
         actions={initial ? (() => {
@@ -247,7 +239,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
             t,
             contributions,
             vaults,
-            canEdit,
+            canEdit: !readOnly,
             isSynced,
             onMoveToVault,
             onCopyToVault,
@@ -265,6 +257,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
       )}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         <StoredSecretsNote state={storedSecrets} />
+        <ReadOnlyFields readOnly={readOnly} className="space-y-3">
         <FormSection label={t("keychain.common.general")}>
           <div>
             <label className={formLabelClass} style={formLabelStyle}>{t("keychain.common.label")}</label>
@@ -282,8 +275,6 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
             folderType="keychain"
             tags={tags}
             onChangeTags={setTags}
-            folderId={folderId}
-            onChangeFolderId={setFolderId}
             markDirty={markDirty}
           />
         </FormSection>
@@ -303,6 +294,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
             />
           </div>
 
+          {storedSecrets !== "forbidden" && (
           <div>
             <label className={formLabelClass} style={formLabelStyle}>{t("keychain.common.password")}</label>
             <SecretInput
@@ -313,6 +305,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
               onToggleShow={handleTogglePassword}
             />
           </div>
+          )}
 
           <div>
             <label className={formLabelClass} style={formLabelStyle}>{t("keychain.identityForm.sshKeyLabel")}</label>
@@ -359,6 +352,7 @@ export function IdentityForm({ initial, onSubmit, onClose, onDelete, flushRef, i
             />
           </FormSection>
         )}
+        </ReadOnlyFields>
 
         {initial && linkedHosts.length > 0 && (
           <FormSection label={t("keychain.identityForm.sectionLinkedTo")}>

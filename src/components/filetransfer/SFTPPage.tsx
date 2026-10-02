@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import {
@@ -22,8 +22,7 @@ import { useFileClipboardStore, type FileEndpoint } from "@/stores/fileClipboard
 import { buildPasteDeps, executePaste } from "./pasteService";
 import { resolveConnectionCredentials } from "@/services/credentials";
 import { sftpConnectToConnection } from "@/services/sftpTarget";
-import { vaultErrorCode } from "@/services/vaultErrors";
-import { useConnectRetry } from "@/hooks/useConnectRetry";
+import { connectErrorPhase, useConnectRetry } from "@/hooks/useConnectRetry";
 import {
   type HostChoice, type SidePhase, type FileEntry,
   genId,
@@ -35,7 +34,7 @@ import { TabDragGhost } from "./editor/TabDragGhost";
 import { triggerOsDrop as triggerOsDropPipeline } from "./osDropPipeline";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useUIStore } from "@/stores/uiStore";
-import { useConnectionStore } from "@/stores/connectionStore";
+import { findAnyConnection } from "@/stores/connectionStore";
 import { useEditorStore } from "@/stores/editorStore";
 import { EditorTabStrip } from "./editor/EditorTabStrip";
 import { EditorTab } from "./editor/EditorTab";
@@ -109,14 +108,13 @@ export default function SFTPPage() {
       setPhase({ tag: "connected", sftpId, cwd, selected: [] });
     } catch (e) {
       if (sftpId) sftpClose(sftpId).catch(() => {});
-      if (isCurrent()) setPhase({ tag: "error", message: String(e), errorCode: vaultErrorCode(e) ?? undefined, host });
+      if (isCurrent()) setPhase({ ...connectErrorPhase(e), host });
     }
   }, [setPhaseOf, releaseSide]);
 
   useEffect(() => {
     if (!sftpPanelOpen || !pendingSftpConnectionId) return;
-    const { connections, teamConnections } = useConnectionStore.getState();
-    const conn = [...connections, ...Object.values(teamConnections).flat()].find((c) => c.id === pendingSftpConnectionId);
+    const conn = findAnyConnection(pendingSftpConnectionId);
     if (!conn) return;
     clearPendingSftpConnection();
     const host: HostChoice = { kind: "remote", connection: conn };

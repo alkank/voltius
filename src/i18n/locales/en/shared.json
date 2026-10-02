@@ -86,7 +86,8 @@
       "localMachineName": "Local Machine",
       "wslSub": "WSL",
       "noHostsConfigured": "No hosts configured",
-      "noHostsMatch": "No hosts match"
+      "noHostsMatch": "No hosts match",
+      "allVaults": "All vaults"
     },
     "sort": {
       "nameAsc": "A → Z",
@@ -109,9 +110,6 @@
     },
     "vaultUnavailable": {
       "note": "The vault could not be read, so stored secrets are not shown here. Leave a field empty to keep what is saved; typing a new value replaces it."
-    },
-    "storedSecrets": {
-      "forbidden": "Your role in this vault cannot see stored secrets, so these fields are left blank. Connecting still works — the saved credential is used without being shown."
     },
     "teamCredentials": {
       "unavailable": "Stored credentials for this team vault could not be loaded, so hosts that need a saved password, key, or passphrase will fail to connect. Ask a vault administrator to grant your role access to the vault's secrets."
@@ -161,6 +159,19 @@
         "roleCount_other": "{{count}} roles",
         "loadFailed": "Could not load permissions"
       }
+    },
+    "businessLock": {
+      "title": "Business plan feature",
+      "upgrade": "Upgrade to Business",
+      "ownerOnly": "Only the team owner can upgrade.",
+      "removeRules": "Remove rules",
+      "confirmClear": "Click again to remove",
+      "rolesBody": "Custom roles need the team's Business plan.",
+      "memberLapsed": "Business plan lapsed: permissions granted to {{name}} are off; restrictions still apply.",
+      "objectLapsed": "Business plan lapsed: allow rules are off; deny rules still apply.",
+      "memberLine": "Per-member permissions need Business.",
+      "objectLine": "Per-object permissions need Business.",
+      "removeOverrides": "Remove overrides"
     }
   }
 }

@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Trans, useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { useAutosave } from "@/hooks/useAutosave";
+import { useFolderField } from "@/hooks/useFolderField";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
+import { useVaultScopedItems } from "@/hooks/useVaultScopedItems";
 import FolderSelector from "@/components/shared/FolderSelector";
 import TagSelector from "@/components/shared/TagSelector";
 import { useDefaultVaultId, resolveVaultIdForSave } from "@/hooks/useWritableVaultIds";
@@ -36,6 +38,7 @@ import { RemotePathPickerPanel } from "@/components/snippets/RemotePathPickerPan
 import { VariableTextarea } from "@/components/snippets/VariableTextarea";
 import { searchMatcher } from "@/utils/search";
 import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 
 interface Props {
   initial?: Snippet;
@@ -46,7 +49,9 @@ interface Props {
   isDirtyRef?: React.MutableRefObject<boolean>;
 }
 
-export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete, isDirtyRef }: Props) {
+export const SnippetForm = withEditAccess("snippet", (p: Props) => p.initial, SnippetFormEditor);
+
+function SnippetFormEditor({ initial, onSubmit, onClose, onDuplicate, onDelete, isDirtyRef, readOnly }: Props & EditAccessProps) {
   const { t } = useTranslation();
   const isNew = !initial;
   const pinSnippet = useSnippetStore((s) => s.pinSnippet);
@@ -54,7 +59,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   const pinSource = useEffectivePinSource(initial ?? { id: "", favorite: false }, "snippet");
   const isPinned = effPinned;
   const isTeamVault = useTeamStore((s) => initial ? s.teams.some((t) => t.id === initial.vault_id) : false);
-  const { folders, saveFolder } = useSnippetFolderStore();
+  const { folders: personalFolders, teamSnippetFolders, saveFolder } = useSnippetFolderStore();
   const defaultVaultId = useDefaultVaultId();
   const connections = useAllConnections();
   const allConnectionTags = useMemo(
@@ -65,7 +70,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   const [name, setName]         = useState(initial?.name ?? "");
   const [steps, setSteps]       = useState<SnippetStep[]>(initial?.steps ?? [{ kind: "script", content: "" }]);
   const [description, setDesc]  = useState(initial?.description ?? "");
-  const [folderId, setFolderId] = useState<string | null>(initial?.folder_id ?? null);
+  const { folderId, setFolderId, keepSavedOnCancel } = useFolderField(initial?.folder_id);
   const [tags, setTags]         = useState<string[]>(initial?.tags ?? []);
   const [connTags, setConnTags] = useState<string[]>(initial?.only_for_connection_tags ?? []);
   const [connTagInput, setConnTagInput] = useState("");
@@ -75,6 +80,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   const [vaultId, setVaultId]   = useState(initial?.vault_id ?? defaultVaultId);
   const [remotePick, setRemotePick] = useState<{ index: number; field: "from_path" | "to_path"; isDir: boolean } | null>(null);
   const vaultTouched = useRef(false);
+  const folders = useVaultScopedItems(vaultId, personalFolders, teamSnippetFolders);
 
   // Single-script fast path: keep the plain textarea when the snippet is just one script step.
   const [forceSequence, setForceSequence] = useState(false);
@@ -102,8 +108,9 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   });
 
   const { schedule, markDirty: _markDirty, flushAndClose, flush, saveState } = useAutosave({
-    onSave: () => onSubmit(buildData()) ?? undefined,
+    onSave: () => keepSavedOnCancel(onSubmit(buildData())),
     canSave: () => steps.length > 0 && steps.some((s) => s.kind !== "script" || s.content.trim()),
+    readOnly,
   });
   const markDirty = useCallback(() => {
     if (isDirtyRef) isDirtyRef.current = true;
@@ -135,7 +142,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
 
   const panelItems = initial ? [
     ...(onDuplicate ? [{ label: t("snippets.card.duplicate"), icon: "lucide:copy", onClick: onDuplicate }] : []),
-    ...(onDelete ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => { flush(); onDelete(); }, shortcut: getShortcutHint("delete") }] : []),
+    ...(onDelete && !readOnly ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => { flush(); onDelete(); }, shortcut: getShortcutHint("delete") }] : []),
   ] : [];
 
   return (
@@ -145,7 +152,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
         icon="lucide:braces"
         // "Untitled snippet" is the persisted default name when left blank; kept in English until all creation sites are localized together (see i18n issue #14)
         title={isNew ? t("snippets.toolbar.newSnippet") : (name.trim() || "Untitled snippet")}
-        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => { vaultTouched.current = true; setVaultId(id); markDirty(); }} />}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => { vaultTouched.current = true; if (id !== vaultId) setFolderId(null); setVaultId(id); markDirty(); }} disabled={readOnly} />}
         onClose={handleClose}
         saveState={saveState}
         actions={
@@ -163,6 +170,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
       />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <ReadOnlyFields readOnly={readOnly} className="space-y-4">
         {/* ── General ── */}
         <FormSection label={t("snippets.form.generalSection")}>
           <div>
@@ -320,6 +328,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
             />
           </div>
         </FormSection>
+        </ReadOnlyFields>
         {initial && <PermissionsSection objectId={initial.id} vaultId={initial.vault_id} type="snippet" />}
       </div>
     </PanelShell>

@@ -1,21 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { clearPersistedAccountUiState } from "@/stores/persistedAccountUiState";
 import { ACCOUNT_CACHE_KEYS } from "./accountCacheKeys";
+import { backendErrorCode } from "./backendErrors";
 import { VaultLockedError, VaultUnreadableError } from "./vaultErrors";
-
-/**
- * Rust's own failure strings, matched to tell a wrong key from a busy file.
- * Source of truth: src-tauri/src/storage/secrets.rs (LOCKED_ERR and decrypt) — a
- * rename there must be mirrored here, which the canary test on each side catches.
- */
-export const SECRETS_LOCKED_MESSAGE = "Secrets store is locked";
-const DECRYPT_FAILED_MESSAGE = "wrong key or corrupted file";
 
 // Pending key: set at login/setup, used to unlock secrets on first access
 let pendingKey: number[] | null = null;
 let unlocked = false;
-
-const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * Run a secrets command, giving a failed decrypt its own type. Every other
@@ -27,7 +18,7 @@ async function invokeDecrypting<T>(cmd: string, args?: Record<string, unknown>):
     return await invoke<T>(cmd, args);
   } catch (e) {
     // Possibly readable with a key we lack. Deleting it here once cost a vault (#134).
-    if (errorMessage(e).includes(DECRYPT_FAILED_MESSAGE)) throw new VaultUnreadableError(e);
+    if (backendErrorCode(e) === "vault-unreadable") throw new VaultUnreadableError(e);
     throw e;
   }
 }
@@ -46,20 +37,34 @@ async function ensureUnlocked(): Promise<void> {
   if (unlocked) return;
   if (!pendingKey) throw new VaultLockedError();
   await invokeDecrypting("secrets_unlock", { encKey: pendingKey });
+  // Before `unlocked`, so no concurrent caller reads the vault ahead of the restore.
+  await restoreCarriedSecrets().catch(() => {});
   unlocked = true;
 }
 
+const CARRIED_SECRETS_KEY = "carried_device_secrets";
+
+async function restoreCarriedSecrets(): Promise<void> {
+  const raw = await invoke<string | null>("keychain_get", { key: CARRIED_SECRETS_KEY });
+  if (!raw) return;
+  for (const [key, value] of Object.entries(JSON.parse(raw) as Record<string, string>)) {
+    await invoke("secrets_set", { key, value });
+  }
+  await invoke("keychain_delete", { key: CARRIED_SECRETS_KEY });
+}
+
 /**
- * Run a secrets command on an unlocked store, giving Rust's bare "locked" string a
- * code so the overlay can offer to unlock. Reaching it means `unlocked` disagreed
- * with the store, so the flag is dropped and the next call unlocks again.
+ * Run a secrets command on an unlocked store, turning Rust's "vault-locked" error
+ * into a VaultLockedError so the overlay can offer to unlock. Reaching it means
+ * `unlocked` disagreed with the store, so the flag is dropped and the next call
+ * unlocks again.
  */
 async function withUnlocked<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   await ensureUnlocked();
   try {
     return await invoke<T>(cmd, args);
   } catch (e) {
-    if (errorMessage(e).includes(SECRETS_LOCKED_MESSAGE)) {
+    if (backendErrorCode(e) === "vault-locked") {
       unlocked = false;
       throw new VaultLockedError();
     }
@@ -132,8 +137,22 @@ export async function getVaultStatus(): Promise<{ exists: boolean; path: string 
  * the incoming cloud pull — and so the previous account's secrets.enc, which the
  * incoming key cannot open, is gone before that key is installed.
  */
-export async function wipeLocalConfig(): Promise<void> {
+export async function wipeLocalConfig(carry: Record<string, string> = {}): Promise<void> {
+  // Carried through the keychain and written back into the next vault on its first unlock.
+  if (Object.keys(carry).length > 0) {
+    await invoke("keychain_set", { key: CARRIED_SECRETS_KEY, value: JSON.stringify(carry) }).catch(() => {});
+  }
   await invoke("config_wipe");
+}
+
+/** The present values of `keys`; empty when the vault can't be read. */
+export async function readLocalSecrets(keys: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const key of keys) {
+    const value = await getLocalSecret(key).catch(() => null);
+    if (value != null) out[key] = value;
+  }
+  return out;
 }
 
 export async function resetVault(): Promise<void> {

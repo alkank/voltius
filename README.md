@@ -93,6 +93,12 @@ On older dnf, replace the `curl` line with `sudo dnf config-manager --add-repo h
 yay -S voltius-bin   # prebuilt binary, tracks releases
 ```
 Community-maintained by [ezhkov](https://aur.archlinux.org/account/ezhkov/), not published by this repo's CI. `voltius` (builds from source) and `voltius-git` (latest `main`) are also available. If any of these are ever behind, a direct download is the maintained fallback.
+
+**Flatpak (FlatPark)**
+```bash
+flatpak install https://dl.flatpark.org/app.voltius.Voltius.flatpakref
+```
+Community-maintained by [jing2uo](https://github.com/jing2uo) on [FlatPark](https://flatpark.org/apps/app.voltius.Voltius), not published by this repo's CI. It installs the official `.deb` unmodified and follows releases automatically. `x86_64` only for now.
 </details>
 
 ### <img src=".github/media/icons/apple.svg" alt="" height="22" align="center" /> macOS — Homebrew
@@ -101,7 +107,7 @@ Community-maintained by [ezhkov](https://aur.archlinux.org/account/ezhkov/), not
 brew install --cask voltiusapp/voltius/voltius
 ```
 
-Voltius is ad-hoc signed but not yet notarized (no Apple Developer account yet).
+Voltius is signed with its own certificate but not notarized (no Apple Developer account yet).
 If macOS Gatekeeper blocks the first launch, right-click the app and choose
 **Open**. To clear the quarantine flag from an existing installation instead,
 run:
@@ -184,7 +190,7 @@ on macOS and Windows after installation.
 | **Auto-Updates** | ✅ | ✅ | ✅ | ? | ? |
 | **Modern UI/UX** | ✅ | ✅ | 🟡 | ✅ | 🟡 |
 | **AI assistant** | ❌ | ✅ | ✅ | ? | ? |
-| **Permissions** | ✅ Teams RBAC / Business custom roles | ✅ Granular perms | ? | ? | ? |
+| **Permissions** | ✅ Teams built-in roles / Business custom roles, per-member & per-object | ✅ Granular perms | ? | ? | ? |
 | **Terminal sharing** | ✅ Pro (1 session · 1 guest) / Teams (5 · 10) / Business (20 · 50) | ✅ needs Teams plan | ? | ? | ? |
 | **Security** | **End-to-End Encrypted** | Proprietary E2EE | **End-to-End Encrypted** | ? | Local Only / Manual |
 | **SFTP host&lt;-&gt;host** | ✅ | ✅ | ❌ | ? | ❌ |

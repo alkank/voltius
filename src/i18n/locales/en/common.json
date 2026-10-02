@@ -67,6 +67,9 @@
       "fileSaveFailed": "Couldn't save the file: {{error}}"
     },
     "error": {
+      "identityPickUnavailable": "Your identity for {{host}} isn't available",
+      "failedToListIdentityPicks": "Couldn't load your identity choices ({{status}})",
+      "failedToSaveIdentityPick": "Couldn't save your identity choice ({{status}})",
       "notConnectedToServer": "Not connected to server",
       "notAuthenticated": "Not authenticated",
       "invalidSessionKey": "Session key must be 32 bytes",
@@ -87,6 +90,7 @@
       "networkError": "Network error — {{message}}",
       "emailAlreadyRegistered": "Email already registered",
       "registrationFailed": "Registration failed: {{status}}",
+      "registrationDisabled": "New account registration is disabled on this server. Ask its administrator for an account.",
       "accountNotFound": "Account not found",
       "tooManyAttempts": "Too many attempts — wait a minute and try again",
       "noAccountFoundCreateOne": "No account found. Please create one first.",
@@ -114,6 +118,7 @@
       "cannotModifyBuiltinRoles": "Cannot modify builtin roles",
       "cannotDeleteBuiltinRoles": "Cannot delete builtin roles",
       "noPermissionInviteMembers": "You don't have permission to invite members",
+      "teamInvitesDisabled": "This server's administrator has disabled new team invitations.",
       "failedToCreateTeam": "Failed to create team: {{status}}",
       "failedToRenameTeam": "Failed to rename team: {{status}}",
       "failedToDeleteTeam": "Failed to delete team: {{status}}",
@@ -185,7 +190,8 @@
       "failedToRedeemInviteCode": "Failed to use invite code: {{status}}",
       "inviteCodeMalformed": "That code is not in the right format",
       "inviteCodeNotFound": "That code has expired or is incorrect",
-      "inviteCodeTooManyAttempts": "Too many attempts — wait a moment and try again"
+      "inviteCodeTooManyAttempts": "Too many attempts — wait a moment and try again",
+      "businessPlanRequired": "This needs the team's Business plan."
     },
     "clipboard": {
       "cut_one": "{{count}} item cut",

@@ -29,6 +29,7 @@ import { PublicKeyField, isPublicKeyInvalid } from "./PublicKeyField";
 import { useDerivedPublicKey } from "./useDerivedPublicKey";
 import { formatDate } from "@/utils/localeFormat";
 import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 
 // Re-exported for back-compat (IdentityForm imports KeyFileDropZone from here).
 export { KeyFileDropZone } from "./KeyFileDropZone";
@@ -80,13 +81,14 @@ export interface KeyFormProps {
   flushRef?: { current: (() => void) | null };
   isDirtyRef?: React.MutableRefObject<boolean>;
   vaults?: import("@/types").VaultOption[];
-  canEdit?: boolean;
   onMoveToVault?: (vaultId: string) => void;
   onCopyToVault?: (vaultId: string) => void;
   hideChrome?: boolean;
 }
 
-export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onDelete, flushRef, isDirtyRef, vaults, canEdit, onMoveToVault, onCopyToVault, hideChrome }: KeyFormProps) {
+export const KeyForm = withEditAccess("key", (p: KeyFormProps) => p.initial, KeyFormEditor);
+
+function KeyFormEditor({ initial, initialMode, onSubmit, onClose, onExport, onDelete, flushRef, isDirtyRef, vaults, onMoveToVault, onCopyToVault, hideChrome, readOnly }: KeyFormProps & EditAccessProps) {
   const { t } = useTranslation();
   const [name, setName] = useState(initial?.name ?? "");
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
@@ -94,7 +96,6 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
   const [publicKey, setPublicKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [showPassphrase, setShowPassphrase] = useState(false);
-  const [folderId, setFolderId] = useState<string | null>(initial?.folder_id ?? null);
   const isNew = !initial;
   const [mode, setMode] = useState<KeyFormMode>(initial ? "import" : (initialMode ?? "import"));
   const keyInfo = useMemo(() => detectKeyInfo(privateKey, publicKey), [privateKey, publicKey]);
@@ -106,7 +107,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
   const passphraseDirty = useRef(false);
   const pinKey = useKeyStore((s) => s.pinKey);
   const shell = useVaultObjectFormShell({ initial, folderType: "keychain", objectType: "key", pin: pinKey });
-  const { vaultId, pickVault, isPinned, togglePin } = shell;
+  const { vaultId, pickVault, folderId, keepSavedOnCancel, isPinned, togglePin } = shell;
 
   const storedSecrets = useStoredSecrets(
     initial?.id,
@@ -128,15 +129,16 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
   const isSynced = initial ? isObjectSynced(initial.id, "key") : true;
 
   const { schedule, markDirty: _markDirty, flushAndClose, flush, saveState } = useAutosave({
-    onSave: () => onSubmit(
+    onSave: () => keepSavedOnCancel(onSubmit(
       { name: name.trim() || defaultName, key_type: keyInfo.type ?? undefined, tags, folder_id: folderId ?? undefined, vault_id: resolveVaultIdForSave(vaultId) },
       privateKeyDirty.current ? privateKey : null,
       publicKeyDirty.current ? publicKey : null,
       passphraseDirty.current ? passphrase : null,
-    ) ?? undefined,
+    )),
     // A public half that is not a key is never persisted: autosave holds until
     // the field is emptied or corrected, and the inline error says why.
-    canSave: () => !!privateKey.trim() && !isPublicKeyInvalid(publicKey),
+    canSave: () => (!!privateKey.trim() || (!isNew && !privateKeyDirty.current)) && !isPublicKeyInvalid(publicKey),
+    readOnly,
   });
   const markDirty = useCallback(() => {
     if (isDirtyRef) isDirtyRef.current = true;
@@ -152,7 +154,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
     privateKey,
     publicKey,
     passphrase,
-    enabled: !publicKeyDirty.current,
+    enabled: !publicKeyDirty.current && !readOnly,
     onDerived: (derived) => {
       markDirty();
       publicKeyDirty.current = true;
@@ -181,7 +183,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
       <PanelHeader
         icon={initial ? "lucide:pencil" : "lucide:plus"}
         title={initial ? t("keychain.keyForm.titleEdit") : t("keychain.toolbar.newKey")}
-        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} />}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} disabled={readOnly} />}
         onClose={handleClose}
         saveState={saveState}
         actions={initial ? (() => {
@@ -189,7 +191,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
             t,
             contributions,
             vaults,
-            canEdit,
+            canEdit: !readOnly,
             isSynced,
             onMoveToVault,
             onCopyToVault,
@@ -208,6 +210,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
       )}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         <StoredSecretsNote state={storedSecrets} />
+        <ReadOnlyFields readOnly={readOnly} className="space-y-3">
         <FormSection label={t("keychain.common.general")}>
           <div>
             <label className={formLabelClass} style={formLabelStyle}>
@@ -227,8 +230,6 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
             folderType="keychain"
             tags={tags}
             onChangeTags={setTags}
-            folderId={folderId}
-            onChangeFolderId={setFolderId}
             markDirty={markDirty}
           />
         </FormSection>
@@ -237,7 +238,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
 
         {mode === "generate" ? (
           <KeyGenFields onGenerated={handleGenerated} />
-        ) : (<>
+        ) : storedSecrets !== "forbidden" && (<>
           <FormSection label={t("keychain.keyForm.sectionKeyMaterial")}>
             <div>
               <label className={formLabelClass} style={formLabelStyle}>
@@ -302,6 +303,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
             />
           </FormSection>
         </>)}
+        </ReadOnlyFields>
 
         {initial && onExport && (
           <div

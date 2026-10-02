@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { ConnectionHeader } from "./ConnectionHeader";
 import { ConnectionErrorPanel, ReconnectWaitPanel } from "./ConnectionStatusPanel";
 import { ConnectionSteps } from "./ConnectionSteps";
 import { HostKeyConflictPanel } from "./HostKeyConflictPanel";
+import { IdentityUnavailablePanel } from "./IdentityUnavailablePanel";
 import { PassphrasePromptPanel } from "./PassphrasePromptPanel";
 import { AuthPromptPanel } from "./AuthPromptPanel";
 import { UsernamePromptPanel } from "./UsernamePromptPanel";
@@ -9,6 +11,7 @@ import { VaultErrorPanel } from "./VaultErrorPanel";
 import { useConnectionSteps, useHostKeyConflict } from "./hooks";
 import type { ConnectionOverlayProps } from "./types";
 import { isMissingUsernameError, isNoAuthError, isPassphraseError } from "./utils";
+import { isVaultErrorCode } from "@/services/vaultErrors";
 
 export default function ConnectionOverlay({
   sessionId,
@@ -19,6 +22,7 @@ export default function ConnectionOverlay({
   subtitle,
   icon,
   vaultId,
+  connectionId,
   steps: stepConfigs,
   stepEventName,
   conflictEventName,
@@ -29,6 +33,8 @@ export default function ConnectionOverlay({
   onRetryNow,
   onRetryWithPassphrase,
   onRetryWithAuth,
+  identityPick,
+  onUseHostCredential,
 }: ConnectionOverlayProps) {
   const { steps, visible } = useConnectionSteps({ status, stepConfigs, stepEventName });
   const { conflict, resolving, resolveConflict } = useHostKeyConflict({
@@ -37,17 +43,25 @@ export default function ConnectionOverlay({
     conflictEventName,
   });
 
+  const [choosing, setChoosing] = useState(false);
+  useEffect(() => setChoosing(false), [identityPick]);
+
   if (!visible) return null;
 
   const isError = status === "error";
   const isConnecting = status === "connecting";
   // Outranks the message-based prompts: the credentials are stored, just unreadable.
-  const showVaultError = isError && !!errorCode;
-  const showPassphrasePrompt = isError && !showVaultError && isPassphraseError(errorMessage) && !!onRetryWithPassphrase;
-  const showUsernamePrompt = isError && !showVaultError && isMissingUsernameError(errorMessage) && !!onRetryWithAuth;
-  const showAuthPrompt = isError && !showVaultError && isNoAuthError(errorMessage) && !!onRetryWithAuth;
+  const vaultCode = isError && isVaultErrorCode(errorCode) ? errorCode : null;
+  const pickIsHere = !!identityPick && identityPick.connectionId === connectionId;
+  const showIdentityPick = isError && !!identityPick && !choosing;
+  const showChooser = isError && pickIsHere && choosing && !!onRetryWithAuth;
+  const showVaultError = !identityPick && !!vaultCode;
+  const prompting = isError && !identityPick && !vaultCode;
+  const showPassphrasePrompt = prompting && isPassphraseError(errorMessage) && !!onRetryWithPassphrase;
+  const showUsernamePrompt = prompting && isMissingUsernameError(errorMessage) && !!onRetryWithAuth;
+  const showAuthPrompt = prompting && isNoAuthError(errorMessage) && !!onRetryWithAuth;
   const showSpecialPanel =
-    (conflict && !isError) || showVaultError || showPassphrasePrompt || showUsernamePrompt || showAuthPrompt;
+    (conflict && !isError) || showIdentityPick || showChooser || showVaultError || showPassphrasePrompt || showUsernamePrompt || showAuthPrompt;
 
   return (
     <div className={className ?? "absolute inset-0 z-20 flex items-center justify-center bg-(--t-bg-terminal)"}>
@@ -62,8 +76,25 @@ export default function ConnectionOverlay({
 
         {conflict && !isError ? (
           <HostKeyConflictPanel conflict={conflict} resolving={resolving} onResolve={(action) => void resolveConflict(action)} />
-        ) : showVaultError ? (
-          <VaultErrorPanel code={errorCode} onRetry={onRetry} onCancel={onDismiss} />
+        ) : showIdentityPick ? (
+          <IdentityUnavailablePanel
+            issue={identityPick}
+            onChoose={pickIsHere ? () => setChoosing(true) : undefined}
+            onUseHost={pickIsHere ? onUseHostCredential : undefined}
+            onCancel={onDismiss}
+          />
+        ) : showChooser ? (
+          <AuthPromptPanel
+            vaultId={vaultId}
+            connectionId={connectionId}
+            hostName={name}
+            initialMode="identity"
+            repairVia={identityPick.via}
+            onSubmit={(override, save) => onRetryWithAuth?.(override, save)}
+            onCancel={onDismiss}
+          />
+        ) : showVaultError && vaultCode ? (
+          <VaultErrorPanel code={vaultCode} onRetry={onRetry} onCancel={onDismiss} />
         ) : showPassphrasePrompt ? (
           <PassphrasePromptPanel
             onSubmit={onRetryWithPassphrase}
@@ -72,12 +103,16 @@ export default function ConnectionOverlay({
         ) : showUsernamePrompt ? (
           <UsernamePromptPanel
             vaultId={vaultId}
+            connectionId={connectionId}
+            hostName={name}
             onSubmit={(override, save) => onRetryWithAuth?.(override, save)}
             onCancel={onDismiss}
           />
         ) : showAuthPrompt ? (
           <AuthPromptPanel
             vaultId={vaultId}
+            connectionId={connectionId}
+            hostName={name}
             onSubmit={(override, save) => onRetryWithAuth?.(override, save)}
             onCancel={onDismiss}
           />

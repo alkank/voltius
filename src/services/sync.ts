@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import i18n from "@/i18n";
 import { logFailure } from "@/lib/logger";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
@@ -17,8 +17,8 @@ import { useSnippetStore } from "@/stores/snippetStore";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { usePortForwardingStore } from "@/stores/portForwardingStore";
 import { entitiesDiffer, mergeEntities, mergeSecrets, secretsDiffer, type TimestampedEntity } from "@/services/crdt";
-import { filterRemoteExcluded, collectExcludedIds } from "./syncExclusion";
-import { GLOBAL_PROXY_SECRET_ID } from "@/services/teamVaultSecretKeys";
+import { filterRemoteExcluded, filterSecrets, collectExcludedIds, type SecretMaps } from "./syncExclusion";
+import { deviceScopedSecretIds } from "@/services/deviceScopedSecrets";
 import { filterIncoming, filterOutgoing, restoreLocal } from "@/services/user-data/syncFilter";
 import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
 import { useVaultKeysStore } from "@/stores/vaultKeysStore";
@@ -142,9 +142,14 @@ async function tryRefreshJwt(): Promise<string | null> {
 
   const wasProBefore = useSubscriptionStore.getState().isPro;
   const wasTeamsBefore = useSubscriptionStore.getState().isTeams;
+  const wasTierBefore = useSubscriptionStore.getState().tier;
   await useSubscriptionStore.getState().load().catch(logFailure("subscription load"));
   const isProNow = useSubscriptionStore.getState().isPro;
   const isTeamsNow = useSubscriptionStore.getState().isTeams;
+  if (useSubscriptionStore.getState().tier !== wasTierBefore) {
+    const { useTeamStore } = await import("@/stores/teamStore");
+    void useTeamStore.getState().loadTeams().catch(logFailure("teams reload after tier change"));
+  }
 
   if (wasProBefore && !isProNow) {
     const { useNotificationStore } = await import("@/stores/notificationStore");
@@ -277,9 +282,9 @@ async function decryptBlob(candidates: number[][], blobBytes: number[]): Promise
 
 /**
  * Ids of every entity object that must not participate in sync — individually
- * excluded, or belonging to a sync-disabled type — plus the global proxy
- * password's id while `appSettings.proxy` stays on this device. Used to filter both the
- * outbound blob (`backup_export`) and inbound remote payloads (pull merge).
+ * excluded, or belonging to a sync-disabled type — plus deviceScopedSecretIds.
+ * Used to filter both the outbound blob (`backup_export`) and inbound remote
+ * payloads (pull merge).
  *
  * Exported so non-server sync destinations (e.g. the gist-sync plugin export
  * path, issue #47) apply the same exclusion filter as the built-in server sync.
@@ -306,7 +311,7 @@ export function getExcludedObjectIds(): string[] {
     prefs.isObjectSynced,
     prefs.excludedIds,
   );
-  return prefs.isSettingSynced("appSettings.proxy") ? ids : [...ids, GLOBAL_PROXY_SECRET_ID];
+  return [...ids, ...deviceScopedSecretIds()];
 }
 
 /** `plugin-registry.json` duplicates `appSettings.plugins.overrides`, so every
@@ -471,7 +476,7 @@ async function completeTeamLoginSetup(): Promise<void> {
   // Migrate stale keychain entries from the old implementation (one-time).
   const migrated = localStorage.getItem("voltius.team_key_migration_v1");
   if (!migrated) {
-    const { invoke: inv } = await import("@tauri-apps/api/core");
+    const { invoke: inv } = await import("@/lib/invoke");
     const teams = useTeamStore.getState().teams;
     await Promise.allSettled(
       teams.map((t) => inv("keychain_delete", { key: `team_vault_key_${t.id}` }).catch(logFailure(`legacy team key migration team=${t.id}`))),
@@ -642,12 +647,22 @@ export async function syncNow(forcePush = false): Promise<void> {
   }
 }
 
+const noSecrets = (): SecretMaps => ({ secrets: {}, secret_clocks: {} });
+
+async function readDeviceSecrets(): Promise<SecretMaps> {
+  const ids = new Set(deviceScopedSecretIds());
+  if (ids.size === 0) return noSecrets();
+  const local = await invoke<BlobPayload>("state_export_raw");
+  return filterSecrets(local, (id) => id != null && ids.has(id));
+}
+
 /**
  * Sign-in sync for EXISTING cloud accounts.
  *
  * Unlike syncOnLogin (which merges local + remote), this function starts from
  * an empty accumulator and merges ONLY remote device blobs together.
- * Local disk state is NEVER read — guaranteed no local contamination.
+ * Local disk state is NEVER read — guaranteed no local contamination — except
+ * the device-scoped secrets, which no account blob carries.
  *
  * Use this when switching from any local account into an existing cloud account.
  * For new cloud accounts (linkToCloud), use syncOnLogin instead.
@@ -670,8 +685,7 @@ export async function syncOnLoginReplace(): Promise<void> {
     // Accumulate remote state starting from empty — local disk never touched
     let merged: MergedPayload = {
       files: Object.fromEntries(ENTITY_FILES.map((f) => [f, "[]"])),
-      secrets: {},
-      secret_clocks: {},
+      ...(await readDeviceSecrets()),
     };
 
     await forEachRemoteBlob(devices, deviceLabel, async (device) => {

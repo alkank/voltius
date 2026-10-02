@@ -27,7 +27,7 @@ vi.mock("react-i18next", () => ({
 vi.mock("@iconify/react", () => ({ Icon: () => null }));
 
 vi.mock("@/stores/folderStore", () => ({
-  useFolderStore: () => ({ folders: h.folders, loadFolders: h.loadFolders, saveFolder: h.saveFolder }),
+  useFolderStore: () => ({ folders: h.folders, teamFolders: {}, loadFolders: h.loadFolders, saveFolder: h.saveFolder }),
 }));
 vi.mock("@/stores/keyStore", () => ({
   useKeyStore: (sel?: (s: unknown) => unknown) => {
@@ -138,6 +138,9 @@ vi.mock("./KeyFileDropZone", () => ({ KeyFileDropZone: () => <div data-dropzone 
 
 const { KeyForm } = await import("./KeyForm");
 const { IdentityForm } = await import("./IdentityForm");
+const { useTeamObjectAccessStore } = await import("@/stores/teamObjectAccessStore");
+const { PERM_BITS } = await import("@/services/permissions");
+const { RuleSetMoveCancelled } = await import("@/services/teamObjectPersistence");
 
 beforeEach(() => {
   h.folders = [
@@ -166,14 +169,14 @@ function renderKey(props: Partial<Parameters<typeof KeyForm>[0]> = {}) {
   const onSubmit = vi.fn();
   const flushRef = { current: null as (() => void) | null };
   const isDirtyRef = { current: false };
-  render(<KeyForm onSubmit={onSubmit} onClose={vi.fn()} flushRef={flushRef} isDirtyRef={isDirtyRef} canEdit {...props} />);
+  render(<KeyForm onSubmit={onSubmit} onClose={vi.fn()} flushRef={flushRef} isDirtyRef={isDirtyRef} {...props} />);
   return { onSubmit, flushRef, isDirtyRef };
 }
 function renderIdentity(props: Partial<Parameters<typeof IdentityForm>[0]> = {}) {
   const onSubmit = vi.fn();
   const flushRef = { current: null as (() => void) | null };
   const isDirtyRef = { current: false };
-  render(<IdentityForm onSubmit={onSubmit} onClose={vi.fn()} flushRef={flushRef} isDirtyRef={isDirtyRef} canEdit {...props} />);
+  render(<IdentityForm onSubmit={onSubmit} onClose={vi.fn()} flushRef={flushRef} isDirtyRef={isDirtyRef} {...props} />);
   return { onSubmit, flushRef, isDirtyRef };
 }
 
@@ -246,6 +249,19 @@ test.each([
   expect(isDirtyRef.current).toBe(false);
   fireEvent.click(document.querySelector("[data-tag-selector]")!);
   expect(isDirtyRef.current).toBe(true);
+});
+
+test.each([
+  ["key", () => renderKey({ initial: key(), onSubmit: vi.fn(async () => { throw new RuleSetMoveCancelled(); }) })],
+  ["identity", () => renderIdentity({ initial: identity(), onSubmit: vi.fn(async () => { throw new RuleSetMoveCancelled(); }) })],
+])("%s form puts the saved folder back when the move is cancelled", async (_kind, mount) => {
+  const { flushRef } = mount();
+  fireEvent.click(document.querySelector("[data-folder-pick]")!);
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("f1");
+  await act(async () => {
+    flushRef.current!();
+  });
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("");
 });
 
 test("the key form submits the typed material with a generated default name", async () => {
@@ -427,4 +443,24 @@ test("the identity username field opts out of OS capitalisation and autocorrect"
   expect(username.getAttribute("autocapitalize")).toBe("off");
   expect(username.getAttribute("autocorrect")).toBe("off");
   expect(username.getAttribute("spellcheck")).toBe("false");
+});
+
+test("the key form hides its key material without View secrets and still saves a rename", async () => {
+  h.teams = [{ id: "team-1" }];
+  h.secrets["key:k1:private"] = "-----BEGIN OPENSSH PRIVATE KEY-----\nx";
+  useTeamObjectAccessStore.getState().replaceTeam("team-1", {
+    k1: { type: "key", ruleSetId: "s1", myPermissions: PERM_BITS.VIEW | PERM_BITS.EDIT_KEYS, parentId: null, deleted: false },
+  }, true);
+  const { onSubmit, flushRef } = renderKey({ initial: key({ vault_id: "team-1" }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(document.querySelector("textarea")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+
+  fireEvent.change(screen.getByDisplayValue("Key"), { target: { value: "Renamed" } });
+  await act(async () => {
+    flushRef.current!();
+  });
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ name: "Renamed" });
+  expect(onSubmit.mock.calls[0][1]).toBeNull();
+  useTeamObjectAccessStore.getState().clearAll();
 });

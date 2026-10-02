@@ -1,10 +1,9 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, type RefAttributes, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import type { ConnectionFormData, AuthType, JumpHost, EnvVar, ProxyOverride } from "@/types";
 import { KEEPALIVE_PRESETS, type KeepalivePreset } from "@/utils/keepalive";
 import { useIdentityStore } from "@/stores/identityStore";
-import { useTeamStore } from "@/stores/teamStore";
 import { useKeyStore } from "@/stores/keyStore";
 import JumpHostsPanel from "./JumpHostsPanel";
 import EnvVarsPanel from "./EnvVarsPanel";
@@ -27,6 +26,8 @@ import { PinButton } from "@/components/shared/PinButton";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { buildConnectionMenuItems } from "@/utils/connectionMenuItems";
 import { useCanConnect } from "@/hooks/useCanConnect";
+import { useConnectAsMenuItem } from "@/hooks/useConnectAsMenuItem";
+import { NO_CONNECTION, useCredentialPlan } from "@/hooks/useCredentialPlan";
 import { VaultPicker } from "@/components/shared/VaultPicker";
 import { Toggle } from "@/components/shared/Toggle";
 import { FormSelect } from "@/components/shared/FormSelect";
@@ -34,10 +35,11 @@ import { useToggle } from "@/stores/toggleSettingsStore";
 import { HOST_PROXY_MODES, useGlobalKeepalivePreset, useGlobalProxy } from "@/stores/connectivitySettingsStore";
 import { proxyPasswordKey } from "@/services/teamVaultSecretKeys";
 import ProxyFields from "./ProxyFields";
-import { selectVaultScopedItems } from "@/utils/vaultScopedItems";
+import { useVaultScopedItems } from "@/hooks/useVaultScopedItems";
 import { getConnectionIcon, getConnectionIconColor, getConnectionIconLabel, glossyTileStyle, normalizeDistro } from "@/utils/icons";
 import { DistroIconPicker } from "./DistroIconPicker";
 import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 import {
   PanelShell,
   PanelHeader,
@@ -48,6 +50,7 @@ import {
   formLabelStyle,
   formIdentifierProps,
 } from "@/components/shared/Panel";
+import { YouConnectAsRow } from "./YouConnectAsRow";
 import { SecretInput, TagsAndFolderFields } from "@/components/shared/vaultObjectForm";
 import { normalizeNotes } from "@/components/notes/notesText";
 import {
@@ -69,7 +72,7 @@ type Props = ConnectionFormProps & {
   hideChrome?: boolean;
 };
 
-const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function ConnectionForm({ initial, onSubmit, onClose, onDuplicate, onConnect, onDelete, vaults, canEdit, hideChrome, onMoveToVault, onCopyToVault }, ref) {
+const ConnectionFormEditor = forwardRef<ConnectionFormHandle, Props & EditAccessProps>(function ConnectionFormEditor({ initial, onSubmit, onClose, onDuplicate, onConnect, onDelete, vaults, hideChrome, onMoveToVault, onCopyToVault, readOnly }, ref) {
   const { t } = useTranslation();
   const [name, setName] = useState(initial?.name ?? "");
   const [host, setHost] = useState(initial?.host ?? "");
@@ -86,7 +89,6 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [identityId, setIdentityId] = useState<string | null>(initial?.identity_id ?? null);
   const [keyId, setKeyId] = useState<string | null>(initial?.key_id ?? null);
-  const [folderId, setFolderId] = useState<string | null>(initial?.folder_id ?? null);
   const [jumpHosts, setJumpHosts] = useState<JumpHost[]>(initial?.jump_hosts ?? []);
   const [showChaining, setShowChaining] = useState(false);
   const [envVars, setEnvVars] = useState<EnvVar[]>(initial?.env_vars ?? []);
@@ -118,7 +120,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
   const hasAdvanced = !!(initial?.jump_hosts?.length || initial?.env_vars?.length || initial?.pre_command || initial?.post_command || initial?.pre_snippet_id || initial?.post_snippet_id || initial?.terminal_encoding || initial?.agent_forwarding || initial?.legacy_algorithms || initial?.ping_disabled || initial?.shell_integration !== undefined || initial?.keepalive_preset || initial?.persist_session !== undefined || initial?.proxy);
   const [showAdvanced, setShowAdvanced] = useState(hasAdvanced);
   const shell = useConnectionFormShell(initial);
-  const { vaultId, pickVault, isPinned, togglePin } = shell;
+  const { vaultId, pickVault, folderId, keepSavedOnCancel, isPinned, togglePin } = shell;
   const userEditedRef = useRef(false);
   const prevVaultIdRef = useRef(vaultId);
   const passwordDirty = useRef(false);
@@ -131,26 +133,8 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
 
   const { identities, teamIdentities, loadIdentities } = useIdentityStore();
   const { keys, teamKeys, loadKeys } = useKeyStore();
-  const teams = useTeamStore((s) => s.teams);
-  const teamVaultIds = useMemo(() => new Set(teams.map((team) => team.id)), [teams]);
-  const relevantIdentities = useMemo(() => {
-    return selectVaultScopedItems({
-      vaultId,
-      localItems: identities,
-      teamItems: teamIdentities,
-      teamVaultIds,
-      resolveVaultId: resolveVaultIdForSave,
-    });
-  }, [vaultId, identities, teamIdentities, teamVaultIds]);
-  const relevantKeys = useMemo(() => {
-    return selectVaultScopedItems({
-      vaultId,
-      localItems: keys,
-      teamItems: teamKeys,
-      teamVaultIds,
-      resolveVaultId: resolveVaultIdForSave,
-    });
-  }, [vaultId, keys, teamKeys, teamVaultIds]);
+  const relevantIdentities = useVaultScopedItems(vaultId, identities, teamIdentities);
+  const relevantKeys = useVaultScopedItems(vaultId, keys, teamKeys);
   useEffect(() => {
     if (prevVaultIdRef.current !== vaultId) {
       prevVaultIdRef.current = vaultId;
@@ -185,6 +169,8 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
       if (v.passphrase && !passphraseDirty.current) setPassphrase(v.passphrase);
     },
   );
+
+  const secretsHidden = storedSecrets === "forbidden";
 
   const initialId = initial?.id;
   const initialProxyHasPassword = isCustomProxyMode(initial?.proxy?.mode);
@@ -267,8 +253,9 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
   };
 
   const { schedule, markDirty: _markDirty, flushAndClose, flush, saveState } = useAutosave({
-    onSave: () => { const { data, secrets } = buildSubmit(); return onSubmit(data, secrets) ?? undefined; },
+    onSave: () => { const { data, secrets } = buildSubmit(); return keepSavedOnCancel(onSubmit(data, secrets)); },
     canSave: () => !!host.trim() && (port === "" || (port >= 1 && port <= 65535)),
+    readOnly,
   });
   const markDirty = useCallback(() => { userEditedRef.current = true; _markDirty(); }, [_markDirty]);
 
@@ -393,14 +380,18 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
   }, [applyDetectedDistro, host, identityId, keyId, initial, legacyAlgorithms, passphrase, password, port, privateKey, proxyOverride, proxyPassword, selectedIdentity, username]);
 
   const canConnect = useCanConnect({ id: initial?.id ?? "", vault_id: initial?.vault_id ?? "" });
+  const credential = useCredentialPlan(initial ?? NO_CONNECTION);
+  const isTeamHost = !!initial && !!credential.teamId;
+  const connectAs = useConnectAsMenuItem(initial, credential, () => onConnect?.());
   const panelItems = initial ? buildConnectionMenuItems({
     t,
-    canEdit,
+    canEdit: !readOnly,
     contributions,
     vaults,
     isSynced,
     pingDisabled,
     onConnect: canConnect ? () => onConnect?.() : undefined,
+    connectAs,
     onDuplicate: () => onDuplicate?.(),
     onMoveToVault,
     onCopyToVault,
@@ -416,7 +407,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
         <PanelHeader
           icon={initial ? "lucide:pencil" : "lucide:plus"}
           title={initial ? t("connections.form.titleEdit") : t("connections.form.titleNew")}
-          subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} />}
+          subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} disabled={readOnly} />}
           onClose={handleClose}
           saveState={initial ? saveState : undefined}
           actions={initial ? (
@@ -433,6 +424,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
 
           <StoredSecretsNote state={storedSecrets} />
 
+          <ReadOnlyFields readOnly={readOnly} className="space-y-3">
           <FormSection label={t("connections.common.general")}>
             <div>
               <label className={formLabelClass} style={formLabelStyle}>{t("connections.common.labelField")}</label>
@@ -473,8 +465,6 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
               folderType="connection"
               tags={tags}
               onChangeTags={setTags}
-              folderId={folderId}
-              onChangeFolderId={setFolderId}
               markDirty={markDirty}
             />
           </FormSection>
@@ -587,7 +577,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
                   password={proxyPassword}
                   passwordSaved={proxyPasswordSaved}
                   onPasswordChange={(pw) => { markDirty(); proxyPasswordDirty.current = true; setProxyPassword(pw); }}
-                  disabled={!!initial && !canEdit}
+                  disabled={readOnly}
                   className="pb-1"
                   renderRow={(select) => (
                     <SettingRow icon="lucide:globe" label={t("connections.form.proxy.label")}>{select}</SettingRow>
@@ -609,7 +599,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
           <FormSection label={isFtp ? t("connections.form.sectionCredentials") : t("connections.form.sectionIdentity")}>
             {!isFtp && (
             <div>
-              <label className={formLabelClass} style={formLabelStyle}>{t("connections.form.keychainIdentity")}</label>
+              <label className={formLabelClass} style={formLabelStyle}>{t("connections.form.keychainIdentity")}{isTeamHost && <span className="font-normal text-(--t-text-dim)"> · {t("connections.form.sharedWithTeam")}</span>}</label>
               <IdentitySelector
                 value={identityId}
                 identities={relevantIdentities}
@@ -635,6 +625,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
                   />
                 </div>
 
+                {!secretsHidden && (
                 <div>
                   <label className={formLabelClass} style={formLabelStyle}>{t("connections.common.password")}</label>
                   <SecretInput
@@ -645,6 +636,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
                     onToggleShow={handleTogglePassword}
                   />
                 </div>
+                )}
 
                 {isFtp && (
                   <SettingRow icon="lucide:shield" label={t("connections.form.ftpsToggle")}>
@@ -666,7 +658,7 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
                     onChange={(id) => { markDirty(); setKeyId(id); if (id) { privateKeyDirty.current = false; setPrivateKey(""); } }}
                     onGoToKeychain={() => setActiveNav("keychain")}
                   />
-                  {!keyId && (
+                  {!keyId && !secretsHidden && (
                     <>
                       <textarea
                         className={`${formInputClass} font-mono text-xs h-28 resize-none mt-2`}
@@ -723,9 +715,12 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
                 </div>
               </div>
             )}
-          </FormSection>
 
-          <NotesSection value={notes} onChange={(v) => { markDirty(); setNotes(v); }} readOnly={!canEdit} />
+            {initial && !isFtp && <YouConnectAsRow connection={initial} credential={credential} />}
+          </FormSection>
+          </ReadOnlyFields>
+
+          <NotesSection value={notes} onChange={(v) => { markDirty(); setNotes(v); }} readOnly={readOnly} />
           {initial && <PermissionsSection objectId={initial.id} vaultId={initial.vault_id} type="connection" />}
         </div>
       </div>
@@ -757,6 +752,8 @@ const ConnectionForm = forwardRef<ConnectionFormHandle, Props>(function Connecti
     </div>
   );
 });
+
+const ConnectionForm = withEditAccess("connection", (p: Props & RefAttributes<ConnectionFormHandle>) => p.initial, ConnectionFormEditor);
 
 export default ConnectionForm;
 export type { ConnectionFormHandle };

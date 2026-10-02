@@ -1,6 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
+import { featureDisabledError } from "@/services/featureDisabled";
 import i18n from "@/i18n";
-import { setVaultKey, getVaultKey, verifyVaultKey, lockVault, getVaultStatus, unlockVaultIfNeeded, wipeLocalConfig } from "./vault";
+import { setVaultKey, getVaultKey, verifyVaultKey, lockVault, getVaultStatus, unlockVaultIfNeeded, wipeLocalConfig, readLocalSecrets } from "./vault";
+import { deviceScopedSecretKeys } from "./deviceScopedSecrets";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
 import { useVaultKeysStore } from "@/stores/vaultKeysStore";
 import { appFetch, isAbortError } from "@/services/http";
@@ -80,7 +82,7 @@ async function registerOnServer(args: {
   });
 
   if (res.status === 409) throw new Error(i18n.t("common.error.emailAlreadyRegistered"));
-  if (!res.ok) throw new Error(i18n.t("common.error.registrationFailed", { status: res.status }));
+  if (!res.ok) throw (await featureDisabledError(res)) ?? new Error(i18n.t("common.error.registrationFailed", { status: res.status }));
   return res.json();
 }
 
@@ -641,6 +643,8 @@ export async function signInToCloud(
 ): Promise<void> {
   serverUrl = normalizeServerUrl(serverUrl);
   const { accountId, kek, data } = await signInServerAccount(email, password, serverUrl);
+  // Read with the outgoing key, before setVaultKey swaps it.
+  const carried = await readLocalSecrets(deviceScopedSecretKeys());
 
   let vaultKey = kek;
   if (data.wrapped_user_secrets) {
@@ -662,7 +666,7 @@ export async function signInToCloud(
   // key cannot open it and secrets_unlock would fail with "wrong key or corrupted file").
   // config_wipe also clears the JSON entity files; clearLocalEntityState will repopulate
   // them with empty arrays so syncOnLogin starts from a clean slate.
-  await wipeLocalConfig();
+  await wipeLocalConfig(carried);
 }
 
 /** Sign in to, or register, another cloud account without touching the active session. */

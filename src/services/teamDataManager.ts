@@ -13,6 +13,7 @@ import { useMobileNavStore } from "@/stores/mobileNavStore";
 import { firstViewNav, mobileFirstViewTarget, selectedTeamId } from "@/services/teamVaultFirstAccess";
 import { isMobileShell } from "@/utils/platform";
 import { effectivePermissions } from "@/services/permissions";
+import { isBusinessLocked } from "@/stores/subscriptionTier";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useIdentityStore } from "@/stores/identityStore";
 import { useKeyStore } from "@/stores/keyStore";
@@ -21,6 +22,7 @@ import { useSnippetStore } from "@/stores/snippetStore";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { useTeamObjectAccessStore } from "@/stores/teamObjectAccessStore";
 import { useHistoryStore } from "@/stores/historyStore";
+import { useIdentityPickStore } from "@/stores/identityPickStore";
 import { fetchTeamData, clearTeamKeyCache, reconcileTeamVaultKeys, drainPendingSecretWipes } from "@/services/teamVaultSync";
 import { checkAndRotateTeamKey } from "@/services/teamKeyRotation";
 import { teamSecretCache } from "@/services/teamSecretCache";
@@ -41,8 +43,9 @@ export async function onTeamLogin(): Promise<void> {
   await drainPendingSecretWipes().catch(logFailure("pending secret wipe drain"));
 
   const teamIds = useTeamStore.getState().teams.map((t) => t.id);
-  await Promise.allSettled(
-    teamIds.map(async (teamId) => {
+  await Promise.allSettled([
+    ...(teamIds.length > 0 ? [useIdentityPickStore.getState().load()] : []),
+    ...teamIds.map(async (teamId) => {
       await fetchTeamData(teamId);
       // A key-holder redistributes to any member who joined while it was
       // offline — self-heals the async invite-acceptance lockout (issue #41).
@@ -54,7 +57,27 @@ export async function onTeamLogin(): Promise<void> {
       // unrelated membership event happened to fire (#217).
       await checkAndRotateTeamKey(teamId).catch(logFailure(`onTeamLogin: checkAndRotateTeamKey team=${teamId}`));
     }),
-  );
+  ]);
+}
+
+export function startIdentityPickRefresh(): () => void {
+  const refresh = () => {
+    if (useTeamStore.getState().teams.length === 0) return;
+    useIdentityPickStore.getState().load().catch(logFailure("identity picks refresh"));
+  };
+  const teamIds = () => new Set(useTeamStore.getState().teams.map((t) => t.id));
+  let known = teamIds();
+  const unsubscribe = useTeamStore.subscribe(() => {
+    const current = teamIds();
+    const gained = [...current].some((id) => !known.has(id));
+    known = current;
+    if (gained && useIdentityPickStore.getState().status !== "loaded") refresh();
+  });
+  window.addEventListener("focus", refresh);
+  return () => {
+    window.removeEventListener("focus", refresh);
+    unsubscribe();
+  };
 }
 
 /**
@@ -113,7 +136,7 @@ function applyFirstViewNav(teamId: string): void {
   const team = teams.find((t) => t.id === teamId);
   const roles = rolesByTeam[teamId];
   if (!team || !roles || roles.length === 0) return;
-  const nav = firstViewNav(effectivePermissions(team, roles));
+  const nav = firstViewNav(effectivePermissions(team, roles, isBusinessLocked(team)));
   if (isMobileShell()) {
     const { tab, screen } = mobileFirstViewTarget(nav);
     useMobileNavStore.getState().setTab(tab);

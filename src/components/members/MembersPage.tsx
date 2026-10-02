@@ -9,7 +9,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
 import { useHistoryStore } from "@/stores/historyStore";
 import { avatarColor } from "@/components/shared/AvatarStack";
-import { getMyUserId } from "@/services/teamService";
+import { useMyUserId } from "@/hooks/useMyUserId";
 import { getMyHandle } from "@/services/account";
 import type { ContextMenuItem } from "@/components/shared/ContextMenu";
 import { SidePanelLayout } from "@/components/shared/SidePanelLayout";
@@ -18,6 +18,7 @@ import { PanelShell, PanelHeader } from "@/components/shared/Panel";
 import { useDragSelection } from "@/hooks/useDragSelection";
 import { useListKeyNav } from "@/hooks/useListKeyNav";
 import { effectivePermissions, hasBuiltinRole, PERM_BITS } from "@/hooks/usePermission";
+import { useBusinessLock } from "@/hooks/useBusinessLock";
 import { runTeamAction } from "@/services/teamActionFeedback";
 import { TeamRolesPanel } from "@/components/members/panels/RolesPanel";
 import { guestCapFor, inviteSessionOf, memberHasAccess, seatUsage, sessionDisplayName } from "@/services/teamSharing";
@@ -58,7 +59,7 @@ export default function MembersPage() {
   const clearMembersRolesPending = useUIStore((s) => s.clearMembersRolesPending);
   const openCloudAuth = useUIStore((s) => s.openCloudAuth);
 
-  const [myUserId, setMyUserId] = useState("");
+  const myUserId = useMyUserId();
   const [myHandle, setMyHandle] = useState<string | null>(null);
   const [primaryVaultId, setPrimaryVaultId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -87,7 +88,6 @@ export default function MembersPage() {
   const [detailMemberId, setDetailMemberId] = useState<string | null>(null);
 
   useEffect(() => {
-    getMyUserId().then((id) => { if (id) setMyUserId(id); }).catch(() => {});
     // getMyHandle() resolves to "" (never rejects) on a keychain miss with no
     // server to fall back to, so this always settles the loading skeleton.
     getMyHandle().then(setMyHandle).catch(() => setMyHandle(""));
@@ -111,10 +111,11 @@ export default function MembersPage() {
 
   const members = useMemo(() => (teamId ? (membersByTeam[teamId] ?? []) : []), [teamId, membersByTeam]);
   const teamRoles = useMemo(() => (teamId ? (rolesByTeam[teamId] ?? []) : []), [teamId, rolesByTeam]);
+  const { locked: businessLocked } = useBusinessLock(teamId);
   const myMember = members.find((m) => m.user_id === myUserId);
 
   // Compute effective permissions from role bits
-  const myEffectivePerms = myMember ? effectivePermissions(myMember, teamRoles) : 0;
+  const myEffectivePerms = myMember ? effectivePermissions(myMember, teamRoles, businessLocked) : 0;
   const canManageMembers = (myEffectivePerms & PERM_BITS.MANAGE_MEMBERS) !== 0;
   const canManageRoles = (myEffectivePerms & PERM_BITS.MANAGE_ROLES) !== 0;
   const canInvite = (myEffectivePerms & PERM_BITS.INVITE_MEMBERS) !== 0;
@@ -217,7 +218,7 @@ export default function MembersPage() {
         .filter((r) => !(r.is_builtin && r.name === "owner"))
         .sort((a, b) => a.position - b.position);
       const assignedRoles = sortedRoles.filter((r) => member.role_ids.includes(r.id));
-      const unassignedRoles = sortedRoles.filter((r) => !member.role_ids.includes(r.id));
+      const unassignedRoles = sortedRoles.filter((r) => !member.role_ids.includes(r.id) && !(businessLocked && !r.is_builtin));
 
       const assignedItems: ContextMenuItem[] = assignedRoles.map((r) => ({
         label: roleLabel(t, r.name),
@@ -239,14 +240,19 @@ export default function MembersPage() {
         icon: "lucide:square",
         divider: i === 0 && assignedItems.length > 0,
         onClick: () => {
-          void assignMemberRole(teamId!, member.user_id, r.id).then(() => {
+          const name = roleLabel(t, r.name);
+          void runTeamAction({
+            pending: t("members.toast.assigningRoleTo", { role: name, name: member.handle }),
+            success: t("members.toast.roleAssignedTo", { role: name, name: member.handle }),
+            run: () => assignMemberRole(teamId!, member.user_id, r.id),
+          }).then(() => {
             push({
               label: t("members.history.assignRole", { name: member.handle }),
               undo: async () => { await removeMemberRole(teamId!, member.user_id, r.id); reload(); },
               redo: async () => { await assignMemberRole(teamId!, member.user_id, r.id); reload(); },
             });
             reload();
-          });
+          }).catch(() => { /* toast already reports the failure */ });
         },
       }));
 
@@ -316,13 +322,20 @@ export default function MembersPage() {
       items.push({
         label: t("members.contextMenu.assignRoleBulk", { count: selectedMembers.length }),
         icon: "lucide:shield",
-        children: sortedBulkRoles.map((r) => ({
+        children: sortedBulkRoles
+          .filter((r) => !(businessLocked && !r.is_builtin && !selectedMembers.every((m) => m.role_ids.includes(r.id))))
+          .map((r) => ({
           label: roleLabel(t, r.name),
           onClick: () => {
             const prevRoleIds = selectedMembers.map((m) => ({ userId: m.user_id, roleIds: [...m.role_ids] }));
-            void Promise.all(selectedMembers.map((m) => assignMemberRole(teamId!, m.user_id, r.id))).then(() => {
+            const label = t("members.history.assignRoleBulk", { count: selectedMembers.length });
+            void runTeamAction({
+              pending: label,
+              success: label,
+              run: () => Promise.all(selectedMembers.map((m) => assignMemberRole(teamId!, m.user_id, r.id))),
+            }).then(() => {
               push({
-                label: t("members.history.assignRoleBulk", { count: selectedMembers.length }),
+                label,
                 undo: async () => {
                   await Promise.all(prevRoleIds.map(({ userId }) => removeMemberRole(teamId!, userId, r.id)));
                   reload();
@@ -333,7 +346,7 @@ export default function MembersPage() {
                 },
               });
               reload();
-            });
+            }).catch(() => { /* toast already reports the failure */ });
           },
         })),
       });
@@ -383,7 +396,7 @@ export default function MembersPage() {
 
     return items.length > 0 ? items : undefined;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIdSet, sortedMembers, myUserId, canManageMembers, teamRoles, teamId, t]);
+  }, [selectedIdSet, sortedMembers, myUserId, canManageMembers, teamRoles, teamId, t, businessLocked]);
 
 const vaultTabs = selectedVaultIds.length > 1
     ? selectedVaultIds.map((vid) => {

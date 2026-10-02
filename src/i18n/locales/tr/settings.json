@@ -376,7 +376,7 @@
           "teamVaults": "Paylaşılan ekip kasaları",
           "teamSharing": "Ekip paylaşımı (5 oturum · 10 konuk)",
           "seats": "Lisanslar (satın alınan kadar)",
-          "customRoles": "Özel roller"
+          "granularPermissions": "Özel roller, üye ve nesne bazlı izinler"
         }
       },
       "buySeats": {
@@ -509,9 +509,11 @@
         "deleteVault": {
           "title": "Kasayı sil",
           "confirmDesc": "Bu kasayı ve içindeki {{count}} öğeyi kalıcı olarak siler. Bu işlem geri alınamaz.",
+          "confirmDescTeam": "Bu kasayı ve içindeki {{count}} öğeyi tüm üyeler için kalıcı olarak siler. Bu işlem geri alınamaz.",
           "confirmBtn": "Silmeyi onayla",
           "deleting": "Siliniyor…",
-          "failedToast": "Bu kasa tamamen silinemedi — hâlâ burada ancak bazı öğeleri silinmiş olabilir. {{reason}}"
+          "failedToast": "Bu kasa tamamen silinemedi — hâlâ burada ancak bazı öğeleri silinmiş olabilir. {{reason}}",
+          "teamFailedToast": "Bu kasa silinemedi — hiçbir şey silinmedi. {{reason}}"
         },
         "madePrivateToast_one": "Kasa artık özel. {{count}} üyenin erişimi kaldırıldı.",
         "madePrivateToast_other": "Kasa artık özel. {{count}} üyenin erişimi kaldırıldı.",
@@ -567,9 +569,6 @@
         "builtinRoles": "Yerleşik roller",
         "customRoles": "Özel roller",
         "newRoleBtn": "Yeni rol",
-        "businessFeature": "Business planı özelliği",
-        "businessFeatureDesc": "Ayrıntılı izinlere sahip özel roller Business planında kullanılabilir.",
-        "upgradeBtn": "Business'a yükselt",
         "noCustomRolesCanEdit": "Henüz özel rol yok. Belirli izinler atamak için bir rol oluşturun.",
         "noCustomRoles": "Bu ekip için özel rol tanımlanmamış."
       }
@@ -656,7 +655,7 @@
       },
       "autoDownload": {
         "title": "Güncellemeleri otomatik indir",
-        "desc": "Yeni sürümleri arka planda denetleyip indirir"
+        "desc": "Yeni sürümleri arka planda indirir. Voltius her durumda güncellemeleri denetler."
       },
       "whatsNew": {
         "title": "Güncellemelerden sonra yenilikleri göster",
@@ -840,15 +839,6 @@
       },
       "changelogPopup": {
         "label": "Güncellemelerden Sonra Yenilikleri Göster"
-      },
-      "category": {
-        "appearance": "Görünüm",
-        "portForwarding": "Port Yönlendirme",
-        "sftp": "SFTP",
-        "hosts": "Sunucular",
-        "updates": "Güncellemeler",
-        "plugins": "Eklentiler",
-        "integrations": "Entegrasyonlar"
       },
       "pluginInstallReview": {
         "label": "Eklentileri kurmadan önce izinleri incele"

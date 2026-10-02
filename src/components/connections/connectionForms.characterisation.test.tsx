@@ -21,6 +21,7 @@ function conn(over: Partial<Connection> = {}): Connection {
 
 const h = vi.hoisted(() => ({
   folders: [] as unknown[],
+  teamFolders: {} as Record<string, unknown[]>,
   saveFolder: vi.fn(async (input: unknown) => ({ id: "f-new", ...(input as object) })),
   loadFolders: vi.fn(async () => {}),
   pinConnection: vi.fn(async (_id: string, _pinned: boolean) => {}),
@@ -33,6 +34,12 @@ const h = vi.hoisted(() => ({
   defaultVaultId: "personal",
 }));
 
+// A team connection the caller holds no role in, so the forms open it read-only.
+function lockedConn(over: Partial<Connection> = {}): Connection {
+  h.teams = [{ id: "team-1" }];
+  return conn({ vault_id: "team-1", ...over });
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (k: string) => k }),
   initReactI18next: { type: "3rdParty", init: () => {} },
@@ -42,10 +49,10 @@ vi.mock("@iconify/react", () => ({ Icon: () => null }));
 vi.mock("@/stores/folderStore", () => ({
   useFolderStore: Object.assign(
     (sel?: (s: unknown) => unknown) => {
-      const state = { folders: h.folders, loadFolders: h.loadFolders, saveFolder: h.saveFolder };
+      const state = { folders: h.folders, teamFolders: h.teamFolders, loadFolders: h.loadFolders, saveFolder: h.saveFolder };
       return sel ? sel(state) : state;
     },
-    { getState: () => ({ folders: h.folders, loadFolders: h.loadFolders, saveFolder: h.saveFolder }) },
+    { getState: () => ({ folders: h.folders, teamFolders: h.teamFolders, loadFolders: h.loadFolders, saveFolder: h.saveFolder }) },
   ),
 }));
 vi.mock("@/stores/connectionStore", () => ({
@@ -53,6 +60,7 @@ vi.mock("@/stores/connectionStore", () => ({
     const state = { pinConnection: h.pinConnection, setDistro: h.setDistro };
     return sel ? sel(state) : state;
   },
+  findAnyConnection: () => undefined,
 }));
 vi.mock("@/stores/teamStore", () => ({
   // The forms resolve VIEW_SECRETS through `usePermissions`, which reads the
@@ -86,6 +94,7 @@ vi.mock("@/stores/uiStore", () => ({
     const state = { setActiveNav: vi.fn() };
     return sel ? sel(state) : state;
   },
+  findAnyConnection: () => undefined,
 }));
 vi.mock("@/stores/toggleSettingsStore", () => ({ useToggle: () => [false, vi.fn()] }));
 vi.mock("@/stores/connectivitySettingsStore", () => ({
@@ -95,6 +104,8 @@ vi.mock("@/stores/connectivitySettingsStore", () => ({
 }));
 vi.mock("@/stores/hostCommandVarsStore", () => ({ clearRememberedVars: vi.fn() }));
 vi.mock("@/hooks/useUIContributions", () => ({ useUIContributions: () => [] }));
+vi.mock("@/hooks/useConnectAsMenuItem", () => ({ useConnectAsMenuItem: () => undefined }));
+vi.mock("@/hooks/useCredentialPlan", () => ({ useCredentialPlan: () => ({ plan: { kind: "host" } }), NO_CONNECTION: {} }));
 vi.mock("@/hooks/useEffectivePinned", () => ({
   useEffectivePinned: () => h.effectivePinned,
   useEffectivePinSource: () => h.pinSource,
@@ -185,7 +196,10 @@ vi.mock("./JumpHostsPanel", () => ({ default: () => null }));
 vi.mock("./EnvVarsPanel", () => ({ default: () => null }));
 
 const { default: ConnectionForm } = await import("./ConnectionForm");
+const { useTeamObjectAccessStore } = await import("@/stores/teamObjectAccessStore");
+const { PERM_BITS } = await import("@/services/permissions");
 const { default: SerialConnectionForm } = await import("./SerialConnectionForm");
+const { RuleSetMoveCancelled } = await import("@/services/teamObjectPersistence");
 type FormHandle = { flush: () => void; isDirty: () => boolean };
 
 globalThis.ResizeObserver ??= class {
@@ -200,6 +214,12 @@ beforeEach(() => {
     { id: "f1", name: "One", object_type: "connection", vault_id: "personal" },
     { id: "s1", name: "Snip", object_type: "snippet", vault_id: "personal" },
   ];
+  h.teamFolders = {
+    "team-1": [
+      { id: "t1", name: "Prod", object_type: "connection", vault_id: "team-1" },
+      { id: "t2", name: "Staging", object_type: "connection", vault_id: "team-1" },
+    ],
+  };
   h.teams = [];
   h.effectivePinned = false;
   h.defaultVaultId = "personal";
@@ -214,7 +234,7 @@ function renderSsh(props: Partial<Parameters<typeof ConnectionForm>[0]> = {}) {
   const onSubmit = vi.fn();
   const ref = createRef<FormHandle>();
   render(
-    <ConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} canEdit {...props} />,
+    <ConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} {...props} />,
   );
   return { onSubmit, ref };
 }
@@ -222,7 +242,7 @@ function renderSerial(props: Partial<Parameters<typeof SerialConnectionForm>[0]>
   const onSubmit = vi.fn();
   const ref = createRef<FormHandle>();
   render(
-    <SerialConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} canEdit {...props} />,
+    <SerialConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} {...props} />,
   );
   return { onSubmit, ref };
 }
@@ -248,6 +268,29 @@ test.each([
   });
   expect(h.saveFolder).toHaveBeenCalledWith({ name: "made", object_type: "connection", vault_id: "personal" });
   expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("f-new");
+});
+
+test.each([
+  ["ssh", renderSsh],
+  ["serial", renderSerial],
+])("%s form lists the team vault's folders and keeps the object's team folder", (_kind, mount) => {
+  h.teams = [{ id: "team-1" }];
+  mount({ initial: conn({ vault_id: "team-1", folder_id: "t2" }) });
+  const selector = document.querySelector("[data-folder-selector]");
+  expect(selector?.getAttribute("data-count")).toBe("2");
+  expect(selector?.getAttribute("data-value")).toBe("t2");
+});
+
+test.each([
+  ["ssh", renderSsh],
+  ["serial", renderSerial],
+])("%s form clears the folder when the vault changes", (_kind, mount) => {
+  h.teams = [{ id: "team-1" }];
+  mount({ initial: conn({ folder_id: "f1" }) });
+  fireEvent.click(document.querySelector("[data-vault-picker]")!);
+  const selector = document.querySelector("[data-folder-selector]");
+  expect(selector?.getAttribute("data-value")).toBe("");
+  expect(selector?.getAttribute("data-count")).toBe("2");
 });
 
 // ── shared header: vault picker + pin ───────────────────────────────────────
@@ -335,7 +378,7 @@ test.each([
 });
 
 test("ssh form locks the proxy fields without edit permission", async () => {
-  renderSsh({ initial: conn({ proxy: { mode: "http", host: "p.example", port: 8080 } }), canEdit: false });
+  renderSsh({ initial: lockedConn({ proxy: { mode: "http", host: "p.example", port: 8080 } }) });
   await act(async () => { await Promise.resolve(); });
   expect((screen.getByLabelText("connections.form.proxy.host") as HTMLInputElement).disabled).toBe(true);
   expect((screen.getByRole("button", { name: "connections.form.proxy.label" }) as HTMLButtonElement).disabled).toBe(true);
@@ -414,8 +457,20 @@ test.each([
 });
 
 test.each([
-  ["ssh", (canEdit: boolean) => renderSsh({ initial: conn(), canEdit })],
-  ["serial", (canEdit: boolean) => renderSerial({ initial: conn({ connection_type: "serial", serial_port: "/dev/ttyS0" }) as Connection, canEdit })],
+  ["ssh", () => renderSsh({ initial: conn(), onSubmit: vi.fn(async () => { throw new RuleSetMoveCancelled(); }) })],
+  ["serial", () => renderSerial({ initial: conn({ connection_type: "serial", serial_port: "/dev/ttyS0" }) as Connection, onSubmit: vi.fn(async () => { throw new RuleSetMoveCancelled(); }) })],
+])("%s form puts the saved folder back when the move is cancelled", async (_kind, mount) => {
+  const { ref } = mount();
+  await act(async () => { await Promise.resolve(); });
+  fireEvent.click(document.querySelector("[data-folder-pick]")!);
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("f1");
+  await act(async () => { ref.current!.flush(); });
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("");
+});
+
+test.each([
+  ["ssh", (canEdit: boolean) => renderSsh({ initial: (canEdit ? conn : lockedConn)() })],
+  ["serial", (canEdit: boolean) => renderSerial({ initial: (canEdit ? conn : lockedConn)({ connection_type: "serial", serial_port: "/dev/ttyS0" }) })],
 ])("%s form renders notes read-only without edit permission", async (_kind, mount) => {
   mount(true);
   await act(async () => { await Promise.resolve(); });
@@ -448,4 +503,48 @@ test("the ssh username field opts out of OS capitalisation and autocorrect", () 
   expect(username.getAttribute("autocapitalize")).toBe("off");
   expect(username.getAttribute("autocorrect")).toBe("off");
   expect(username.getAttribute("spellcheck")).toBe("false");
+});
+
+function grantOnC1(permissions: number) {
+  useTeamObjectAccessStore.getState().replaceTeam("team-1", {
+    c1: { type: "connection", ruleSetId: "s1", myPermissions: permissions, parentId: null, deleted: false },
+  }, true);
+}
+
+test("ssh form locks its fields and drops unsaved input when edit access is revoked", async () => {
+  h.teams = [{ id: "team-1" }];
+  grantOnC1(PERM_BITS.VIEW | PERM_BITS.VIEW_SECRETS | PERM_BITS.EDIT_CONNECTIONS);
+  const { onSubmit } = renderSsh({ initial: conn({ vault_id: "team-1" }) });
+  const hostInput = () => screen.getByPlaceholderText("connections.form.hostPlaceholder") as HTMLInputElement;
+  expect(hostInput().matches(":disabled")).toBe(false);
+  fireEvent.change(hostInput(), { target: { value: "typed.example" } });
+
+  act(() => grantOnC1(PERM_BITS.VIEW | PERM_BITS.VIEW_SECRETS));
+
+  expect(hostInput().matches(":disabled")).toBe(true);
+  expect(hostInput().value).toBe("h.example");
+  await act(async () => { vi.advanceTimersByTime(5000); });
+  expect(onSubmit).not.toHaveBeenCalled();
+  useTeamObjectAccessStore.getState().clearAll();
+});
+
+test("ssh form hides its secret fields without View secrets, with no banner", async () => {
+  h.teams = [{ id: "team-1" }];
+  grantOnC1(PERM_BITS.VIEW | PERM_BITS.EDIT_CONNECTIONS);
+  renderSsh({ initial: conn({ vault_id: "team-1" }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.queryByText("connections.common.password")).toBeNull();
+  expect(screen.queryByPlaceholderText("-----BEGIN OPENSSH PRIVATE KEY-----\n...")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+
+  act(() => grantOnC1(PERM_BITS.VIEW | PERM_BITS.EDIT_CONNECTIONS | PERM_BITS.VIEW_SECRETS));
+  expect(screen.getByText("connections.common.password")).toBeTruthy();
+  useTeamObjectAccessStore.getState().clearAll();
+});
+
+test("a new ssh host keeps its secret fields in a vault whose secrets the caller cannot view", () => {
+  h.teams = [{ id: "team-1" }];
+  h.defaultVaultId = "team-1";
+  renderSsh();
+  expect(screen.getByText("connections.common.password")).toBeTruthy();
 });

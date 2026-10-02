@@ -32,6 +32,7 @@ import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
 import { useVaultStore } from "@/stores/vaultStore";
 import { useEffectivePinnedPredicate } from "@/hooks/useEffectivePinned";
 import { usePermissions } from "@/hooks/usePermission";
+import { useCloseWhenGone } from "@/hooks/useCloseWhenGone";
 import { useAccessibleVaultIds, useScopedVaultId } from "@/hooks/useAccessibleVaultIds";
 import { useDefaultVaultId } from "@/hooks/useWritableVaultIds";
 import { usePageClipboard } from "@/hooks/usePageClipboard";
@@ -71,7 +72,8 @@ import { FolderEjectZone } from "@/components/folders/FolderEjectZone";
 import { cloneFolderTree, copyFolderSubtree } from "@/utils/folderCopy";
 import { moveFolderTreeToVault } from "@/utils/folderMove";
 import { copyingRulesOf } from "@/services/ruleSetIntent";
-import { unlessMoveCancelled } from "@/services/teamObjectPersistence";
+import { passMoveCancelled, unlessMoveCancelled } from "@/services/teamObjectPersistence";
+import { describeError } from "@/services/backendErrors";
 
 
 export default function HostsPage() {
@@ -106,6 +108,7 @@ export default function HostsPage() {
   const isEditingSerial = editing?.connection_type === "serial";
   const [error, setError] = useState<string | null>(null);
   const reportError = unlessMoveCancelled(setError);
+  const reportSaveError = passMoveCancelled(setError);
   const formRef = useRef<ConnectionFormHandle>(null);
   const serialFormRef = useRef<ConnectionFormHandle>(null);
   const hostFormSessionKeyRef = useRef<string>("new");
@@ -187,6 +190,8 @@ export default function HostsPage() {
   const scopedFolders = useScopedFolders(folders, accessibleVaultIds, "connection");
   const scopedFolderIds = useMemo(() => new Set(scopedFolders.map((f) => f.id)), [scopedFolders]);
   const editingFolder = editingFolderId ? scopedFolders.find((f) => f.id === editingFolderId) ?? null : null;
+  useCloseWhenGone(editingId, editing !== null, () => { setShowForm(false); setShowSerialForm(false); setEditingId(null); });
+  useCloseWhenGone(editingFolderId, editingFolder !== null, () => setEditingFolderId(null));
 
   const {
     folderPath,
@@ -411,7 +416,7 @@ export default function HostsPage() {
     try {
       await handleDuplicateInto(conn, conn.folder_id ?? null);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err, t));
     }
   };
 
@@ -435,7 +440,7 @@ export default function HostsPage() {
       const sessionIds = await connectMany(connectionIds);
       if (sessionIds.length > 0) openSessions(sessionIds);
     } catch (err) {
-      setError(String(err));
+      setError(describeError(err, t));
     }
   }, [connectMany, openSessions, setActiveNav]);
 
@@ -576,7 +581,7 @@ export default function HostsPage() {
       const saved = await saveHostFromForm(editing, data, secrets, selectedVaultIds[0] ?? "personal");
       if (!editing && saved) setEditingId(saved.id);
     } catch (err) {
-      reportError(err);
+      reportSaveError(err);
     }
   };
 
@@ -652,7 +657,7 @@ export default function HostsPage() {
           if (newConn) {
             await copyConnectionSecrets(conn.id, newConn.id, { copyKey: !conn.key_id });
           }
-        } catch (err) { setError(String(err)); }
+        } catch (err) { setError(describeError(err, t)); }
       },
     });
   };
@@ -789,7 +794,7 @@ export default function HostsPage() {
               await copyConnectionSecrets(conn.id, newConn.id, { copyKey: !conn.key_id });
             }
           }
-        } catch (err) { setError(String(err)); }
+        } catch (err) { setError(describeError(err, t)); }
       },
     });
   };
@@ -873,7 +878,6 @@ export default function HostsPage() {
               onSelectSelf={() => selectSingle(editingFolder.id)}
               parentOptions={foldersOutsideSubtree(scopedFolders, editingFolder.id)}
               vaults={vaultOptions.filter((v) => v.id !== (editingFolder.vault_id ?? "personal"))}
-              canEdit={can("EDIT_FOLDERS", editingFolder.vault_id ?? "personal", editingFolder.id)}
               onMoveToVault={(vaultId) => handleMoveFolderToVault(editingFolder, vaultId)}
               onCopyToVault={(vaultId) => handleCopyFolderToVault(editingFolder, vaultId)}
             />
@@ -889,7 +893,6 @@ export default function HostsPage() {
               onConnect={editing ? () => void handleConnect(editing) : undefined}
               onDelete={editing ? () => { deleteConnection(editing.id); setShowSerialForm(false); setEditingId(null); } : undefined}
               vaults={editing ? vaultOptions.filter((v) => v.id !== (editing.vault_id ?? "personal")) : []}
-              canEdit={editing ? can("EDIT_CONNECTIONS", editing.vault_id ?? "personal", editing.id) : false}
               onMoveToVault={editing ? (vaultId) => { void handleMoveConnectionToVault(editing, vaultId); } : undefined}
               onCopyToVault={editing ? (vaultId) => { void handleCopyConnectionToVault(editing, vaultId); } : undefined}
             />
@@ -905,7 +908,6 @@ export default function HostsPage() {
               onConnect={editing ? () => void handleConnect(editing) : undefined}
               onDelete={editing ? () => { deleteConnection(editing.id); setShowForm(false); setEditingId(null); } : undefined}
               vaults={editing ? vaultOptions.filter((v) => v.id !== (editing.vault_id ?? "personal")) : []}
-              canEdit={editing ? can("EDIT_CONNECTIONS", editing.vault_id ?? "personal", editing.id) : false}
               onMoveToVault={editing ? (vaultId) => { void handleMoveConnectionToVault(editing, vaultId); } : undefined}
               onCopyToVault={editing ? (vaultId) => { void handleCopyConnectionToVault(editing, vaultId); } : undefined}
             />
@@ -935,8 +937,8 @@ export default function HostsPage() {
               setShowForm(false);
               setEditingFolderId(null);
             } : undefined}
-            onOpenLocalTerminal={() => connectLocal().catch((e) => setError(String(e)))}
-            onOpenSerial={() => connectSerialEphemeral().catch((e) => setError(String(e)))}
+            onOpenLocalTerminal={() => connectLocal().catch((e) => setError(describeError(e, t)))}
+            onOpenSerial={() => connectSerialEphemeral().catch((e) => setError(describeError(e, t)))}
             onOpenImportExport={(mode, opts) => useUIStore.getState().openImportExport(mode, opts)}
             layoutMode={layoutMode}
             onLayoutModeChange={setLayoutMode}
@@ -953,7 +955,7 @@ export default function HostsPage() {
 
         {error && <ErrorBanner error={error} onDismiss={() => setError(null)} />}
 
-        {teamCredentialsUnavailable && <TeamCredentialsNote className="mx-5 mt-3" />}
+        {teamCredentialsUnavailable && <TeamCredentialsNote reason={teamCredentialsUnavailable} className="mx-5 mt-3" />}
 
         <DragSelectSurface
           selectionAreaRef={selectionAreaRef}

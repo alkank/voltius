@@ -86,7 +86,8 @@
       "localMachineName": "Yerel bilgisayar",
       "wslSub": "WSL",
       "noHostsConfigured": "Yapılandırılmış sunucu yok",
-      "noHostsMatch": "Eşleşen sunucu yok"
+      "noHostsMatch": "Eşleşen sunucu yok",
+      "allVaults": "Tüm kasalar"
     },
     "sort": {
       "nameAsc": "A → Z",
@@ -109,9 +110,6 @@
     },
     "vaultUnavailable": {
       "note": "Kasa okunamadığı için kayıtlı gizli bilgiler burada gösterilmiyor. Kayıtlı değeri korumak için alanı boş bırakın; yeni bir değer yazarsanız kayıtlı değerin yerini alır."
-    },
-    "storedSecrets": {
-      "forbidden": "Bu kasadaki rolünüz kayıtlı gizli bilgileri göremediği için bu alanlar boş bırakıldı. Bağlanmaya devam edebilirsiniz — kayıtlı kimlik bilgisi size gösterilmeden kullanılır."
     },
     "teamCredentials": {
       "unavailable": "Bu ekip kasasının kayıtlı kimlik bilgileri yüklenemedi; bu nedenle kayıtlı parola, anahtar veya parola ifadesi gerektiren sunuculara bağlanılamayacak. Bir kasa yöneticisinden, rolünüze kasadaki gizli bilgilere erişim izni vermesini isteyin."
@@ -161,6 +159,19 @@
         "roleCount_other": "{{count}} rol",
         "loadFailed": "İzinler yüklenemedi"
       }
+    },
+    "businessLock": {
+      "title": "Business planı özelliği",
+      "upgrade": "Business'a yükselt",
+      "ownerOnly": "Yalnızca ekip sahibi yükseltebilir.",
+      "removeRules": "Kuralları kaldır",
+      "confirmClear": "Kaldırmak için tekrar tıklayın",
+      "rolesBody": "Özel roller ekibin Business planını gerektirir.",
+      "memberLapsed": "Business planının süresi doldu: {{name}} için verilen izinler kapalı; kısıtlamalar geçerli olmaya devam ediyor.",
+      "objectLapsed": "Business planının süresi doldu: izin kuralları kapalı; engelleme kuralları geçerli olmaya devam ediyor.",
+      "memberLine": "Üye bazlı izinler Business planını gerektirir.",
+      "objectLine": "Nesne bazlı izinler Business planını gerektirir.",
+      "removeOverrides": "Geçersiz kılmaları kaldır"
     }
   }
 }

@@ -370,7 +370,7 @@
           "teamVaults": "Coffres-forts d'équipe partagés",
           "teamSharing": "Partage d'équipe (5 sessions · 10 invités)",
           "seats": "Sièges (selon l'abonnement)",
-          "customRoles": "Rôles personnalisés"
+          "granularPermissions": "Rôles personnalisés, permissions par membre et par objet"
         }
       },
       "buySeats": {
@@ -476,7 +476,7 @@
       },
       "autoDownload": {
         "title": "Téléchargement automatique des mises à jour",
-        "desc": "Vérifier et télécharger les nouvelles versions en arrière-plan"
+        "desc": "Télécharger les nouvelles versions en arrière-plan. Voltius les recherche dans tous les cas."
       },
       "whatsNew": {
         "title": "Afficher les nouveautés après les mises à jour",
@@ -590,9 +590,11 @@
         "deleteVault": {
           "title": "Supprimer le coffre-fort",
           "confirmDesc": "Supprime définitivement ce coffre et ses {{count}} éléments. Cette action est irréversible.",
+          "confirmDescTeam": "Supprime définitivement ce coffre et ses {{count}} éléments pour tous les membres. Cette action est irréversible.",
           "confirmBtn": "Confirmer la suppression",
           "deleting": "Suppression…",
-          "failedToast": "Impossible de terminer la suppression de ce coffre-fort — il est toujours là, mais certains de ses éléments ont peut-être déjà été supprimés. {{reason}}"
+          "failedToast": "Impossible de terminer la suppression de ce coffre-fort — il est toujours là, mais certains de ses éléments ont peut-être déjà été supprimés. {{reason}}",
+          "teamFailedToast": "Impossible de supprimer ce coffre-fort — rien n'a été supprimé. {{reason}}"
         },
         "madePrivateToast_one": "Le coffre-fort est maintenant privé. {{count}} membre a perdu l'accès.",
         "madePrivateToast_many": "Le coffre-fort est maintenant privé. {{count}} membres ont perdu l'accès.",
@@ -649,9 +651,6 @@
         "builtinRoles": "Rôles intégrés",
         "customRoles": "Rôles personnalisés",
         "newRoleBtn": "Nouveau rôle",
-        "businessFeature": "Fonctionnalité du plan Business",
-        "businessFeatureDesc": "Les rôles personnalisés avec des permissions granulaires sont disponibles dans le plan Business.",
-        "upgradeBtn": "Passer au plan Business",
         "noCustomRolesCanEdit": "Aucun rôle personnalisé pour l'instant. Créez-en un pour attribuer des permissions spécifiques.",
         "noCustomRoles": "Aucun rôle personnalisé défini pour cette équipe."
       }
@@ -976,15 +975,6 @@
       },
       "changelogPopup": {
         "label": "Afficher les nouveautés après les mises à jour"
-      },
-      "category": {
-        "appearance": "Apparence",
-        "portForwarding": "Transfert de ports",
-        "sftp": "SFTP",
-        "hosts": "Hôtes",
-        "updates": "Mises à jour",
-        "plugins": "Plugins",
-        "integrations": "Intégrations"
       },
       "pluginInstallReview": {
         "label": "Vérifier les autorisations avant d'installer des plugins"

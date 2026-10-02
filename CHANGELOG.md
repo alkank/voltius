@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-02
+
+### Added
+
+- Connect to a shared team host with your own identity, chosen per host ("Connect as") or as a default for the whole vault. Your pick is stored outside the host, so other members and the shared credential are unchanged. Devices on an older app keep using the host's credential until they update (#387)
+- The host picker (SFTP panes, jump hosts, snippet remote path, key export) groups hosts by vault and folder, with an "All vaults" filter; the mobile SFTP sheet gets the same tree with vault chips (#398)
+- Clear messages when a self-hosted server has registration or team invites switched off (#401)
+
+### Changed
+
+- Persistent sessions on tmux 3.2 and newer now run tmux in control mode: scrollback, drag selection with auto-scroll, Ctrl+F over history, the mouse wheel and mouse apps behave exactly like a plain SSH session. Older tmux keeps the legacy attach, with copy-mode using the theme selection colour (#379)
+- Context menus and their submenus stay inside the window
+- Plugins: backend commands that now carry error codes (SFTP and others) reject with an `Error` (`BackendError`) instead of a string (#395)
+- Self-hosted: update the server together with the app (`ghcr.io/voltiusapp/voltius-server:sha-b3a7e9d` or newer)
+
+### Fixed
+
+- Backend errors (vault, secrets, SSH connect and auth, port forwarding, SFTP) are shown in your language instead of English (#395)
+- Fast multi-megabyte output bursts no longer lose output on SSH sessions (#379)
+- Inside tmux, terminal colour queries report the real theme, so apps such as OpenCode pick the right light or dark palette on tmux 3.2+ (#280)
+- Team-vault hosts now appear in the desktop host pickers, and key export for a team key no longer shows an empty list (#398)
+- Object editors in a team vault list that vault's folders, not only personal ones (#404)
+- A new object created in a folder gets that folder's permission rules (#409)
+- Two people editing the same object's permissions no longer overwrite each other's changes (#407)
+- Moving an object now warns when the move changes per-member rules, not only role rules (#408)
+- Cancelling a move's permission warning puts the saved folder back in the editor (#411)
+- On mobile, cancelling a folder move's permission warning no longer shows an error (#410)
+
+### Security
+
+- Updated the bundled SSH library (`russh`) to 0.63.3, picking up fixes for a malicious server opening channels the client never asked for, a memory-exhaustion flood during rekeying, and a crash on a cipher negotiated without a MAC
+- Updated `pageant` to 0.2.3, fixing an out-of-bounds read when talking to a malicious Pageant agent on Windows
+
+## [0.45.0] - 2026-10-01
+
+### Added
+
+- Leave a team vault from the vault menu
+- Updates are now checked even with auto-download off, so What's New shows a new version; the setting only decides whether it is downloaded (#417)
+
+### Changed
+
+- Custom roles, per-member permissions and per-object permissions now need the team owner's Business plan. Below Business, custom roles and permission grants stop working; restrictions stay in place and can be removed. Upgrading restores everything (#419)
+- Self-hosted: update the server together with the app (`ghcr.io/voltiusapp/voltius-server:sha-b522ae8` or newer, VoltiusApp/server#66)
+
+### Fixed
+
+- The owner can delete a team vault from the vault menu
+- The vault menu no longer treats the owner as a member while roles are loading, so Delete and Make private show and Leave is not offered
+- Every Android screen now shows only the vault on screen (#416)
+- Losing edit or View secrets access while an object is open now makes its editor read-only and hides its secrets immediately
+- The Logs view shows a converted team vault's full audit trail
+- Clicking Invite in vault share search results works again
+- The sync, share, notification and account menus and the new-session popover now close and fade the same way; clicking the sync button while its menu is open closes it
+- Settings search lists terminal toggles under Terminal instead of Appearance
+- System proxy detection and bypass rules: macOS proxy exceptions and simple hostnames, bypass entries with a port, and NO_PROXY now match consistently; the global proxy password survives sign-in and account switches (#396)
+- Esc no longer restores a maximized pane, so vim and tmux receive it
+
 ## [0.44.1] - 2026-09-30
 
 ### Changed
@@ -31,7 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Team vault secrets now stay in memory only. Local copies of team passwords are removed on upgrade, since team vaults are online only (#402)
 - `HTTPS_PROXY`/`ALL_PROXY` and Windows proxy values with an `https://` scheme are now used as HTTPS proxies instead of being ignored. A plain proxy set as `https://` now fails the TLS handshake instead of connecting directly (#397)
 - FTPS on Android now also trusts the bundled webpki root certificates (#397)
-- Once a team sets its first per-object rule, members on 0.43.0 or older must update before they can open that team's vault (#405)
+- Per-object permissions are always on for every team vault, so members on 0.43.0 or older must update before they can open a team vault (#405)
+- Self-hosted servers need the matching server release for per-object permissions: `ghcr.io/voltiusapp/voltius-server:sha-b305624` or newer (VoltiusApp/server#61)
 
 ### Fixed
 

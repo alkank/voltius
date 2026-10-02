@@ -1,18 +1,19 @@
+use crate::error::{AppError, ErrorCode};
 use crate::known_hosts::{
     ConflictAction, HostKeyConflictEvent, HostKeyStatus, KnownHostsStore, PendingConflicts,
 };
 use crate::port_forward::{RemoteRoute, RemoteRouteMap};
 use crate::proxy::{self, ProxyError, ProxySpec};
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse, Prompt};
-use russh::keys::ssh_key::{HashAlg, PublicKey};
-use russh::keys::PrivateKeyWithHashAlg;
+use russh::keys::ssh_key::HashAlg;
+use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{MethodKind, MethodSet};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tauri::Emitter;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::{oneshot, Mutex};
 
@@ -130,8 +131,16 @@ impl client::Handler for SshClient {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        // Host certificates are never advertised, so one arriving is unexpected: fail closed.
+        let PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_key
+        else {
+            return Ok(false);
+        };
         let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
 
         match self.known_hosts.check(&self.host, self.port, &fp).await {
@@ -293,9 +302,21 @@ pub struct ConnectedSession {
     pub remote_routes: RemoteRouteMap,
 }
 
+pub(crate) fn spawn_exec(
+    handle: Arc<client::Handle<SshClient>>,
+    cmd: String,
+    limit: std::time::Duration,
+) {
+    tokio::spawn(async move {
+        if let Ok(channel) = handle.channel_open_session().await {
+            let _ = exec_collect(channel, &cmd, limit).await;
+        }
+    });
+}
+
 /// Runs `cmd` on `channel` and collects stdout; `None` if the exec request fails,
 /// otherwise the output and whether it reached EOF within `limit`.
-async fn exec_collect(
+pub(crate) async fn exec_collect(
     channel: russh::Channel<client::Msg>,
     cmd: &str,
     limit: std::time::Duration,
@@ -338,6 +359,8 @@ async fn bridge_remote_channel(channel: russh::Channel<client::Msg>, route: Remo
 pub enum SessionInput {
     Data(Vec<u8>),
     Resize(u32, u32),
+    Colors(crate::ssh::control_mode::TerminalColors),
+    PauseOutput(bool),
 }
 
 fn emit_step(app: &AppHandle, session_id: &str, step: SshStep, detail: impl Into<String>) {
@@ -370,8 +393,12 @@ const KBD_INT_REJECTED: &str =
     "Keyboard-interactive authentication rejected — check the username and password.";
 const KBD_INT_MAX_ROUNDS: usize = 8;
 
-fn auth_err(e: russh::Error) -> String {
-    format!("Auth failed: {}", e)
+fn auth_err(e: russh::Error) -> AppError {
+    AppError::caused("Auth failed", &e)
+}
+
+fn kbd_int_rejected() -> AppError {
+    AppError::coded(ErrorCode::SshPasswordRejected, KBD_INT_REJECTED)
 }
 
 /// `None` on success, otherwise the methods the server still accepts.
@@ -442,16 +469,23 @@ fn answer_prompts(
     prompts: &[Prompt],
     password: &str,
     sent: &mut bool,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, AppError> {
     prompts
         .iter()
         .map(|p| match classify_prompt(p) {
-            PromptKind::Other => Err(format!(
-                "The server asked \"{}\", which can't be answered automatically.",
-                p.prompt.trim()
+            PromptKind::Other => {
+                let asked = p.prompt.trim();
+                Err(AppError::coded(
+                    ErrorCode::SshPromptUnanswerable,
+                    format!("The server asked \"{asked}\", which can't be answered automatically."),
+                )
+                .with_param("prompt", asked))
+            }
+            PromptKind::PasswordChange => Err(AppError::coded(
+                ErrorCode::SshPasswordExpired,
+                PASSWORD_EXPIRED,
             )),
-            PromptKind::PasswordChange => Err(PASSWORD_EXPIRED.into()),
-            PromptKind::Password if std::mem::replace(sent, true) => Err(KBD_INT_REJECTED.into()),
+            PromptKind::Password if std::mem::replace(sent, true) => Err(kbd_int_rejected()),
             PromptKind::Password => Ok(password.to_owned()),
         })
         .collect()
@@ -462,7 +496,7 @@ async fn authenticate_key<H: client::Handler>(
     username: &str,
     key_str: &str,
     passphrase: Option<&str>,
-) -> Result<AuthResult, String> {
+) -> Result<AuthResult, AppError> {
     let key_pair = Arc::new(
         russh::keys::decode_secret_key(key_str, passphrase)
             .map_err(|e| format!("Invalid private key: {}", e))?,
@@ -500,7 +534,7 @@ async fn authenticate_keyboard_interactive<H: client::Handler>(
     handle: &mut client::Handle<H>,
     username: &str,
     password: &str,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let mut reply = handle
         .authenticate_keyboard_interactive_start(username, None::<String>)
         .await
@@ -509,7 +543,7 @@ async fn authenticate_keyboard_interactive<H: client::Handler>(
     for _ in 0..KBD_INT_MAX_ROUNDS {
         let prompts = match reply {
             KeyboardInteractiveAuthResponse::Success => return Ok(()),
-            KeyboardInteractiveAuthResponse::Failure { .. } => return Err(KBD_INT_REJECTED.into()),
+            KeyboardInteractiveAuthResponse::Failure { .. } => return Err(kbd_int_rejected()),
             KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
         };
         let answers = answer_prompts(&prompts, password, &mut sent)?;
@@ -529,7 +563,7 @@ async fn authenticate_handle_inner<H: client::Handler>(
     password: Option<&str>,
     private_key: Option<&str>,
     passphrase: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if password.is_none() && private_key.is_none() {
         return Err("No authentication method provided".into());
     }
@@ -556,7 +590,10 @@ async fn authenticate_handle_inner<H: client::Handler>(
             return if res.success() {
                 Ok(())
             } else {
-                Err(PASSWORD_REJECTED.into())
+                Err(AppError::coded(
+                    ErrorCode::SshPasswordRejected,
+                    PASSWORD_REJECTED,
+                ))
             };
         }
         if remaining.contains(&MethodKind::KeyboardInteractive) {
@@ -565,13 +602,18 @@ async fn authenticate_handle_inner<H: client::Handler>(
     }
 
     if key_rejected {
-        return Err(KEY_REJECTED.into());
+        return Err(AppError::coded(ErrorCode::SshKeyRejected, KEY_REJECTED));
     }
-    let accepted: Vec<&str> = remaining.iter().map(<&str>::from).collect();
-    Err(format!(
-        "No usable authentication method — the server only accepts: {}.",
-        accepted.join(", ")
-    ))
+    let accepted = remaining
+        .iter()
+        .map(<&str>::from)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AppError::coded(
+        ErrorCode::SshNoUsableAuthMethod,
+        format!("No usable authentication method — the server only accepts: {accepted}."),
+    )
+    .with_param("methods", accepted))
 }
 
 pub async fn authenticate_handle<H: client::Handler>(
@@ -580,19 +622,24 @@ pub async fn authenticate_handle<H: client::Handler>(
     password: Option<&str>,
     private_key: Option<&str>,
     passphrase: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     tokio::time::timeout(
         AUTH_TIMEOUT,
         authenticate_handle_inner(handle, username, password, private_key, passphrase),
     )
     .await
     .map_err(|_| {
-        format!(
-            "Authentication timed out after {}s — the server accepted the connection but never \
-             answered the authentication request. Some older SSH servers stall here; try the \
-             host's \"Legacy algorithms\" option, or another authentication method.",
-            AUTH_TIMEOUT.as_secs()
+        let seconds = AUTH_TIMEOUT.as_secs();
+        AppError::coded(
+            ErrorCode::SshAuthTimeout,
+            format!(
+                "Authentication timed out after {seconds}s — the server accepted the connection \
+                 but never answered the authentication request. Some older SSH servers stall \
+                 here; try the host's \"Legacy algorithms\" option, or another authentication \
+                 method."
+            ),
         )
+        .with_param("seconds", seconds)
     })?
 }
 
@@ -655,10 +702,12 @@ impl HopError {
         }
     }
 
-    pub(crate) fn describe(self, context: &str) -> String {
+    /// The error for the user: a host-key verdict as is, any other failure as
+    /// `<context>: <error>`, coded after its cause (refused, unreachable…).
+    pub(crate) fn describe(self, context: &str) -> AppError {
         match self {
-            Self::HostKey(reason) => reason,
-            e => format!("{context}: {e}"),
+            Self::HostKey(reason) => AppError::Msg(reason),
+            e => AppError::caused(context, &e),
         }
     }
 }
@@ -745,12 +794,12 @@ pub(crate) async fn tunnel_hop(
     config: &Arc<client::Config>,
     role: &str,
     handler: SshClient,
-) -> Result<client::Handle<SshClient>, String> {
+) -> Result<client::Handle<SshClient>, AppError> {
     let (host, port) = (handler.host.clone(), handler.port);
     let channel = via
         .channel_open_direct_tcpip(host.as_str(), port as u32, "127.0.0.1", 0)
         .await
-        .map_err(|e| format!("Failed to open tunnel to {role} {host}: {e}"))?;
+        .map_err(|e| AppError::caused(format!("Failed to open tunnel to {role} {host}"), &e))?;
     client::connect_stream(Arc::clone(config), channel.into_stream(), handler)
         .await
         .map_err(|e| e.describe(&format!("SSH handshake with {role} {host} failed")))
@@ -768,7 +817,7 @@ pub(crate) async fn chain_jumps(
         client::Handle<SshClient>,
         Vec<Arc<client::Handle<SshClient>>>,
     ),
-    String,
+    AppError,
 > {
     let mut current = first;
     let mut passed = Vec::new();
@@ -787,7 +836,7 @@ impl JumpHostConnect {
         proxy: Option<&ProxySpec>,
         known_hosts: &Arc<KnownHostsStore>,
         max_attempts: u32,
-    ) -> Result<(client::Handle<SshClient>, Option<String>), String> {
+    ) -> Result<(client::Handle<SshClient>, Option<String>), AppError> {
         connect_first_hop_plain(
             config,
             proxy,
@@ -797,7 +846,12 @@ impl JumpHostConnect {
             max_attempts,
         )
         .await
-        .map_err(|e| e.describe(&format!("Jump host {} connection failed", self.host)))
+        .map_err(|e| self.failed(e.describe(&format!("Jump host {} connection failed", self.host))))
+    }
+
+    /// Names this hop beside the code, so the translation says which machine failed.
+    fn failed(&self, e: AppError) -> AppError {
+        e.with_param("jumpHost", &self.host)
     }
 
     pub(crate) async fn authenticate(
@@ -820,9 +874,11 @@ impl JumpHostConnect {
         via: &client::Handle<SshClient>,
         config: &Arc<client::Config>,
         known_hosts: &Arc<KnownHostsStore>,
-    ) -> Result<client::Handle<SshClient>, String> {
+    ) -> Result<client::Handle<SshClient>, AppError> {
         let handler = SshClient::new(self.host.clone(), self.port, Arc::clone(known_hosts));
-        let mut handle = tunnel_hop(via, config, "jump host", handler).await?;
+        let mut handle = tunnel_hop(via, config, "jump host", handler)
+            .await
+            .map_err(|e| self.failed(e))?;
         self.authenticate(&mut handle).await?;
         Ok(handle)
     }
@@ -854,7 +910,10 @@ pub async fn connect(
     legacy_algorithms: bool,
     initial_cwd: Option<String>,
     proxy: Option<ProxySpec>,
-) -> Result<ConnectedSession, String> {
+    terminal_colors: Option<crate::ssh::control_mode::TerminalColors>,
+) -> Result<ConnectedSession, AppError> {
+    let terminal_colors =
+        terminal_colors.filter(crate::ssh::control_mode::TerminalColors::is_valid);
     let config = Arc::new(client_config(
         keepalive_interval_secs,
         keepalive_max,
@@ -998,7 +1057,7 @@ pub async fn connect(
                 exec_collect(probe_channel, &probe, std::time::Duration::from_secs(5)).await
             {
                 if completed && !String::from_utf8_lossy(&out).contains("VOLTIUS_PRESENT") {
-                    return Err("SESSION_ENDED".to_string());
+                    return Err("SESSION_ENDED".into());
                 }
             }
         }
@@ -1037,7 +1096,10 @@ pub async fn connect(
             if let Some((history, _)) =
                 exec_collect(cap_channel, &capture, std::time::Duration::from_secs(5)).await
             {
-                if !history.iter().all(|b| b.is_ascii_whitespace()) {
+                if !history.iter().all(|b| b.is_ascii_whitespace())
+                    && !history
+                        .starts_with(crate::shell_integration::CONTROL_MODE_MARKER.as_bytes())
+                {
                     // capture-pane emits bare LF; the PTY-less exec channel
                     // does no ONLCR translation, so normalize for xterm.
                     let mut out: Vec<u8> =
@@ -1115,6 +1177,7 @@ pub async fn connect(
     // A plain `request_shell` has nowhere to carry the prefix, so it goes in over
     // stdin below instead.
     let cd_over_stdin = exec_cmd.is_none() && !cd_prefix.is_empty();
+    let wrapped = persist && exec_cmd.is_some();
     match exec_cmd {
         Some(cmd) => channel
             .exec(false, cmd.as_bytes())
@@ -1126,49 +1189,52 @@ pub async fn connect(
             .map_err(|e| format!("Shell request failed: {}", e))?,
     }
 
-    // I/O loop
     let (read_half, write_half) = channel.split();
-    let mut writer = write_half.make_writer();
 
     // `export KEY=val` is POSIX syntax; on a Windows cmd.exe/PowerShell shell it
     // would just echo errors, so skip it there (see `remote_is_windows`).
-    if !env_vars.is_empty() && !remote_is_windows {
-        let mut exports = String::new();
+    let mut startup = String::new();
+    if !remote_is_windows {
         for (key, value) in &env_vars {
-            exports.push_str(&format!("export {}={}\n", key, shell_escape(value)));
+            startup.push_str(&format!("export {}={}\n", key, shell_escape(value)));
         }
-        let _ = writer.write_all(exports.as_bytes()).await;
+        // Before pre_command: a host command that changes directory itself must win.
+        if cd_over_stdin {
+            startup.push_str(&format!("{}\n", cd_prefix.trim_end()));
+        }
     }
-
-    // Before pre_command: a host command that changes directory itself must win.
-    if cd_over_stdin && !remote_is_windows {
-        let _ = writer.write_all(cd_prefix.trim_end().as_bytes()).await;
-        let _ = writer.write_all(b"\n").await;
-    }
-
     if let Some(cmd) = pre_command {
-        let _ = writer.write_all(format!("{}\n", cmd).as_bytes()).await;
+        startup.push_str(&format!("{}\n", cmd));
     }
 
     let handle = Arc::new(final_handle);
 
-    // Persistent sessions run inside tmux/screen, and neither forwards the
-    // shell's OSC 7 to the outer terminal (screen drops it; tmux keeps it for
-    // itself), so the frontend's OSC 7 handler never sees a cwd. Poll the
-    // multiplexer for the active pane's cwd and push it to the same store the
-    // SFTP panel's "follow cwd" reads. Non-persistent sessions get cwd straight
-    // from OSC 7 and need no polling.
+    let control = if wrapped {
+        crate::ssh::control_mode::ControlSession::new(
+            crate::shell_integration::tmux_session_key(&session_id),
+            pty_cols,
+            pty_rows,
+            terminal_colors.clone(),
+        )
+    } else {
+        crate::ssh::control_mode::ControlSession::raw()
+    };
+    let osc7_seen = control.osc7_flag();
+
+    // Multiplexers keep the shell's OSC 7 for themselves (control mode passes it
+    // through once the shell emits one), so poll the pane's cwd until then.
     if persist {
         let poll_handle = Arc::clone(&handle);
         let poll_app = app.clone();
         let key = crate::shell_integration::tmux_session_key(&session_id);
-        let keys_handle = Arc::clone(&handle);
-        let keys_cmd = crate::shell_integration::persistent_copy_mode_keys_command(&key);
-        tokio::spawn(async move {
-            if let Ok(channel) = keys_handle.channel_open_session().await {
-                let _ = exec_collect(channel, &keys_cmd, std::time::Duration::from_secs(30)).await;
-            }
-        });
+        spawn_exec(
+            Arc::clone(&handle),
+            crate::shell_integration::persistent_legacy_setup_command(
+                &key,
+                terminal_colors.as_ref(),
+            ),
+            std::time::Duration::from_secs(30),
+        );
         let cwd_cmd = crate::shell_integration::cwd_probe_command(&key);
         let cwd_event = format!("ssh-cwd-{}", session_id);
         tokio::spawn(async move {
@@ -1177,6 +1243,9 @@ pub async fn connect(
             let mut failures = 0u32;
             loop {
                 interval.tick().await;
+                if osc7_seen.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
                 // The session handle is explicitly disconnected on teardown, so
                 // a run of failed channel opens means it's gone — stop polling.
                 let channel = match poll_handle.channel_open_session().await {
@@ -1206,8 +1275,19 @@ pub async fn connect(
         });
     }
 
-    let io =
-        crate::ssh::channel_io::spawn_channel_io_split(app, &session_id, read_half, write_half);
+    let io = crate::ssh::channel_io::spawn_channel_io_split(
+        app,
+        &session_id,
+        read_half,
+        write_half,
+        control,
+    );
+    if !startup.is_empty() {
+        let _ = io
+            .input_tx
+            .send(SessionInput::Data(startup.into_bytes()))
+            .await;
+    }
 
     Ok(ConnectedSession {
         handle,
@@ -1298,6 +1378,7 @@ fn legacy_preferred() -> russh::Preferred {
         cipher: ciphers.into(),
         mac: macs.into(),
         key: base.key,
+        host_key_certificates: base.host_key_certificates,
         compression: base.compression,
     }
 }
@@ -1310,6 +1391,7 @@ mod tests {
         SshClient, AUTH_TIMEOUT, KBD_INT_REJECTED, KEY_REJECTED, PASSWORD_EXPIRED,
         PASSWORD_REJECTED,
     };
+    use crate::error::{AppError, ErrorCode};
     use crate::known_hosts::KnownHostsStore;
     use russh::client::Prompt;
     use russh::keys::ssh_key::HashAlg;
@@ -1327,6 +1409,11 @@ mod tests {
         }
     }
 
+    /// A failure as the frontend sees it: its code and English message.
+    fn wire<T>(r: Result<T, AppError>) -> Result<T, (Option<ErrorCode>, String)> {
+        r.map_err(|e| (e.code(), e.to_string()))
+    }
+
     #[test]
     fn only_password_prompts_are_answered_once() {
         for text in [
@@ -1339,7 +1426,7 @@ mod tests {
             "Heslo:",
         ] {
             let got = answer_prompts(&[prompt(text, false)], SECRET, &mut false);
-            assert_eq!(got, Ok(vec![SECRET.to_string()]), "{text}");
+            assert_eq!(wire(got), Ok(vec![SECRET.to_string()]), "{text}");
         }
         for text in [
             "You are required to change your password immediately (administrator enforced).\n\
@@ -1353,18 +1440,27 @@ mod tests {
             "Nové heslo:",
         ] {
             let got = answer_prompts(&[prompt(text, false)], SECRET, &mut false);
-            assert_eq!(got, Err(PASSWORD_EXPIRED.to_string()), "{text}");
+            let expired = (Some(ErrorCode::SshPasswordExpired), PASSWORD_EXPIRED.into());
+            assert_eq!(wire(got), Err(expired), "{text}");
         }
         for p in [
             prompt("Verification code:", false),
             prompt("Password:", true),
         ] {
+            let asked = p.prompt.to_string();
             let err = answer_prompts(&[p], SECRET, &mut false).unwrap_err();
-            assert!(err.contains("can't be answered"), "{err}");
+            assert!(err.to_string().contains("can't be answered"), "{err}");
+            let json = serde_json::to_value(&err).unwrap();
+            assert_eq!(json["code"], "ssh-prompt-unanswerable");
+            assert_eq!(json["params"]["prompt"], asked.trim());
         }
         let again = answer_prompts(&[prompt("Password:", false)], SECRET, &mut true);
-        assert_eq!(again, Err(KBD_INT_REJECTED.to_string()));
-        assert_eq!(answer_prompts(&[], SECRET, &mut false), Ok(vec![]));
+        let rejected = (
+            Some(ErrorCode::SshPasswordRejected),
+            KBD_INT_REJECTED.into(),
+        );
+        assert_eq!(wire(again), Err(rejected));
+        assert_eq!(wire(answer_prompts(&[], SECRET, &mut false)), Ok(vec![]));
     }
 
     /// Like sshd: a disabled method always fails, and every rejection relists the enabled ones.
@@ -1426,7 +1522,7 @@ mod tests {
         server: AuthServer,
         password: Option<&str>,
         key: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), AppError> {
         use crate::port_forward::test_ssh::{serve_one, TestClient};
         let config = russh::server::Config {
             methods: server.methods.into(),
@@ -1461,18 +1557,57 @@ mod tests {
         let otp = "The server asked \"Verification code:\", which can't be answered automatically.";
         let no_method = "No usable authentication method — the server only accepts: publickey.";
 
+        use ErrorCode::{
+            SshKeyRejected, SshNoUsableAuthMethod, SshPasswordRejected, SshPromptUnanswerable,
+        };
+
         let cases = [
             (PAM, PW, false, ok, None, Ok(())),
-            (PAM, PW, false, bad, None, Err(KBD_INT_REJECTED)),
+            (
+                PAM,
+                PW,
+                false,
+                bad,
+                None,
+                Err((SshPasswordRejected, KBD_INT_REJECTED)),
+            ),
             (PAM, PW, false, ok, key, Ok(())),
-            (PAM, OTP, false, ok, None, Err(otp)),
+            (PAM, OTP, false, ok, None, Err((SshPromptUnanswerable, otp))),
             (PWD, PW, false, ok, None, Ok(())),
-            (PWD, PW, false, bad, None, Err(PASSWORD_REJECTED)),
+            (
+                PWD,
+                PW,
+                false,
+                bad,
+                None,
+                Err((SshPasswordRejected, PASSWORD_REJECTED)),
+            ),
             (ALL, PW, false, ok, None, Ok(())),
-            (ALL, PW, false, bad, None, Err(PASSWORD_REJECTED)),
+            (
+                ALL,
+                PW,
+                false,
+                bad,
+                None,
+                Err((SshPasswordRejected, PASSWORD_REJECTED)),
+            ),
             (KEY, PW, true, None, key, Ok(())),
-            (KEY, PW, false, None, key, Err(KEY_REJECTED)),
-            (KEY, PW, false, ok, None, Err(no_method)),
+            (
+                KEY,
+                PW,
+                false,
+                None,
+                key,
+                Err((SshKeyRejected, KEY_REJECTED)),
+            ),
+            (
+                KEY,
+                PW,
+                false,
+                ok,
+                None,
+                Err((SshNoUsableAuthMethod, no_method)),
+            ),
         ];
         for (i, (methods, kbd_prompt, accept_key, password, key, want)) in
             cases.into_iter().enumerate()
@@ -1483,8 +1618,8 @@ mod tests {
                 accept_key,
             };
             assert_eq!(
-                auth(server, password, key).await,
-                want.map_err(String::from),
+                wire(auth(server, password, key).await),
+                want.map_err(|(code, msg)| (Some(code), msg.to_string())),
                 "case {i}"
             );
         }
@@ -1665,7 +1800,11 @@ mod tests {
             .await
             .map(|_| ())
             .unwrap_err();
-        assert!(err.starts_with(&host_key_warning(target_port)), "{err}");
+        assert!(
+            err.to_string().starts_with(&host_key_warning(target_port)),
+            "{err}"
+        );
+        assert_eq!(err.code(), None);
     }
 
     /// Returns how many times `make` ran.
@@ -1673,7 +1812,7 @@ mod tests {
         port: u16,
         max_attempts: u32,
         known_hosts: Arc<KnownHostsStore>,
-    ) -> (u32, Result<(), String>) {
+    ) -> (u32, Result<(), AppError>) {
         let calls = Arc::new(AtomicU32::new(0));
         let calls2 = Arc::clone(&calls);
         let result = connect_first_hop_retrying(
@@ -1704,7 +1843,9 @@ mod tests {
         let port = closed_port();
         let (calls, result) = count_attempts(port, 3, Arc::new(KnownHostsStore::new())).await;
         assert_eq!(calls, 3);
-        assert!(result.unwrap_err().starts_with("boom: "));
+        let err = result.unwrap_err();
+        assert!(err.to_string().starts_with("boom: "), "{err}");
+        assert_eq!(err.code(), Some(ErrorCode::ConnectionRefused));
     }
 
     #[tokio::test]
@@ -1714,7 +1855,11 @@ mod tests {
         let (calls, result) = count_attempts(port, 3, known_hosts).await;
         assert_eq!(calls, 1);
         let err = result.unwrap_err();
-        assert!(err.starts_with(&host_key_warning(port)), "{err}");
+        assert!(
+            err.to_string().starts_with(&host_key_warning(port)),
+            "{err}"
+        );
+        assert_eq!(err.code(), None);
     }
 
     #[tokio::test]
@@ -1758,7 +1903,7 @@ mod tests {
 
         async fn check_server_key(
             &mut self,
-            _: &russh::keys::ssh_key::PublicKey,
+            _: &russh::keys::PublicKeyOrCertificate,
         ) -> Result<bool, Self::Error> {
             Ok(true)
         }
