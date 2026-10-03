@@ -80,6 +80,25 @@ export async function ftpConnect(params: {
   });
 }
 
+/** Standalone WebDAV connection. `interactive`: a conflict overlay listens on `connectId`. */
+export async function webdavConnect(params: {
+  connectId: string;
+  url: string;
+  username: string;
+  password?: string;
+  proxy?: ProxySpec | null;
+  interactive: boolean;
+}): Promise<string> {
+  return invoke("webdav_connect", {
+    connectId: params.connectId,
+    url: params.url,
+    username: params.username,
+    password: params.password ?? null,
+    proxy: params.proxy ?? null,
+    interactive: params.interactive,
+  });
+}
+
 export async function sftpClose(sftpId: string): Promise<void> {
   return invoke("sftp_close", { sftpId });
 }
@@ -108,6 +127,31 @@ export async function sftpRename(sftpId: string, from: string, to: string): Prom
 
 export async function sftpDelete(sftpId: string, path: string): Promise<void> {
   return invoke("sftp_delete", { sftpId, path });
+}
+
+export interface OwnerInfo {
+  uid: number;
+  gid: number;
+  user: string;
+  group: string;
+}
+
+export interface AttrChange {
+  paths: string[];
+  set: number;
+  clear: number;
+  owner?: string;
+  group?: string;
+  recurse?: "all" | "files" | "dirs";
+}
+
+/** null when the host has no POSIX shell to report owners. */
+export async function sftpOwners(sftpId: string, paths: string[]): Promise<OwnerInfo[] | null> {
+  return invoke("sftp_owners", { sftpId, paths });
+}
+
+export async function sftpSetAttrs(sftpId: string, change: AttrChange): Promise<void> {
+  return invoke("sftp_set_attrs", { sftpId, change });
 }
 
 // ── Transfer ──────────────────────────────��──────────────────────────────���────
@@ -170,6 +214,11 @@ export async function sftpDownloadDir(params: {
 
 export async function sftpCancelTransfer(transferId: string): Promise<void> {
   return invoke("sftp_cancel_transfer", { transferId });
+}
+
+/** True if the session can run commands on its host (false for FTP and WebDAV). */
+export async function sftpCanExec(sftpId: string): Promise<boolean> {
+  return invoke("sftp_can_exec", { sftpId });
 }
 
 /** True if `tar` is available on the remote host. */

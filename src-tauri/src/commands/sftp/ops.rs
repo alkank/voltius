@@ -1,7 +1,8 @@
 use super::{get_backend, RemoteFile};
 use crate::error::AppError;
-use crate::known_hosts::KnownHostsStore;
+use crate::known_hosts::{ConflictPrompt, KnownHostsStore, PendingConflicts};
 use crate::proxy::ProxySpec;
+use crate::sftp::attrs::{owners, AttrChange, OwnerInfo};
 use crate::sftp::SftpManager;
 use crate::ssh::client::JumpHostConnect;
 use crate::ssh::session::SessionManager;
@@ -82,6 +83,40 @@ pub async fn ftp_connect(
 ) -> Result<String, String> {
     sftp_state
         .connect_ftp(&host, port, &username, password.as_deref(), secure)
+        .await
+}
+
+/// `interactive`: the caller shows the certificate-conflict dialog for `connect_id`.
+#[tauri::command]
+pub async fn webdav_connect(
+    app: AppHandle,
+    sftp_state: State<'_, SftpManager>,
+    known_hosts: State<'_, Arc<KnownHostsStore>>,
+    pending: State<'_, Arc<PendingConflicts>>,
+    connect_id: String,
+    url: String,
+    username: String,
+    password: Option<String>,
+    proxy: Option<ProxySpec>,
+    interactive: bool,
+) -> Result<String, AppError> {
+    let prompt = interactive.then(|| {
+        ConflictPrompt::via_app(
+            app,
+            "sftp-host-key-conflict",
+            connect_id,
+            Arc::clone(&*pending),
+        )
+    });
+    sftp_state
+        .connect_webdav(
+            &url,
+            &username,
+            password.as_deref().unwrap_or_default(),
+            proxy,
+            Arc::clone(&*known_hosts),
+            prompt,
+        )
         .await
 }
 
@@ -169,5 +204,33 @@ pub async fn sftp_delete(
     get_backend(&sftp_state, &sftp_id)
         .await?
         .delete(&path)
+        .await
+}
+
+// ── Attributes ────────────────────────────────────────────────────────────────
+
+/// Owner and group of each path, or None when the host has no POSIX shell to ask.
+#[tauri::command]
+pub async fn sftp_owners(
+    sftp_state: State<'_, SftpManager>,
+    sftp_id: String,
+    paths: Vec<String>,
+) -> Result<Option<Vec<OwnerInfo>>, AppError> {
+    let backend = get_backend(&sftp_state, &sftp_id).await?;
+    Ok(owners(&*backend, &paths).await)
+}
+
+#[tauri::command]
+pub async fn sftp_set_attrs(
+    sftp_state: State<'_, SftpManager>,
+    sftp_id: String,
+    change: AttrChange,
+) -> Result<(), AppError> {
+    if change.paths.is_empty() {
+        return Ok(());
+    }
+    get_backend(&sftp_state, &sftp_id)
+        .await?
+        .set_attrs(&change)
         .await
 }

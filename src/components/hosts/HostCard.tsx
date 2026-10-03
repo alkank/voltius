@@ -27,11 +27,13 @@ import { connectionDisplayName } from "@/utils/connectionDisplayName";
 import { writeClipboard } from "@/utils/clipboard";
 import { useNotificationStore } from "@/stores/notificationStore";
 import type { TeamMember } from "@/stores/teamStore";
+import { isFileOnlyProtocol, protocolLabel } from "@/utils/connectionType";
 import {
   useEffectivePinned,
   useEffectivePinSource,
   nextPersonalPinValue,
 } from "@/hooks/useEffectivePinned";
+import { memberLabel } from "@/services/memberLabel";
 
 const EMPTY_TEAM_MEMBERS: TeamMember[] = [];
 
@@ -69,14 +71,14 @@ export default function HostCard({
   const { t } = useTranslation();
   const isList = layout === "list";
   const isSerial = connection.connection_type === "serial";
-  const isFtp = connection.connection_type === "ftp";
-  const protocolLabel = isSerial ? "SERIAL" : isFtp ? (connection.ftp_secure ? "FTPS" : "FTP") : "SSH";
+  const fileOnly = isFileOnlyProtocol(connection);
+  const protocol = protocolLabel(connection);
   const contributions = useUIContributions("connection.contextMenu", connection);
   const canConnect = useCanConnect(connection);
   const credential = useCredentialPlan(connection);
   const connectAs = useConnectAsMenuItem(connection, credential, () => onConnect(connection));
   const shownUsername = effectiveUsername(connection, credential.plan);
-  const connectTitle = !canConnect ? t("common.error.connectNotAllowed") : isFtp ? t("hosts.card.openFilesTitle") : t("hosts.card.connectTitle");
+  const connectTitle = !canConnect ? t("common.error.connectNotAllowed") : fileOnly ? t("hosts.card.openFilesTitle") : t("hosts.card.connectTitle");
   const isSynced = useSyncPrefsStore((s) => s.isObjectSynced(connection.id, "connection"));
   const pinConnection = useConnectionStore((s) => s.pinConnection);
   const pinConnectionForTeam = useConnectionStore((s) => s.pinConnectionForTeam);
@@ -89,7 +91,7 @@ export default function HostCard({
     if (!isTeamVault || pinSource === "none" || pinSource === "personal") return undefined;
     const updatedBy = (connection as { updated_by?: string }).updated_by;
     const member = updatedBy ? teamMembers.find((m) => m.user_id === updatedBy) : undefined;
-    return member?.handle ?? t("hosts.card.teamMemberFallback");
+    return member ? memberLabel(member) : t("hosts.card.teamMemberFallback");
   })();
   const handlePinClick = () => {
     if (!isTeamVault) {
@@ -129,12 +131,12 @@ export default function HostCard({
   const presence = useConnectionPresence(connection);
   const presenceTitle = presence
     ? presence.overflow > 0
-      ? t("hosts.card.inUseByOverflow", { name: presence.primary.handle, count: presence.overflow })
-      : t("hosts.card.inUseBy", { name: presence.primary.handle })
+      ? t("hosts.card.inUseByOverflow", { name: presence.primary.name, count: presence.overflow })
+      : t("hosts.card.inUseBy", { name: presence.primary.name })
     : "";
   const presenceAvatar = presence && (
     <span className="flex items-center" title={presenceTitle}>
-      <MiniAvatar name={presence.primary.handle} size={18} />
+      <MiniAvatar name={presence.primary.avatar} size={18} />
       {presence.overflow > 0 && (
         <span className="ml-1 text-[10px] font-semibold px-1 rounded-full bg-(--t-bg-elevated) text-(--t-text-dim)">
           +{presence.overflow}
@@ -160,7 +162,7 @@ export default function HostCard({
         });
       },
     }] : []),
-    ...(!isSerial && !isFtp && onExecuteSnippet ? [{ label: t("hosts.card.executeSnippet"), icon: "lucide:braces", onClick: () => onExecuteSnippet(connection), divider: true }] : []),
+    ...(!isSerial && !fileOnly && onExecuteSnippet ? [{ label: t("hosts.card.executeSnippet"), icon: "lucide:braces", onClick: () => onExecuteSnippet(connection), divider: true }] : []),
     ...buildConnectionMenuItems({
       t,
       canEdit,
@@ -280,7 +282,7 @@ export default function HostCard({
             {syncIcon}
             {canEdit && <CardActionButton icon="lucide:square-pen" title={t("common.action.edit")} onClick={() => onEdit(connection)} />}
             {canEdit && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} onClick={() => onDelete(connection.id)} danger />}
-            {canConnect && !isSerial && !isFtp && <CardActionButton icon="lucide:folder-open" title={t("hosts.card.openInSftp")} onClick={() => useUIStore.getState().openSftpWith(connection.id)} />}
+            {canConnect && !isSerial && !fileOnly && <CardActionButton icon="lucide:folder-open" title={t("hosts.card.openInSftp")} onClick={() => useUIStore.getState().openSftpWith(connection.id)} />}
             <button
               disabled={!canConnect}
               onClick={(e) => { e.stopPropagation(); onConnect(connection); }}
@@ -289,7 +291,7 @@ export default function HostCard({
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               title={connectTitle}
             >
-              <Icon icon={isFtp ? "lucide:folder-open" : "lucide:terminal"} width={18} />
+              <Icon icon={fileOnly ? "lucide:folder-open" : "lucide:terminal"} width={18} />
             </button>
           </div>
         </>
@@ -304,7 +306,7 @@ export default function HostCard({
                     {connectionDisplayName(connection)}
                   </p>
                   <span className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px] font-semibold bg-(--t-bg-input) text-(--t-text-dim) border border-(--t-border)">
-                    {protocolLabel}
+                    {protocol}
                   </span>
                   <button
                     onClick={(e) => { e.stopPropagation(); handlePinClick(); }}
@@ -349,7 +351,7 @@ export default function HostCard({
                 {canEdit && (
                   <CardActionButton icon="lucide:square-pen" title={t("common.action.edit")} reveal={false} onClick={() => onEdit(connection)} />
                 )}
-                {canConnect && !isSerial && !isFtp && (
+                {canConnect && !isSerial && !fileOnly && (
                   <CardActionButton icon="lucide:folder-open" title={t("hosts.card.openInSftp")} reveal={false} onClick={() => useUIStore.getState().openSftpWith(connection.id)} />
                 )}
               </div>
@@ -369,7 +371,7 @@ export default function HostCard({
                   <span className="w-2 h-2 rounded-full bg-[#27c93f]" />
                 </div>
                 <div className="flex items-center min-w-0 w-full">
-                  {isFtp ? (
+                  {fileOnly ? (
                     <>
                       <span className="truncate" style={{ color: "var(--t-terminal-cyan)" }}>{connection.host}</span>
                       <span className="shrink-0"> · {t("hosts.card.filesSuffix")}</span>

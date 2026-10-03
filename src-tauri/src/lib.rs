@@ -35,6 +35,7 @@ mod terminal_kbd;
 mod tls;
 mod updater;
 mod vault_auth;
+mod webdav;
 
 use commands::http::HttpSseStreamManager;
 use docker::stream::DockerLogStreamManager;
@@ -356,6 +357,7 @@ pub fn run() {
             commands::known_hosts::known_host_move_vault,
             commands::known_hosts::known_host_copy_vault,
             commands::known_hosts::known_host_resolve,
+            commands::known_hosts::known_host_cancel,
             commands::known_hosts::known_host_trust,
             commands::local::local_list_shells,
             commands::local::local_connect,
@@ -370,6 +372,9 @@ pub fn run() {
             commands::termius::termius_extract_debug,
             commands::termius::termius_extract_leveldb_keys,
             commands::mobaxterm::mobaxterm_extract,
+            commands::putty::putty_sessions,
+            commands::securecrt::securecrt_read_config,
+            commands::securecrt::securecrt_decrypt,
             commands::fs::fs_home_dir,
             commands::fs::fs_list_dir,
             commands::wsl::wsl_list_distros,
@@ -394,6 +399,7 @@ pub fn run() {
             commands::sftp::sftp_stat,
             commands::sftp::sftp_connect,
             commands::sftp::ftp_connect,
+            commands::sftp::webdav_connect,
             commands::sftp::sftp_open,
             commands::sftp::sftp_close,
             commands::sftp::sftp_list_dir,
@@ -402,6 +408,8 @@ pub fn run() {
             commands::sftp::sftp_touch,
             commands::sftp::sftp_rename,
             commands::sftp::sftp_delete,
+            commands::sftp::sftp_owners,
+            commands::sftp::sftp_set_attrs,
             commands::sftp::sftp_upload,
             commands::sftp::sftp_download,
             commands::sftp::sftp_upload_dir,
@@ -414,6 +422,7 @@ pub fn run() {
             commands::sftp::sftp_download_dir_tar,
             commands::sftp::sftp_transfer_dir_tar,
             commands::sftp::sftp_tar_available,
+            commands::sftp::sftp_can_exec,
             commands::sftp::sftp_upload_batch_tar,
             commands::sftp::sftp_download_batch_tar,
             commands::downloads::download_temp_path,

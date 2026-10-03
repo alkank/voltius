@@ -51,13 +51,16 @@
       "importFrom": "Import from",
       "importInto": "Import into",
       "autoExtractTitle": "Auto-extract from {{label}}",
-      "autoExtractDescription": "Reads and decrypts your local {{label}} data — no manual export needed",
+      "autoExtractDescription": "Reads your local {{label}} data — no manual export needed",
       "extracting": "Extracting…",
       "extractFrom": "Extract from {{label}}",
+      "chooseConfigFolder": "Or choose a {{label}} Config folder…",
       "orImportFromFile": "or import from file",
       "openFileLabel": "Open {{sub}} file…",
       "encryptedBackupTitle": "Encrypted backup — enter your password to unlock",
       "unlock": "Unlock",
+      "configPassphraseTitle": "This SecureCRT configuration has a config passphrase — enter it to import saved passwords",
+      "skipPasswords": "Import without saved passwords",
       "reviewItems_one": "Review {{count}} item",
       "reviewItems_other": "Review {{count}} items",
       "back": "Back",
@@ -157,6 +160,21 @@
         "sub": "Local install · auto-extract",
         "hint": "Requires Termius to be installed and logged in.",
         "placeholder": "Use Auto Extract for Termius. Pasted legacy Termius dumps are not supported for faithful import."
+      },
+      "zoc": {
+        "sub": "Host Directory · .zhd",
+        "hint": "Find it in Documents\\ZOC9 Files\\Options (Windows) or ~/Library/Application Support/ZOC9 Files/Options (macOS). SSH and serial entries are imported; saved passwords are not.",
+        "placeholder": "Drop HostDirectory.zhd here, or paste its contents…"
+      },
+      "putty": {
+        "sub": ".reg or session",
+        "hint": "Reads saved sessions from the registry on Windows, or from ~/.putty/sessions on Linux and macOS. You can also drop a .reg export or paste session files. SSH and serial sessions, proxies and tunnels are imported; key files are not.",
+        "placeholder": "Drop a PuTTY .reg export here, or paste session files…"
+      },
+      "securecrt": {
+        "sub": "Session .ini · XML export",
+        "hint": "Auto-extract reads SecureCRT's local configuration. You can also drop a session .ini from Config/Sessions, or the XML file from File → Export Settings. SSH and serial sessions are imported with their saved passwords; Telnet, RLogin, Raw and other protocols are skipped.",
+        "placeholder": "Drop a SecureCRT session .ini or an Export Settings .xml here, or paste its contents…"
       }
     },
     "menu": {

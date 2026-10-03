@@ -8,11 +8,13 @@ import { DragSelectSurface } from "@/components/shared/DragSelectSurface";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/shared/ContextMenu";
 import {
   sftpMkdir, sftpTouch, sftpRename, sftpDelete,
-  sftpCompress, sftpExtract,
+  sftpCompress, sftpExtract, sftpCanExec,
   fsMkdir, fsRename, fsDelete, fsTouch, pickLocalPath,
   fsCompress, fsExtract,
 } from "@/services/sftp";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
+import { PermissionsDialog } from "./PermissionsDialog";
+import { canEditPermissions } from "./permissionsModel";
 import {
   type FileEntry, type SortCol, type SortDir, type VisibleCols, type ColumnWidths, type FileColumn,
   DEFAULT_VISIBLE_COLS, COLUMN_MIN_WIDTHS, columnGrid, visibleDataColumns,
@@ -44,6 +46,8 @@ type SelectionActionsCtx = {
   onDelete: (files: FileEntry[]) => Promise<void>;
   onCompress: (file: FileEntry) => Promise<void>;
   onExtract: (file: FileEntry) => Promise<void>;
+  canArchive: boolean;
+  onPermissions?: (files: FileEntry[]) => void;
   onOpenInTerminal?: (path: string) => void;
   onPanelDownload?: (files: FileEntry[]) => void;
   /** Optional override for the Edit action — used by panel embedding to also open the SFTP panel. */
@@ -138,6 +142,7 @@ export function FilePane({
   const setShowHidden = useSftpSettingsStore((s) => s.setShowHidden);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [viewMenuPos, setViewMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [permissionsFor, setPermissionsFor] = useState<FileEntry[] | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; resolve: (ok: boolean) => void } | null>(null);
 
   const appConfirm = (title: string, message: string): Promise<boolean> =>
@@ -164,7 +169,15 @@ export function FilePane({
   const [creatingFile, setCreatingFile] = useState(false);
   const [newItemName, setNewItemName] = useState("");
   const [autoTick, setAutoTick] = useState(0);
-  const { entries, loading, error } = useDirListing(isLocal, sftpId, cwd, `${refreshTick}:${autoTick}`);
+  const { entries, loading, error, refreshError } = useDirListing(isLocal, sftpId, cwd, `${refreshTick}:${autoTick}`);
+  const [canArchive, setCanArchive] = useState(isLocal);
+  useEffect(() => {
+    setCanArchive(isLocal);
+    if (isLocal || !sftpId) return;
+    let live = true;
+    sftpCanExec(sftpId).then((ok) => { if (live) setCanArchive(ok); }, () => {});
+    return () => { live = false; };
+  }, [isLocal, sftpId]);
   const focusIndex = useRef<number>(-1);
   const paneRef = useRef<HTMLDivElement>(null);
   // Type-ahead ("type to select") search state — refs, not state, so keystrokes
@@ -406,7 +419,8 @@ export function FilePane({
   const selectionActionsCtx: SelectionActionsCtx = {
     isLocal, sftpId, hostLabel: resolvedHostLabel, canTransferToTarget: canTransferToTarget ?? false,
     onTransferToTarget, onStartRename: startRename, onDelete: handleDelete,
-    onCompress: handleCompress, onExtract: handleExtract,
+    onCompress: handleCompress, onExtract: handleExtract, canArchive,
+    onPermissions: !isLocal && sftpId ? setPermissionsFor : undefined,
     onOpenInTerminal, onPanelDownload, onEdit, setSelection, onRefresh,
   };
 
@@ -464,6 +478,12 @@ export function FilePane({
         <IconBtn icon="lucide:file-plus" title={t("fileTransfer.pane.toolbar.newFile")} onClick={handleNewFile} />
         <IconBtn icon="lucide:refresh-cw" title={t("fileTransfer.pane.toolbar.refresh")} onClick={onRefresh} />
       </div>
+
+      {refreshError && (
+        <div className="shrink-0 px-3 py-1 text-xs truncate text-(--t-status-error) border-b border-(--t-border)" title={refreshError}>
+          {t("fileTransfer.pane.refreshFailed", { reason: refreshError })}
+        </div>
+      )}
 
       <ColumnHeaders
         sortCol={sortCol} sortDir={sortDir} isLocal={isLocal} colWidths={colWidths} visibleCols={visibleCols}
@@ -546,6 +566,14 @@ export function FilePane({
           onCancel={() => { const r = confirmDialog.resolve; setConfirmDialog(null); r(false); }}
         />
       )}
+      {permissionsFor && sftpId && (
+        <PermissionsDialog
+          sftpId={sftpId}
+          files={permissionsFor}
+          onClose={() => setPermissionsFor(null)}
+          onApplied={() => { setPermissionsFor(null); onRefresh(); }}
+        />
+      )}
 
     </div>
   );
@@ -577,7 +605,7 @@ export function openFileForEdit(
 // Single source of truth for file-level actions. Used by both the per-item
 // right-click context menu and the pane ellipsis menu.
 
-function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: TFunction): ContextMenuItem[] {
+export function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: TFunction): ContextMenuItem[] {
   const items: ContextMenuItem[] = [];
   const single = files.length === 1 ? files[0] : null;
 
@@ -624,6 +652,9 @@ function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: 
 
   // Rename / Delete
   if (single) items.push({ label: t("common.action.rename"), icon: "lucide:pencil", onClick: () => ctx.onStartRename(single) });
+  if (ctx.onPermissions && canEditPermissions(files)) {
+    items.push({ label: t("fileTransfer.pane.menu.permissions"), icon: "lucide:key-round", onClick: () => ctx.onPermissions!(files) });
+  }
   if (files.length > 0) {
     items.push({
       label: t("fileTransfer.pane.menu.delete", { count: files.length }),
@@ -632,7 +663,7 @@ function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: 
   }
 
   // Archive (single file only)
-  if (single) {
+  if (single && ctx.canArchive) {
     items.push({ label: t("fileTransfer.pane.menu.compress"), icon: "lucide:archive", onClick: () => ctx.onCompress(single), divider: true });
     if (!single.isDir && /\.(tar\.gz|tgz)$/i.test(single.name)) {
       items.push({ label: t("fileTransfer.pane.menu.extractHere"), icon: "lucide:package-open", onClick: () => ctx.onExtract(single) });
