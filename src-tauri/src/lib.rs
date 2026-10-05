@@ -14,6 +14,8 @@ mod error;
 mod ftp;
 #[cfg(target_os = "android")]
 mod keychain_android;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod keychain_bundle;
 mod known_hosts;
 #[cfg(target_os = "linux")]
 mod linux_gfx;
@@ -80,11 +82,12 @@ fn init_keychain_store() -> keyring_core::Result<()> {
         }
     }
     #[cfg(target_os = "macos")]
-    keyring_core::set_default_store(
+    keyring_core::set_default_store(keychain_bundle::Store::new(
         apple_native_keyring_store::keychain::Store::new_with_configuration(
             &std::collections::HashMap::<&str, &str>::new(),
         )?,
-    );
+        |service| service == commands::keychain::service(),
+    ));
     #[cfg(target_os = "windows")]
     keyring_core::set_default_store(windows_native_keyring_store::Store::new_with_configuration(
         &std::collections::HashMap::<&str, &str>::new(),
@@ -375,11 +378,11 @@ pub fn run() {
             commands::putty::putty_sessions,
             commands::securecrt::securecrt_read_config,
             commands::securecrt::securecrt_decrypt,
+            commands::zoc::zoc_host_directory,
             commands::fs::fs_home_dir,
             commands::fs::fs_list_dir,
             commands::wsl::wsl_list_distros,
             commands::wsl::wsl_home_dir,
-            commands::fs::fs_tar_available,
             commands::fs::fs_read_text_home,
             commands::fs::fs_write_text_home,
             commands::fs::fs_exists_home,
@@ -393,6 +396,8 @@ pub fn run() {
             commands::fs::fs_copy,
             commands::fs::fs_compress,
             commands::fs::fs_extract,
+            commands::fs::fs_owners,
+            commands::fs::fs_set_attrs,
             commands::sftp::editor::sftp_read_file,
             commands::sftp::editor::sftp_write_file,
             commands::sftp::sftp_cancel_transfer,

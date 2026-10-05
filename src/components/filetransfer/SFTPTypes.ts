@@ -1,7 +1,8 @@
 import type { HostChoice } from "@/components/shared/HostPickerPanel";
 import type { McpOwner } from "@/stores/mcpOwnershipStore";
 import type { BackendErrorCode } from "@/services/backendErrors";
-import { formatDate, formatDateTime, MONTH_DAY_TIME, SHORT_DATE } from "@/utils/localeFormat";
+import { formatDate, formatDateTime, formatTime, HOUR_MINUTE, MONTH_DAY, SHORT_DATE } from "@/utils/localeFormat";
+import type { Accel } from "./tarSupport";
 export type { HostChoice };
 
 export type FileEntry = {
@@ -24,8 +25,8 @@ export const COLUMN_MIN_WIDTHS: ColumnWidths = { name: 120, size: 56, modified: 
 /** Gap between columns, in px — must match the `gap-2` on the header and row grids. */
 const COLUMN_GAP = 8;
 
-export function visibleDataColumns(isLocal: boolean, visibleCols: VisibleCols): FileColumn[] {
-  return (["size", "modified", ...(!isLocal ? ["permissions"] : [])] as FileColumn[])
+export function visibleDataColumns(withPermissions: boolean, visibleCols: VisibleCols): FileColumn[] {
+  return (["size", "modified", ...(withPermissions ? ["permissions"] : [])] as FileColumn[])
     .filter((col) => visibleCols[col as keyof VisibleCols]);
 }
 
@@ -33,8 +34,8 @@ export function visibleDataColumns(isLocal: boolean, visibleCols: VisibleCols): 
  *  file row lay themselves out from this same grid template, so they cannot
  *  drift apart. `minWidth` is what makes the pane scroll horizontally instead of
  *  clipping the right-hand columns (and their resize handles) out of reach. */
-export function columnGrid(isLocal: boolean, visibleCols: VisibleCols, colWidths: ColumnWidths): { template: string; minWidth: number } {
-  const dataColumns = visibleDataColumns(isLocal, visibleCols);
+export function columnGrid(withPermissions: boolean, visibleCols: VisibleCols, colWidths: ColumnWidths): { template: string; minWidth: number } {
+  const dataColumns = visibleDataColumns(withPermissions, visibleCols);
   const template = [`minmax(${colWidths.name}px, 1fr)`, ...dataColumns.map((col) => `${colWidths[col]}px`)].join(" ");
   const minWidth = dataColumns.reduce((sum, col) => sum + colWidths[col] + COLUMN_GAP, colWidths.name);
   return { template, minWidth };
@@ -53,7 +54,7 @@ export type Transfer = {
   eta?: number;     // seconds remaining
   status: "running" | "done" | "cancelled" | "error"; error?: string;
   skipped?: string[]; // remote paths refused as local file names
-  accelerated?: boolean; // ran via tar acceleration
+  accel?: Accel;
   /** Set when an MCP client started this transfer; absent for the user's own.
    *  Deliberately NOT mcpOwnershipStore: that store's keepOnly() reaper filters
    *  its records against live SESSION ids and would sweep every transfer, and
@@ -102,9 +103,10 @@ export function formatPermissions(mode: number): string {
 }
 
 /** A file's mtime (unix seconds), `ls -l` style: time this year, year otherwise. */
-export function formatModified(ts: number): string {
+export function formatModified(ts: number, now = new Date()): string {
   const d = new Date(ts * 1000);
-  return d.getFullYear() === new Date().getFullYear()
-    ? formatDateTime(d, MONTH_DAY_TIME)
-    : formatDate(d, SHORT_DATE);
+  if (d.toDateString() === now.toDateString()) return formatTime(d, HOUR_MINUTE);
+  return formatDate(d, d.getFullYear() === now.getFullYear() ? MONTH_DAY : SHORT_DATE);
 }
+
+export const formatModifiedFull = (ts: number): string => formatDateTime(new Date(ts * 1000));

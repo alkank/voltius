@@ -7847,7 +7847,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voltius"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "aes 0.9.0",
  "apple-native-keyring-store",
@@ -7863,6 +7863,7 @@ dependencies = [
  "crypto_secretbox",
  "dbus-secret-service-keyring-store",
  "dirs",
+ "flate2",
  "fontdb",
  "futures-util",
  "gio",
@@ -7901,6 +7902,7 @@ dependencies = [
  "ssh-key 0.6.7",
  "suppaftp",
  "sysinfo",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",

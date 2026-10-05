@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { cardGridProps } from "@/components/shared/cardGrid";
+import { SectionHeader } from "@/components/shared/SectionHeader";
+import { selectFollowing } from "@/utils/cardInteraction";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { useVaultStore } from "@/stores/vaultStore";
@@ -28,7 +31,7 @@ import { OffboardingDialog } from "@/components/members/OffboardingDialog";
 import { PendingInviteCard } from "@/components/members/cards/PendingInviteCard";
 import { MembersToolbar } from "@/components/members/MembersToolbar";
 import { RoleBadges } from "@/components/members/roleBadges";
-import { MemberCard } from "@/components/members/cards/MemberCard";
+import { MemberCard, memberOpenAction } from "@/components/members/cards/MemberCard";
 import { SelfCard } from "@/components/members/cards/SelfCard";
 import { MemberDetailPanel } from "@/components/members/panels/MemberDetailPanel";
 import { InvitePanel } from "@/components/members/panels/InvitePanel";
@@ -124,6 +127,9 @@ export default function MembersPage() {
 
   const isOwnerMember = (member: TeamMember) =>
     hasBuiltinRole(member, "owner", teamRoles);
+  const canActOn = (member: TeamMember) =>
+    canManageMembers && !isOwnerMember(member) && member.user_id !== myUserId;
+  const canEditMember = (member: TeamMember) => canNameMembers || canActOn(member);
 
   const existingMemberIds = useMemo(() => new Set(members.map((m) => m.user_id)), [members]);
 
@@ -182,6 +188,7 @@ export default function MembersPage() {
   } = useDragSelection(orderedIds);
 
   const detailMember = detailMemberId ? members.find((m) => m.user_id === detailMemberId) ?? null : null;
+  const openDetail = (id: string) => { setDetailMemberId(id); setShowDetailPanel(true); setShowInvitePanel(false); };
 
   const { focusedId } = useListKeyNav({
     orderedIds,
@@ -190,8 +197,8 @@ export default function MembersPage() {
     setSelection,
     itemAreaRef,
     layoutMode,
-    onEnter: (id) => { setDetailMemberId(id); setShowDetailPanel(true); setShowInvitePanel(false); },
-    onEdit: (id) => { setDetailMemberId(id); setShowDetailPanel(true); setShowInvitePanel(false); },
+    onEnter: openDetail,
+    onEdit: openDetail,
     onEscape: () => { setShowDetailPanel(false); setShowInvitePanel(false); },
   });
 
@@ -212,8 +219,12 @@ export default function MembersPage() {
 
   // Context menu builders
   const buildContextMenuItems = (member: TeamMember): ContextMenuItem[] => {
-    const canActOnMember = canManageMembers && !isOwnerMember(member) && member.user_id !== myUserId;
-    const items: ContextMenuItem[] = [];
+    const canActOnMember = canActOn(member);
+    const items: ContextMenuItem[] = [{
+      ...memberOpenAction(t, canEditMember(member)),
+      shortcut: "E",
+      onClick: () => openDetail(member.user_id),
+    }];
 
     if (canActOnMember && teamRoles.length > 0) {
       const sortedRoles = [...teamRoles]
@@ -305,6 +316,7 @@ export default function MembersPage() {
       });
     }
 
+    if (items.length > 1) items[1] = { ...items[1], divider: true };
     return items;
   };
 
@@ -496,10 +508,9 @@ const vaultTabs = selectedVaultIds.length > 1
           {toolbar}
           <div className="flex-1 overflow-y-auto px-9 pt-5 pb-9">
           <div className="mb-6">
-            <p className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">{t("members.heading.members")}</p>
+            <SectionHeader label={t("members.heading.members")} count={1} />
             <div
-              className={layoutMode === "grid" ? "grid gap-4" : "flex flex-col gap-1"}
-              style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" } : undefined}
+              {...cardGridProps(layoutMode, "compact")}
             >
               <SelfCard handle={myHandle} layoutMode={layoutMode} />
             </div>
@@ -631,17 +642,11 @@ const vaultTabs = selectedVaultIds.length > 1
 
             {/* Members section */}
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">
-                  {t("members.heading.members")}
-                </p>
-                <span className="text-xs text-(--t-text-dim)">
-                  {t("members.count", { count: members.length })}
-                  {myMember && (
-                    <> · <RoleBadges member={myMember} roles={teamRoles} /></>
-                  )}
-                </span>
-              </div>
+              <SectionHeader
+                label={t("members.heading.members")}
+                count={sortedMembers.length}
+                aside={myMember && <RoleBadges member={myMember} roles={teamRoles} />}
+              />
 
               {sortedMembers.length === 0 && members.length === 0 && (
                 <p className="text-xs py-3 text-(--t-text-dim)">{t("members.loading")}</p>
@@ -651,8 +656,7 @@ const vaultTabs = selectedVaultIds.length > 1
               )}
 
               <div
-                className={layoutMode === "grid" ? "grid gap-4" : "flex flex-col gap-1"}
-                style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" } : undefined}
+                {...cardGridProps(layoutMode, "compact")}
               >
                 {sortedMembers.map((m) => (
                   <MemberCard
@@ -663,11 +667,13 @@ const vaultTabs = selectedVaultIds.length > 1
                     isOwner={isOwnerMember(m)}
                     isSelected={selectedIdSet.has(m.user_id)}
                     isFocused={focusedId === m.user_id}
+                    isEditing={showDetailPanel && detailMemberId === m.user_id}
                     layoutMode={layoutMode}
-                    canManage={canManageMembers && !isOwnerMember(m) && m.user_id !== myUserId}
-                    onAddRole={() => { setDetailMemberId(m.user_id); setShowDetailPanel(true); setShowInvitePanel(false); }}
-                    onSelect={(id, e) => { e.stopPropagation(); handleItemSelect(id, e); }}
-                    onDoubleClick={() => { setDetailMemberId(m.user_id); setShowDetailPanel(true); setShowInvitePanel(false); }}
+                    canManage={canActOn(m)}
+                    editable={canEditMember(m)}
+                    onAddRole={() => openDetail(m.user_id)}
+                    onSelect={selectFollowing(handleItemSelect, showDetailPanel, () => setDetailMemberId(m.user_id))}
+                    onOpen={() => openDetail(m.user_id)}
                     contextMenuItems={buildContextMenuItems(m)}
                     bulkContextMenuItems={selectedIdSet.has(m.user_id) ? bulkContextMenuItems : undefined}
                   />
@@ -678,9 +684,7 @@ const vaultTabs = selectedVaultIds.length > 1
             {/* Pending invitations */}
             {pendingInvites.length > 0 && (
               <div>
-                <p className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
-                  {t("members.heading.pendingInvitations")}
-                </p>
+                <SectionHeader label={t("members.heading.pendingInvitations")} count={pendingInvites.length} />
                 <div className="flex flex-col gap-1.5">
                   {pendingInvites.map((inv) => (
                     <PendingInviteCard

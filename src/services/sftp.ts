@@ -13,14 +13,6 @@ export interface RemoteFile {
   permissions: number | null;
 }
 
-export interface LocalFile {
-  name: string;
-  path: string;
-  size: number;
-  is_dir: boolean;
-  modified: number | null;
-}
-
 export interface TransferProgress {
   transferred: number;
   total: number;
@@ -154,6 +146,14 @@ export async function sftpSetAttrs(sftpId: string, change: AttrChange): Promise<
   return invoke("sftp_set_attrs", { sftpId, change });
 }
 
+export async function fsOwners(paths: string[]): Promise<OwnerInfo[] | null> {
+  return invoke("fs_owners", { paths });
+}
+
+export async function fsSetAttrs(change: AttrChange): Promise<void> {
+  return invoke("fs_set_attrs", { change });
+}
+
 // ── Transfer ──────────────────────────────��──────────────────────────────���────
 
 export async function sftpUpload(params: {
@@ -224,11 +224,6 @@ export async function sftpCanExec(sftpId: string): Promise<boolean> {
 /** True if `tar` is available on the remote host. */
 export async function sftpTarAvailable(sftpId: string): Promise<boolean> {
   return invoke("sftp_tar_available", { sftpId });
-}
-
-/** True if `tar` is available on the local machine. */
-export async function fsTarAvailable(): Promise<boolean> {
-  return invoke("fs_tar_available");
 }
 
 /** Remote → Remote: transfer a single file between two SFTP sessions. */
@@ -311,7 +306,7 @@ export async function fsHomeDir(): Promise<string> {
   return invoke("fs_home_dir");
 }
 
-export async function fsListDir(path: string): Promise<LocalFile[]> {
+export async function fsListDir(path: string): Promise<RemoteFile[]> {
   return invoke("fs_list_dir", { path });
 }
 

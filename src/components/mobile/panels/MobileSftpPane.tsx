@@ -3,8 +3,9 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { appCacheDir } from "@tauri-apps/api/path";
 import { breadcrumbs, type useSftpDir } from "@/services/useSftpDir";
-import { formatSize, formatPermissions, formatModified, type FileEntry } from "@/components/filetransfer/SFTPTypes";
+import { formatSize, formatPermissions, formatModifiedFull, type FileEntry } from "@/components/filetransfer/SFTPTypes";
 import { joinPath } from "@/components/filetransfer/moveTargetCore";
+import { accelFor, tarMode } from "@/components/filetransfer/tarSupport";
 import { PermissionsDialog } from "@/components/filetransfer/PermissionsDialog";
 import { canEditPermissions } from "@/components/filetransfer/permissionsModel";
 import { transferItem } from "@/services/sftpTransferCore";
@@ -74,8 +75,9 @@ export default function MobileSftpPane({
 
   const download = async (f: FileEntry) => {
     if (!sftpId) return;
+    const mode = f.isDir ? await tarMode([sftpId]) : "off";
     const fetchTo = (localPath: string, transferId: string) => transferItem({
-      from: "remote", to: "local", srcSftpId: sftpId, srcPath: f.path, dstPath: localPath, isDir: f.isDir, useTar: false, transferId,
+      from: "remote", to: "local", srcSftpId: sftpId, srcPath: f.path, dstPath: localPath, isDir: f.isDir, useTar: mode === "tar", transferId,
     });
     // Android: stream to a temp path, then publish into the user's SAF download folder
     // (picked once, persisted) so the file lands somewhere visible to the system Files app.
@@ -94,10 +96,10 @@ export default function MobileSftpPane({
         const tmp = await downloadTempPath(tid, f.name);
         await fetchTo(tmp, tid);
         await downloadPublish(tmp, f.name);
-      });
+      }, undefined, accelFor(mode, f.isDir));
       return;
     }
-    await runTransfer(f.name, "←", async (tid) => fetchTo(joinPath(await appCacheDir(), f.name), tid));
+    await runTransfer(f.name, "←", async (tid) => fetchTo(joinPath(await appCacheDir(), f.name), tid), undefined, accelFor(mode, f.isDir));
   };
 
   if (!connection) {
@@ -241,7 +243,7 @@ export default function MobileSftpPane({
             <DetailRow label={t("mobile.sftp.detail.type")} value={detailFor.isDir ? t("common.entity.folder") : detailFor.isSymlink ? t("mobile.sftp.typeSymlink") : t("mobile.sftp.typeFile")} />
             {!detailFor.isDir && <DetailRow label={t("mobile.sftp.detail.size")} value={formatSize(detailFor.size)} />}
             {detailFor.permissions != null && <DetailRow label={t("mobile.sftp.detail.permissions")} value={`${formatPermissions(detailFor.permissions)} (0o${detailFor.permissions.toString(8)})`} />}
-            {detailFor.modified != null && <DetailRow label={t("mobile.sftp.detail.modified")} value={formatModified(detailFor.modified)} />}
+            {detailFor.modified != null && <DetailRow label={t("mobile.sftp.detail.modified")} value={formatModifiedFull(detailFor.modified)} />}
           </div>
         </BottomSheet>
       )}

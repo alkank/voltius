@@ -16,7 +16,7 @@
     <img src="https://img.shields.io/github/license/VoltiusApp/voltius" alt="License" />
   </p>
 
-  <img width="800" height="450" alt="demo" src="https://github.com/user-attachments/assets/dbb5092c-4536-4112-b481-745bbbba80e8" />
+  <img width="960" height="540" alt="demo" src="https://github.com/user-attachments/assets/cbe743be-47d2-4565-9ead-b38c619db019" />
 </div>
 
 ---
@@ -25,7 +25,7 @@
 
 No account required. Everything below is free, forever.
 
-- **Easy Import & Export** — No vendor lock-in. Import your existing setup from Termius or MobaXterm in 1-click. Your data is always exportable as open JSON.
+- **Easy Import & Export** — No vendor lock-in. Import your existing setup from Termius, MobaXterm, PuTTY/KiTTY, SecureCRT, ZOC Terminal or CSV — most in 1-click straight from the installed app. Your data is always exportable as open JSON, encrypted if you want.
 - **Gist Sync** — E2EE device sync via your own private GitHub Gist. No central server, bring your own token.
 - **Cloudflare Sync** — E2EE device sync through a Cloudflare Worker and R2 bucket you own, deployed from Settings. Same zero-knowledge model, storage you control.
 - **S3 Sync** — E2EE device sync through any S3-compatible bucket you own — AWS, R2, B2, Wasabi, Hetzner, Scaleway, MinIO and more. No server to deploy.
@@ -172,7 +172,7 @@ on macOS and Windows after installation.
 | **RAM Usage** | ~300MB | ~500MB+ | ~300MB | ? | ? |
 | **Installed Size** | ~40MB | ~1GB | ~40MB | ? | ? |
 | **Cloud Sync** | Gist + Cloudflare (Free) / Real-Time (Paid) | 🟡 Only Pro | 🟡 Via Turso (own account) | ❌ | Community Plugins |
-| **Import/Export** | ✅ 1-click import from Termius/MobaXterm, JSON Export | 🟡 Strong Import Integrations but no Export | ✅ | ? | ? |
+| **Import/Export** | ✅ Import from Termius, MobaXterm, PuTTY/KiTTY, SecureCRT, ZOC, CSV; JSON/CSV Export | 🟡 Strong Import Integrations but no Export | ✅ | ? | ? |
 | **Port Forwarding** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Snippets** | ✅ + multi-exec | 🟡 (Multi-exec + startup snippets only Pro) | ✅ + multi-exec | ✅ + multi-exec | ? |
 | **Command Palette** | ✅ | ✅ | ? | ? | ✅ |
