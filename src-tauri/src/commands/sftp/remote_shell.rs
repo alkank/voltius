@@ -1,6 +1,7 @@
 use super::shell_quote;
-use crate::ssh::exec::{run_captured, run_captured_with_stdin};
+use crate::ssh::exec::{run_captured, run_captured_with_stdin, Captured};
 use russh::client::{Handle, Handler};
+use std::future::Future;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +17,7 @@ pub enum RemoteShell {
     Windows { shell: WinShell },
 }
 
-pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 const POSIX_PROBE: &str = "command -v tar >/dev/null 2>&1; echo __TF_EXIT__:$?";
 const STREAM_PROBE_BYTES: &[u8] = b"voltius\n\r\n\x1a\x00\xff probe\n";
 const TEMP_MARKER: &str = "__TF_TEMP__:";
@@ -24,6 +25,8 @@ const TEMP_MARKER: &str = "__TF_TEMP__:";
 const CMD_TEMP_PROBE: &str = "echo __TF_TEMP__:%TEMP%";
 const PS_TEMP_PROBE: &str = "'__TF_TEMP__:' + $env:TEMP";
 const CMD_MAX_LEN: usize = 8191;
+// PowerShell ends a single-quoted string at any of these, not just at ASCII `'`.
+const PS_QUOTES: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'];
 
 pub fn wrap(container: Option<&str>, cmd: &str) -> String {
     match container {
@@ -36,63 +39,76 @@ pub fn wrap(container: Option<&str>, cmd: &str) -> String {
     }
 }
 
-async fn output<H: Handler>(handle: &Handle<H>, cmd: &str) -> Option<String> {
-    let run = tokio::time::timeout(PROBE_TIMEOUT, run_captured(handle, cmd)).await;
-    Some(run.ok()?.ok()?.stdout_text())
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreachable;
+
+pub(crate) async fn answer(
+    run: impl Future<Output = Result<Captured, String>>,
+) -> Result<Captured, Unreachable> {
+    match tokio::time::timeout(PROBE_TIMEOUT, run).await {
+        Ok(Ok(out)) => Ok(out),
+        _ => Err(Unreachable),
+    }
 }
 
-async fn reports_success<H: Handler>(handle: &Handle<H>, cmd: &str) -> bool {
-    output(handle, cmd)
-        .await
-        .is_some_and(|out| out.contains("__TF_EXIT__:0"))
+async fn output<H: Handler>(handle: &Handle<H>, cmd: &str) -> Result<String, Unreachable> {
+    Ok(answer(run_captured(handle, cmd)).await?.stdout_text())
 }
 
-async fn dialect<H: Handler>(handle: &Handle<H>, container: Option<&str>) -> Option<RemoteShell> {
-    if reports_success(handle, &wrap(container, POSIX_PROBE)).await {
-        return Some(RemoteShell::Posix);
+async fn reports_success<H: Handler>(handle: &Handle<H>, cmd: &str) -> Result<bool, Unreachable> {
+    Ok(output(handle, cmd).await?.contains("__TF_EXIT__:0"))
+}
+
+async fn dialect<H: Handler>(
+    handle: &Handle<H>,
+    container: Option<&str>,
+) -> Result<Option<RemoteShell>, Unreachable> {
+    if reports_success(handle, &wrap(container, POSIX_PROBE)).await? {
+        return Ok(Some(RemoteShell::Posix));
     }
     if container.is_some() {
-        return None;
+        return Ok(None);
     }
     for (shell, probe) in [
         (WinShell::Cmd, CMD_TEMP_PROBE),
         (WinShell::PowerShell, PS_TEMP_PROBE),
     ] {
-        let Some(out) = output(handle, probe).await else {
-            continue;
-        };
-        if is_expanded_temp(&out) {
+        if is_expanded_temp(&output(handle, probe).await?) {
             let found = RemoteShell::Windows { shell };
-            let has_tar = reports_success(handle, &found.status("tar --version")).await;
-            return has_tar.then_some(found);
+            let has_tar = reports_success(handle, &found.status("tar --version")).await?;
+            return Ok(has_tar.then_some(found));
         }
     }
-    None
+    Ok(None)
 }
 
 async fn streams<H: Handler>(
     handle: &Handle<H>,
     shell: &RemoteShell,
     container: Option<&str>,
-) -> bool {
+) -> Result<bool, Unreachable> {
     let Ok(archive) = super::local_tar::pack_bytes("probe.bin", STREAM_PROBE_BYTES) else {
-        return false;
+        return Ok(false);
     };
     let cmd = wrap(container, &shell.stream_probe());
-    let run = run_captured_with_stdin(handle, &cmd, Some(archive.as_slice()));
-    match tokio::time::timeout(PROBE_TIMEOUT, run).await {
-        Ok(Ok(out)) => out.code == Some(0) && out.stdout == STREAM_PROBE_BYTES,
-        _ => false,
-    }
+    let out = answer(run_captured_with_stdin(
+        handle,
+        &cmd,
+        Some(archive.as_slice()),
+    ))
+    .await?;
+    Ok(out.code == Some(0) && out.stdout == STREAM_PROBE_BYTES)
 }
 
 pub async fn detect<H: Handler>(
     handle: &Handle<H>,
     container: Option<&str>,
-) -> Option<(RemoteShell, bool)> {
-    let shell = dialect(handle, container).await?;
-    let streams = streams(handle, &shell, container).await;
-    Some((shell, streams))
+) -> Result<Option<(RemoteShell, bool)>, Unreachable> {
+    let Some(shell) = dialect(handle, container).await? else {
+        return Ok(None);
+    };
+    let streams = streams(handle, &shell, container).await?;
+    Ok(Some((shell, streams)))
 }
 
 fn is_expanded_temp(out: &str) -> bool {
@@ -150,7 +166,16 @@ impl RemoteShell {
             Self::Windows {
                 shell: WinShell::PowerShell,
                 ..
-            } => format!("'{}'", s.replace('\'', "''")),
+            } => {
+                let quoted: String = s
+                    .chars()
+                    .flat_map(|c| {
+                        let n = if PS_QUOTES.contains(&c) { 2 } else { 1 };
+                        std::iter::repeat_n(c, n)
+                    })
+                    .collect();
+                format!("'{quoted}'")
+            }
         }
     }
 
@@ -297,6 +322,57 @@ impl RemoteShell {
         }
     }
 
+    pub fn sha256(&self, sftp_path: &str) -> String {
+        let p = self.quote_path(sftp_path);
+        match self {
+            Self::Posix => format!("sha256sum -- {p} 2>/dev/null || shasum -a 256 -- {p}"),
+            Self::Windows {
+                shell: WinShell::PowerShell,
+            } => format!("(Get-FileHash -Algorithm SHA256 -LiteralPath {p}).Hash"),
+            Self::Windows {
+                shell: WinShell::Cmd,
+            } => format!("certutil -hashfile {p} SHA256"),
+        }
+    }
+
+    pub fn large_file_probe(
+        &self,
+        parent: &str,
+        items: &[String],
+        min_bytes: u64,
+    ) -> Option<String> {
+        match self {
+            Self::Posix => {
+                let items: Vec<String> = items
+                    .iter()
+                    .map(|i| self.quote(&format!("./{i}")))
+                    .collect();
+                Some(format!(
+                    "cd {} && find {} -type f -size +{}c | head -n 1",
+                    self.quote_path(parent),
+                    items.join(" "),
+                    min_bytes.saturating_sub(1)
+                ))
+            }
+            Self::Windows {
+                shell: WinShell::PowerShell,
+            } => {
+                let base = parent.trim_end_matches('/');
+                let paths: Vec<String> = items
+                    .iter()
+                    .map(|i| self.quote_path(&format!("{base}/{i}")))
+                    .collect();
+                Some(format!(
+                    "Get-ChildItem -LiteralPath {} -Recurse -File -Force | Where-Object {{ $_.Length -ge {min_bytes} }} | Select-Object -First 1 -ExpandProperty FullName",
+                    paths.join(",")
+                ))
+            }
+            Self::Windows {
+                shell: WinShell::Cmd,
+            } => None,
+        }
+    }
+
     pub fn parse_size(&self, out: &str) -> Option<u64> {
         match self {
             Self::Posix => {
@@ -352,7 +428,7 @@ mod tests {
         let (handle, _) = proc_server(ProcOptions::default()).await;
         assert_eq!(
             detect(&handle, None).await,
-            Some((RemoteShell::Posix, true))
+            Ok(Some((RemoteShell::Posix, true)))
         );
     }
 
@@ -367,7 +443,7 @@ mod tests {
         .await;
         assert_eq!(
             detect(&handle, None).await,
-            Some((RemoteShell::Posix, false))
+            Ok(Some((RemoteShell::Posix, false)))
         );
     }
 
@@ -389,6 +465,49 @@ mod tests {
         assert_eq!(to_native("/C:/Users/me/"), r"C:\Users\me");
         assert_eq!(to_native("/C:"), r"C:\.");
         assert_eq!(to_native("/D:/"), r"D:\.");
+    }
+
+    #[test]
+    fn powershell_quoting_doubles_every_quote_it_reads_as_one() {
+        assert_eq!(
+            win(WinShell::PowerShell).quote("a’b‘c‚d‛e'f"),
+            "'a’’b‘‘c‚‚d‛‛e''f'"
+        );
+    }
+
+    #[test]
+    fn sha256_commands_per_dialect() {
+        assert_eq!(
+            RemoteShell::Posix.sha256("/v/it's.mp4"),
+            r"sha256sum -- '/v/it'\''s.mp4' 2>/dev/null || shasum -a 256 -- '/v/it'\''s.mp4'"
+        );
+        assert_eq!(
+            win(WinShell::PowerShell).sha256("/C:/v/a.mp4"),
+            r"(Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\v\a.mp4').Hash"
+        );
+        assert_eq!(
+            win(WinShell::Cmd).sha256("/C:/v/a.mp4"),
+            r#"certutil -hashfile "C:\v\a.mp4" SHA256"#
+        );
+    }
+
+    #[test]
+    fn large_file_probes_per_dialect() {
+        let items = vec!["-x".to_string(), "b c".to_string()];
+        assert_eq!(
+            RemoteShell::Posix
+                .large_file_probe("/srv", &items, 1024)
+                .as_deref(),
+            Some("cd '/srv' && find './-x' './b c' -type f -size +1023c | head -n 1")
+        );
+        assert!(win(WinShell::PowerShell)
+            .large_file_probe("/C:/srv", &items, 1024)
+            .unwrap()
+            .contains("Where-Object { $_.Length -ge 1024 }"));
+        assert_eq!(
+            win(WinShell::Cmd).large_file_probe("/C:/srv", &items, 1024),
+            None
+        );
     }
 
     #[test]
