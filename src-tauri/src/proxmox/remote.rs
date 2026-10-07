@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use tokio::time::{timeout, Duration};
 
-use super::types::{parse_lxc_list, parse_lxc_snapshots, LxcAction, LxcContainer, LxcSnapshot};
+use super::types::{
+    parse_lxc_list, parse_lxc_snapshots, parse_pvesh_lxc, LxcAction, LxcContainer, LxcSnapshot,
+};
 use crate::ssh::client::SshClient;
 use crate::ssh::exec::shell_quote;
 
@@ -86,7 +88,17 @@ async fn exec_command_timeout(
     exec_result(cmd, code, stdout, stderr)
 }
 
+// `pct list` has no memory column; pvesh has it, and needs the same root as pct.
+const PVESH_LXC: &str = "pvesh get /nodes/\"$(hostname)\"/lxc --output-format json";
+
 pub async fn list_containers(handle: &SshHandle) -> Result<Vec<LxcContainer>, String> {
+    if let Some(list) = exec_command(handle, PVESH_LXC)
+        .await
+        .ok()
+        .and_then(|out| parse_pvesh_lxc(&out))
+    {
+        return Ok(list);
+    }
     let output = exec_command(handle, "pct list").await?;
     Ok(parse_lxc_list(&output))
 }
@@ -96,14 +108,18 @@ pub async fn container_action(
     vmid: u32,
     action: &LxcAction,
 ) -> Result<(), String> {
+    exec_command_timeout(handle, &action_command(vmid, action), LONG_EXEC_TIMEOUT).await?;
+    Ok(())
+}
+
+// `pct` has no `restart`: Proxmox VE calls it `reboot`.
+fn action_command(vmid: u32, action: &LxcAction) -> String {
     let verb = match action {
         LxcAction::Start => "start",
         LxcAction::Stop => "stop",
-        LxcAction::Restart => "restart",
+        LxcAction::Restart => "reboot",
     };
-    let cmd = format!("pct {verb} {vmid}");
-    exec_command_timeout(handle, &cmd, LONG_EXEC_TIMEOUT).await?;
-    Ok(())
+    format!("pct {verb} {vmid}")
 }
 
 pub async fn list_snapshots(handle: &SshHandle, vmid: u32) -> Result<Vec<LxcSnapshot>, String> {
@@ -144,7 +160,14 @@ pub async fn snapshot_delete(handle: &SshHandle, vmid: u32, snapname: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::exec_result;
+    use super::{action_command, exec_result, LxcAction};
+
+    #[test]
+    fn restart_reboots_the_container() {
+        assert_eq!(action_command(101, &LxcAction::Restart), "pct reboot 101");
+        assert_eq!(action_command(101, &LxcAction::Start), "pct start 101");
+        assert_eq!(action_command(101, &LxcAction::Stop), "pct stop 101");
+    }
 
     #[test]
     fn a_zero_exit_returns_stdout() {
