@@ -30,7 +30,9 @@
       "stopSharingTitle": "停止共享",
       "leaveSessionTitle": "离开会话",
       "stop": "停止",
-      "leave": "离开"
+      "leave": "离开",
+      "waitingForKey": "正在等待主持人…",
+      "keyFailed": "主持人未共享密钥"
     },
     "sftp": {
       "hostLabel": {
@@ -228,7 +230,8 @@
         "openingShell": "正在打开 Shell",
         "sftpSubsystem": "SFTP 子系统",
         "openingPort": "正在打开端口",
-        "ready": "就绪"
+        "ready": "就绪",
+        "portKnock": "端口敲门"
       },
       "reconnectWait": {
         "offline": {

@@ -1,13 +1,16 @@
 pub(crate) mod endpoint;
 pub(crate) mod large;
+#[cfg(all(test, unix))]
+pub(crate) mod live;
 pub(crate) mod names;
+pub(crate) mod pipe;
 pub(crate) mod sftp_fs;
 
 use crate::commands::sftp::{pump, TransferProgress};
 use crate::error::{AppError, ErrorCode};
-use crate::sftp::backend::skip_unsafe_name;
-use crate::sftp::backend::TransferEvents;
+use crate::sftp::backend::{report_skipped, skip_unsafe_name, TransferEvents};
 use crate::sftp::link::LINK_POLL;
+use async_trait::async_trait;
 use endpoint::{Endpoint, Listed, Reader, Stat, Writer};
 use names::{fingerprint, is_temp_of, temp_name, OLD_EXT, PART_EXT};
 use serde::Serialize;
@@ -40,6 +43,10 @@ pub fn is_resume(tid: &str) -> bool {
 pub fn clear_resume(tid: &str) {
     RESUMING.lock().unwrap().remove(tid);
 }
+
+// (transfer id, target) to the source fingerprint a cut in-place overwrite was writing, for a Retry.
+static IN_PLACE: LazyLock<StdMutex<HashMap<(String, String), String>>> =
+    LazyLock::new(Default::default);
 
 pub(crate) struct CopyCtx<'a, E: TransferEvents> {
     pub events: &'a E,
@@ -83,10 +90,21 @@ impl<'a, E: TransferEvents> CopyCtx<'a, E> {
         let (dir, name) = dst.split(path);
         self.listing(dst, &dir).await.iter().any(|e| {
             e.name == name
-                && !e.stat.is_dir
-                && e.stat.size == want.size
-                && e.stat.mtime == want.mtime
+                && e.stat.is_some_and(|s| {
+                    !s.is_dir && s.size == want.size && s.mtime.is_some() && s.mtime == want.mtime
+                })
         })
+    }
+
+    async fn revive(&self, ends: &[&dyn Endpoint]) -> Option<Result<(), AppError>> {
+        revive(
+            ends,
+            self.events,
+            self.transfer_id,
+            self.token,
+            self.link_wait,
+        )
+        .await
     }
 
     async fn listing(&mut self, fs: &dyn Endpoint, dir: &str) -> &[Listed] {
@@ -102,10 +120,30 @@ enum Attempt {
     Done,
     SourceChanged,
     Mismatch,
+    /// Try again, writing over the target itself.
+    InPlace,
+}
+
+/// Where a file's bytes go: a temp swapped in at the end, or the target itself.
+enum Landing {
+    /// The temp's path, once known.
+    Temp(Option<String>),
+    /// `from`: the fingerprint of the source whose bytes the target now starts with.
+    InPlace { from: Option<String> },
+}
+
+impl Landing {
+    fn restart_in_place(&mut self) {
+        *self = Landing::InPlace { from: None };
+    }
 }
 
 fn cancelled() -> AppError {
     "Transfer cancelled".into()
+}
+
+pub(crate) fn connection_lost() -> AppError {
+    AppError::coded(ErrorCode::ConnectionLost, "Connection lost")
 }
 
 pub(crate) async fn copy_one<E: TransferEvents>(
@@ -127,6 +165,65 @@ pub(crate) struct TreeFile {
     pub stat: Stat,
 }
 
+/// What a [`visit`] callback wants next.
+pub(crate) enum Step {
+    /// Carry on, entering the entry if it is a directory.
+    Go,
+    /// Leave the entry out, and everything under it.
+    Prune,
+    /// End the walk here.
+    Stop,
+}
+
+/// Depth-first over `root` from its listings, skipping entries listed as symlinks: `f` gets each
+/// entry's `/`-joined path under `root`, its full path and its listing. Returns the
+/// directories left out because they lead back to one of their own ancestors.
+pub(crate) async fn visit(
+    src: &dyn Endpoint,
+    root: &str,
+    mut f: impl FnMut(String, &str, &Listed) -> Step,
+) -> Result<Vec<String>, AppError> {
+    let mut looped = Vec::new();
+    let mut stack = vec![(String::new(), Vec::from_iter(src.real_dir(root).await))];
+    while let Some((rel, ancestors)) = stack.pop() {
+        let dir = if rel.is_empty() {
+            root.to_string()
+        } else {
+            src.join(root, &rel)
+        };
+        for e in src.list(&dir).await? {
+            if e.is_symlink {
+                continue;
+            }
+            let path = src.join(&dir, &e.name);
+            let is_dir = e.stat.is_some_and(|s| s.is_dir);
+            let mut real = None;
+            if is_dir {
+                real = src.real_dir(&path).await;
+                if real.as_ref().is_some_and(|r| ancestors.contains(r)) {
+                    looped.push(path);
+                    continue;
+                }
+            }
+            let child = if rel.is_empty() {
+                e.name.clone()
+            } else {
+                format!("{rel}/{}", e.name)
+            };
+            let sub = is_dir.then(|| child.clone());
+            match (f(child, &path, &e), sub) {
+                (Step::Go, Some(sub)) => {
+                    let inner = ancestors.iter().cloned().chain(real).collect();
+                    stack.push((sub, inner));
+                }
+                (Step::Stop, _) => return Ok(looped),
+                _ => {}
+            }
+        }
+    }
+    Ok(looped)
+}
+
 /// Every directory and file under `root`, relative and `/`-joined; `dst_local` as in `skip_unsafe_name`.
 pub(crate) async fn walk<E: TransferEvents>(
     events: &E,
@@ -135,33 +232,25 @@ pub(crate) async fn walk<E: TransferEvents>(
     root: &str,
     dst_local: bool,
 ) -> Result<(Vec<String>, Vec<TreeFile>), AppError> {
-    let (mut dirs, mut files, mut stack) = (Vec::new(), Vec::new(), vec![String::new()]);
-    while let Some(rel) = stack.pop() {
-        let dir = if rel.is_empty() {
-            root.to_string()
-        } else {
-            src.join(root, &rel)
-        };
-        for e in src.list(&dir).await? {
-            let child = if rel.is_empty() {
-                e.name.clone()
-            } else {
-                format!("{rel}/{}", e.name)
-            };
-            let path = src.join(&dir, &e.name);
-            if e.is_symlink || skip_unsafe_name(events, transfer_id, &path, &e.name, dst_local) {
-                continue;
-            }
-            if e.stat.is_dir {
-                dirs.push(child.clone());
-                stack.push(child);
-            } else {
-                files.push(TreeFile {
-                    rel: child,
-                    stat: e.stat,
-                });
-            }
+    let (mut dirs, mut files) = (Vec::new(), Vec::new());
+    let looped = visit(src, root, |rel, path, e| {
+        if skip_unsafe_name(events, transfer_id, path, &e.name, dst_local) {
+            return Step::Prune;
         }
+        let Some(stat) = e.stat else {
+            report_skipped(events, transfer_id, path);
+            return Step::Prune;
+        };
+        if stat.is_dir {
+            dirs.push(rel);
+        } else {
+            files.push(TreeFile { rel, stat });
+        }
+        Step::Go
+    })
+    .await?;
+    for path in looped {
+        report_skipped(events, transfer_id, &path);
     }
     Ok((dirs, files))
 }
@@ -176,12 +265,18 @@ pub(crate) async fn copy_tree<E: TransferEvents>(
     token: &CancellationToken,
 ) -> Result<(), AppError> {
     let (dirs, files) = walk(events, transfer_id, src, src_root, dst.is_local()).await?;
-    dst.mkdir(dst_root).await?;
-    for d in &dirs {
-        dst.mkdir(&dst.join(dst_root, d)).await?;
-    }
     let total = files.iter().map(|f| f.stat.size).sum();
     let mut ctx = CopyCtx::new(events, transfer_id, token, total);
+    let roots = std::iter::once(dst_root.to_string());
+    for d in roots.chain(dirs.iter().map(|d| dst.join(dst_root, d))) {
+        while let Err(e) = dst.mkdir(&d).await {
+            match ctx.revive(&[dst]).await {
+                Some(Ok(())) => continue,
+                Some(Err(waited)) => return Err(waited),
+                None => return Err(e),
+            }
+        }
+    }
     let resume = is_resume(transfer_id);
     for f in &files {
         if token.is_cancelled() {
@@ -207,12 +302,21 @@ pub(crate) async fn resumable_copy<E: TransferEvents>(
     ctx: &mut CopyCtx<'_, E>,
 ) -> Result<(), AppError> {
     let base = ctx.transferred;
-    let mut part = None;
+    let key = (ctx.transfer_id.to_string(), dst_path.to_string());
+    let mut landing = match IN_PLACE.lock().unwrap().get(&key) {
+        Some(fp) => Landing::InPlace {
+            from: Some(fp.clone()),
+        },
+        None => Landing::Temp(None),
+    };
     let (mut changed, mut mismatched, mut relost) = (0, 0, 0);
     loop {
         ctx.transferred = base;
-        let err = match attempt(src, src_path, dst, dst_path, ctx, base, &mut part).await {
+        let attempted = attempt(src, src_path, dst, dst_path, ctx, base, &mut landing).await;
+        remember_in_place(&key, &landing, matches!(attempted, Ok(Attempt::Done)));
+        let err = match attempted {
             Ok(Attempt::Done) => return Ok(()),
+            Ok(Attempt::InPlace) => continue,
             Ok(Attempt::SourceChanged) => {
                 changed += 1;
                 if changed >= RESTARTS {
@@ -238,15 +342,7 @@ pub(crate) async fn resumable_copy<E: TransferEvents>(
         let err = if ctx.token.is_cancelled() {
             err
         } else {
-            match revive(
-                &[src, dst],
-                ctx.events,
-                ctx.transfer_id,
-                ctx.token,
-                ctx.link_wait,
-            )
-            .await
-            {
+            match ctx.revive(&[src, dst]).await {
                 Some(Ok(())) => continue,
                 Some(Err(e)) => e,
                 None if err.code() == Some(ErrorCode::ConnectionLost) && relost < RESTARTS => {
@@ -257,13 +353,21 @@ pub(crate) async fn resumable_copy<E: TransferEvents>(
             }
         };
         if ctx.token.is_cancelled() {
-            if let Some(p) = &part {
+            if let Landing::Temp(Some(p)) = &landing {
                 let _ = tokio::time::timeout(Duration::from_millis(500), dst.remove(p)).await;
             }
             return Err(cancelled());
         }
         return Err(err);
     }
+}
+
+fn remember_in_place(key: &(String, String), landing: &Landing, done: bool) {
+    let mut in_place = IN_PLACE.lock().unwrap();
+    match landing {
+        Landing::InPlace { from: Some(fp) } if !done => in_place.insert(key.clone(), fp.clone()),
+        _ => in_place.remove(key),
+    };
 }
 
 /// Waits (bounded) for every dead link among `ends`; None when none is dead.
@@ -302,12 +406,28 @@ pub(crate) async fn revive<E: TransferEvents>(
     Some(result)
 }
 
-/// Ends `work` once a link is gone: closed outright, or failing a probe after `stall` without progress.
-async fn unless_lost<T>(
+/// Says a stalled transfer can never move again, whatever a link probe finds.
+#[async_trait]
+pub(crate) trait Stuck: Sync {
+    async fn stuck(&self) -> bool;
+}
+
+/// A fixed answer: per-file copies pass `false` and rely on the probe alone.
+#[async_trait]
+impl Stuck for bool {
+    async fn stuck(&self) -> bool {
+        *self
+    }
+}
+
+/// Ends `work` once a link is gone: closed outright, or `stuck` or failing a probe after
+/// `stall` without progress.
+pub(crate) async fn unless_lost<T>(
     work: impl Future<Output = Result<T, AppError>>,
     ends: &[&dyn Endpoint],
     seen: &AtomicU64,
     stall: Duration,
+    stuck: &dyn Stuck,
     token: &CancellationToken,
 ) -> Result<T, AppError> {
     tokio::pin!(work);
@@ -323,14 +443,14 @@ async fn unless_lost<T>(
                 } else if last.1.elapsed() >= stall {
                     last.1 = Instant::now();
                     tokio::select! {
-                        dead = dead_ends(ends) => !dead.is_empty(),
+                        dead = async { stuck.stuck().await || !dead_ends(ends).await.is_empty() } => dead,
                         _ = token.cancelled() => return Err(cancelled()),
                     }
                 } else {
                     false
                 };
                 if stalled || ends.iter().any(|e| e.link_lost()) {
-                    return Err(AppError::coded(ErrorCode::ConnectionLost, "Connection lost"));
+                    return Err(connection_lost());
                 }
             }
         }
@@ -364,7 +484,7 @@ async fn attempt<E: TransferEvents>(
     dst_path: &str,
     ctx: &mut CopyCtx<'_, E>,
     base: u64,
-    part: &mut Option<String>,
+    landing: &mut Landing,
 ) -> Result<Attempt, AppError> {
     let resolved = dst.resolve(dst_path).await?;
     let dst_path = resolved.as_str();
@@ -375,11 +495,31 @@ async fn attempt<E: TransferEvents>(
     let fp = fingerprint(src_path, stat.size, stat.mtime);
     let part_path = dst.join(&dir, &temp_name(&name, &fp, PART_EXT));
     let old_path = dst.join(&dir, &temp_name(&name, &fp, OLD_EXT));
-    *part = Some(part_path.clone());
-    if dst.stat(dst_path).await?.is_none() && dst.stat(&old_path).await?.is_some() {
+    let mut target = dst.stat(dst_path).await?;
+    if target.is_none() && dst.stat(&old_path).await?.is_some() {
         dst.rename(&old_path, dst_path).await?;
+        target = dst.stat(dst_path).await?;
     }
-    let offset = resume_offset(src, src_path, dst, &part_path, stat.size).await?;
+    if matches!(landing, Landing::Temp(_))
+        && dst.overwrites_in_place()
+        && target.is_some_and(|t| !t.is_dir)
+    {
+        landing.restart_in_place();
+    }
+    let in_place = matches!(landing, Landing::InPlace { .. });
+    let write_to = if in_place {
+        dst_path
+    } else {
+        part_path.as_str()
+    };
+    if !in_place {
+        *landing = Landing::Temp(Some(part_path.clone()));
+    }
+    // In place, carry on only from bytes written from this very source (this transfer or its Retry).
+    let offset = match landing {
+        Landing::InPlace { from } if from.as_deref() != Some(fp.as_str()) => 0,
+        _ => resume_offset(src, src_path, dst, write_to, stat.size).await?,
+    };
     if offset > 0 {
         let offset = base + offset;
         emit(
@@ -391,37 +531,60 @@ async fn attempt<E: TransferEvents>(
     }
     ctx.transferred = base + offset;
     ctx.progress();
-    let mut writer = match dst.open_write(&part_path, offset).await {
-        Err(e) if offset == 0 && e.code() == Some(ErrorCode::PermissionDenied) => {
-            return copy_in_place(src, src_path, dst, dst_path, stat.mtime, ctx).await;
+    let mut writer = match dst.open_write(write_to, offset, stat.size - offset).await {
+        Err(e) if !in_place && offset == 0 && e.code() == Some(ErrorCode::PermissionDenied) => {
+            log::info!("no room for a temp file next to {dst_path}; writing it in place");
+            landing.restart_in_place();
+            return Ok(Attempt::InPlace);
         }
         opened => opened?,
     };
+    if in_place {
+        *landing = Landing::InPlace {
+            from: Some(fp.clone()),
+        };
+    }
     let mut reader = src.open_read(src_path, offset).await?;
     copy_bytes(&mut reader, &mut writer, &[src, dst], ctx).await?;
     drop(reader);
-    let now = src.stat(src_path).await?.map(|s| (s.size, s.mtime));
-    if now != Some((stat.size, stat.mtime)) {
-        let _ = dst.remove(&part_path).await;
-        return Ok(Attempt::SourceChanged);
-    }
-    if dst.stat(&part_path).await?.map_or(0, |s| s.size) != stat.size {
-        let _ = dst.remove(&part_path).await;
-        return Ok(Attempt::Mismatch);
-    }
-    if offset > 0 && !same_hash(src, src_path, dst, &part_path, ctx.token).await? {
-        let _ = dst.remove(&part_path).await;
-        return Ok(Attempt::Mismatch);
+    let verdict =
+        if src.stat(src_path).await?.map(|s| (s.size, s.mtime)) != Some((stat.size, stat.mtime)) {
+            Some(Attempt::SourceChanged)
+        } else if dst.stat(write_to).await?.map_or(0, |s| s.size) != stat.size
+            || (offset > 0 && !same_hash(src, src_path, dst, write_to, ctx.token).await?)
+        {
+            Some(Attempt::Mismatch)
+        } else {
+            None
+        };
+    if let Some(verdict) = verdict {
+        if in_place {
+            landing.restart_in_place();
+        } else {
+            let _ = dst.remove(&part_path).await;
+        }
+        return Ok(verdict);
     }
     if ctx.token.is_cancelled() {
         return Err(cancelled());
     }
-    if let Some(mode) = dst.stat(dst_path).await?.and_then(|t| t.mode) {
-        if let Err(e) = dst.set_mode(&part_path, mode).await {
-            log::warn!("could not keep the mode of {dst_path}: {e}");
+    if !in_place {
+        if let Some(mode) = dst.stat(dst_path).await?.and_then(|t| t.mode) {
+            if let Err(e) = dst.set_mode(&part_path, mode).await {
+                log::warn!("could not keep the mode of {dst_path}: {e}");
+            }
+        }
+        if let Err(e) = dst.replace(&part_path, dst_path, &old_path).await {
+            // An upload-only account may write files but never rename one.
+            if !dst.overwrites_in_place() || target.is_some() || dst.link_dead().await {
+                return Err(e);
+            }
+            log::info!("could not move {part_path} into place ({e}); writing it in place");
+            let _ = dst.remove(&part_path).await;
+            landing.restart_in_place();
+            return Ok(Attempt::InPlace);
         }
     }
-    dst.replace(&part_path, dst_path, &old_path).await?;
     keep_mtime(dst, dst_path, stat.mtime).await;
     sweep(dst, &dir, &name, ctx).await;
     Ok(Attempt::Done)
@@ -445,29 +608,13 @@ async fn copy_bytes<E: TransferEvents>(
         writer
             .shutdown()
             .await
-            .map_err(|e| AppError::from(format!("Flush error: {e}")))
+            .map_err(|e| AppError::caused("Flush error", &e))
     };
-    unless_lost(copied, ends, &seen, stall, token).await
+    unless_lost(copied, ends, &seen, stall, &false, token).await
 }
 
-/// For a folder that lets us rewrite the file but not create a temp next to it: the old way.
-async fn copy_in_place<E: TransferEvents>(
-    src: &dyn Endpoint,
-    src_path: &str,
-    dst: &dyn Endpoint,
-    dst_path: &str,
-    mtime: u64,
-    ctx: &mut CopyCtx<'_, E>,
-) -> Result<Attempt, AppError> {
-    log::info!("no room for a temp file next to {dst_path}; writing it in place");
-    let mut writer = dst.open_write(dst_path, 0).await?;
-    let mut reader = src.open_read(src_path, 0).await?;
-    copy_bytes(&mut reader, &mut writer, &[src, dst], ctx).await?;
-    keep_mtime(dst, dst_path, mtime).await;
-    Ok(Attempt::Done)
-}
-
-async fn keep_mtime(dst: &dyn Endpoint, path: &str, mtime: u64) {
+async fn keep_mtime(dst: &dyn Endpoint, path: &str, mtime: Option<u64>) {
+    let Some(mtime) = mtime else { return };
     if let Err(e) = dst.set_mtime(path, mtime).await {
         log::warn!("could not keep the mtime of {path}: {e}");
     }
@@ -483,7 +630,7 @@ async fn resume_offset(
     let Some(have) = dst.stat(part).await?.map(|s| s.size) else {
         return Ok(0);
     };
-    if have == 0 || have > size {
+    if have == 0 || have > size || !dst.appends(part, have).await {
         return Ok(0);
     }
     let (a, b) = tokio::try_join!(tail(src, src_path, have), tail(dst, part, have))?;
@@ -497,7 +644,7 @@ async fn tail(fs: &dyn Endpoint, path: &str, end: u64) -> Result<Vec<u8>, AppErr
         .await?
         .read_exact(&mut buf)
         .await
-        .map_err(|e| AppError::from(format!("Read error: {e}")))?;
+        .map_err(|e| AppError::caused("Read error", &e))?;
     Ok(buf)
 }
 
@@ -592,13 +739,31 @@ pub(crate) mod engine_tests {
         .unwrap();
         assert_eq!(std::fs::read(b.path().join("v.mp4")).unwrap(), data);
         let landed = LocalFs.stat(&s(&b.path().join("v.mp4"))).await.unwrap();
-        assert_eq!(landed.unwrap().mtime, 1_700_000_000);
+        assert_eq!(landed.unwrap().mtime, Some(1_700_000_000));
         assert_eq!(entries(b.path()), ["v.mp4"]);
         assert_eq!(
             rec.last("sftp-progress-t").unwrap()["transferred"],
             1_000_000
         );
         assert_eq!(rec.count("sftp-resumed-t"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_source_without_an_mtime_never_dates_the_copy_1970() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("v"), b"data").unwrap();
+        let src = TestFs {
+            no_mtime: true,
+            ..Default::default()
+        };
+        let (from, to) = (s(&a.path().join("v")), s(&b.path().join("v")));
+        let (rec, token) = (Recorder::default(), CancellationToken::new());
+        copy_one(&rec, &src, &from, &LocalFs, &to, "t", &token)
+            .await
+            .unwrap();
+        let landed = std::fs::metadata(&to).unwrap().modified().unwrap();
+        let a_day = std::time::Duration::from_secs(86_400);
+        assert!(landed > std::time::UNIX_EPOCH + a_day);
     }
 
     #[tokio::test]
@@ -725,6 +890,36 @@ pub(crate) mod engine_tests {
         assert_eq!(std::fs::read(b.path().join("v")).unwrap(), b"original");
     }
 
+    #[tokio::test]
+    async fn an_old_file_left_beside_the_target_does_not_block_the_overwrite() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let src = a.path().join("v");
+        std::fs::write(&src, b"new").unwrap();
+        let st = LocalFs.stat(&s(&src)).await.unwrap().unwrap();
+        let fp = names::fingerprint(&s(&src), st.size, st.mtime);
+        std::fs::write(b.path().join("v"), b"current").unwrap();
+        std::fs::write(
+            b.path().join(names::temp_name("v", &fp, names::OLD_EXT)),
+            b"superseded",
+        )
+        .unwrap();
+        let dst = TestFs {
+            sftp_rename: true,
+            ..Default::default()
+        };
+        copy_local(
+            &Recorder::default(),
+            &src,
+            &dst,
+            &b.path().join("v"),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(b.path().join("v")).unwrap(), b"new");
+        assert_eq!(entries(b.path()), ["v"]);
+    }
+
     async fn seed_part(
         src: &std::path::Path,
         dst_dir: &std::path::Path,
@@ -748,6 +943,113 @@ pub(crate) mod engine_tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_in_place_endpoint_overwrites_without_a_temp_or_a_rename() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("v"), b"new").unwrap();
+        std::fs::write(b.path().join("v"), b"current").unwrap();
+        let dst = TestFs {
+            in_place: true,
+            ..Default::default()
+        };
+        let token = CancellationToken::new();
+        copy_local(
+            &Recorder::default(),
+            &a.path().join("v"),
+            &dst,
+            &b.path().join("v"),
+            &token,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(b.path().join("v")).unwrap(), b"new");
+        assert_eq!(entries(b.path()), ["v"]);
+        assert_eq!(dst.state.lock().unwrap().renames, 0);
+    }
+
+    #[tokio::test]
+    async fn a_cut_in_place_overwrite_resumes_from_the_bytes_it_wrote() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("v"), noise(500_000)).unwrap();
+        std::fs::write(b.path().join("v"), b"current").unwrap();
+        let dst = TestFs {
+            in_place: true,
+            cut_first_write_after: Some(200_000),
+            dead_until_waited: true,
+            ..Default::default()
+        };
+        let rec = Recorder::default();
+        let token = CancellationToken::new();
+        copy_local(&rec, &a.path().join("v"), &dst, &b.path().join("v"), &token)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(b.path().join("v")).unwrap(), noise(500_000));
+        assert_eq!(rec.last("sftp-resumed-t").unwrap()["offset"], 200_000);
+        assert_eq!(entries(b.path()), ["v"]);
+        assert_eq!(dst.state.lock().unwrap().renames, 0);
+    }
+
+    #[tokio::test]
+    async fn a_retried_in_place_overwrite_resumes_from_the_bytes_it_wrote() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("v"), noise(500_000)).unwrap();
+        std::fs::write(b.path().join("v"), b"current").unwrap();
+        let (src, to) = (s(&a.path().join("v")), s(&b.path().join("v")));
+        let token = CancellationToken::new();
+        let cut = TestFs {
+            in_place: true,
+            cut_first_write_after: Some(200_000),
+            ..Default::default()
+        };
+        let rec = Recorder::default();
+        copy_one(&rec, &LocalFs, &src, &cut, &to, "retried", &token)
+            .await
+            .unwrap_err();
+        let in_place = TestFs {
+            in_place: true,
+            ..Default::default()
+        };
+        let rec = Recorder::default();
+        let r = copy_one(&rec, &LocalFs, &src, &in_place, &to, "retried", &token).await;
+        r.unwrap();
+        assert_eq!(std::fs::read(b.path().join("v")).unwrap(), noise(500_000));
+        assert_eq!(rec.last("sftp-resumed-retried").unwrap()["offset"], 200_000);
+    }
+
+    #[tokio::test]
+    async fn a_refused_rename_of_a_new_file_writes_it_in_place_only_where_overwrites_are() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("v"), b"new").unwrap();
+        let token = CancellationToken::new();
+        let refusing = |in_place| TestFs {
+            in_place,
+            fail_renames: vec![1],
+            ..Default::default()
+        };
+        let to = b.path().join("v");
+        copy_local(
+            &Recorder::default(),
+            &a.path().join("v"),
+            &refusing(false),
+            &to,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert!(!to.exists());
+        copy_local(
+            &Recorder::default(),
+            &a.path().join("v"),
+            &refusing(true),
+            &to,
+            &token,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"new");
+        assert_eq!(entries(b.path()), ["v"]);
     }
 
     #[tokio::test]
@@ -1040,6 +1342,90 @@ pub(crate) mod engine_tests {
         assert_eq!(std::fs::read(dst.join("sub/c")).unwrap(), b"");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_entry_without_metadata_is_skipped_and_reported() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(a.path());
+        let dangling = a.path().join("sub/dangling");
+        std::os::unix::fs::symlink("missing", &dangling).unwrap();
+        let dst = b.path().join("copy");
+        let rec = Recorder::default();
+        copy_dir(&rec, a.path(), &dst, "t3").await;
+        assert_eq!(rec.skipped("t3"), [s(&dangling)]);
+        assert_eq!(std::fs::read(dst.join("sub/b")).unwrap(), noise(200_000));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_back_to_an_ancestor_is_skipped_and_other_links_followed() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(a.path());
+        std::fs::write(b.path().join("x"), b"x").unwrap();
+        let up = a.path().join("sub/up");
+        std::os::unix::fs::symlink("..", &up).unwrap();
+        std::os::unix::fs::symlink(b.path(), a.path().join("sub/ext")).unwrap();
+        std::os::unix::fs::symlink("../a", a.path().join("sub/f")).unwrap();
+        let rec = Recorder::default();
+        let (mut dirs, files) = walk(&rec, "t4", &LocalFs, &s(a.path()), true)
+            .await
+            .unwrap();
+        let mut files: Vec<_> = files.into_iter().map(|f| f.rel).collect();
+        dirs.sort();
+        files.sort();
+        assert_eq!(dirs, ["sub", "sub/empty", "sub/ext"]);
+        assert_eq!(files, ["a", "sub/b", "sub/c", "sub/ext/x", "sub/f"]);
+        assert_eq!(rec.skipped("t4"), [s(&up)]);
+    }
+
+    async fn copy_dir_to(
+        dst: &TestFs,
+        from: &std::path::Path,
+        to: &std::path::Path,
+    ) -> Result<(), AppError> {
+        let token = CancellationToken::new();
+        copy_tree(
+            &Recorder::default(),
+            &LocalFs,
+            &s(from),
+            dst,
+            &s(to),
+            "t",
+            &token,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_folder_mkdir_lost_with_the_link_waits_and_carries_on() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(a.path());
+        let dst = TestFs {
+            lose_first_mkdir: true,
+            dead_until_waited: true,
+            ..Default::default()
+        };
+        let to = b.path().join("copy");
+        copy_dir_to(&dst, a.path(), &to).await.unwrap();
+        assert!(dst.state.lock().unwrap().waited);
+        assert_eq!(std::fs::read(to.join("sub/b")).unwrap(), noise(200_000));
+        assert!(to.join("sub/empty").is_dir());
+    }
+
+    #[tokio::test]
+    async fn a_folder_mkdir_failing_on_a_live_link_fails_the_copy() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(a.path());
+        let dst = TestFs {
+            lose_first_mkdir: true,
+            ..Default::default()
+        };
+        let e = copy_dir_to(&dst, a.path(), &b.path().join("copy"))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code(), Some(ErrorCode::ConnectionLost));
+    }
+
     #[tokio::test]
     async fn a_resumed_folder_skips_landed_files_and_redoes_the_rest() {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -1068,6 +1454,26 @@ pub(crate) mod engine_tests {
     }
 
     #[tokio::test]
+    async fn a_resumed_folder_never_skips_a_file_whose_mtime_is_unknown() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("f"), b"new!").unwrap();
+        let dst = b.path().join("copy");
+        std::fs::create_dir(&dst).unwrap();
+        std::fs::write(dst.join("f"), b"old!").unwrap();
+        let blind = TestFs {
+            no_mtime: true,
+            ..Default::default()
+        };
+        let (rec, token) = (Recorder::default(), CancellationToken::new());
+        mark_resume("t3");
+        let (from, to) = (s(a.path()), s(&dst));
+        let copied = copy_tree(&rec, &blind, &from, &blind, &to, "t3", &token).await;
+        clear_resume("t3");
+        copied.unwrap();
+        assert_eq!(std::fs::read(dst.join("f")).unwrap(), b"new!");
+    }
+
+    #[tokio::test]
     async fn a_first_run_never_skips_an_identical_looking_file() {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         std::fs::write(a.path().join("f"), b"new!").unwrap();
@@ -1080,7 +1486,7 @@ pub(crate) mod engine_tests {
             .unwrap()
             .unwrap();
         LocalFs
-            .set_mtime(&s(&dst.join("f")), st.mtime)
+            .set_mtime(&s(&dst.join("f")), st.mtime.unwrap())
             .await
             .unwrap();
         copy_dir(&Recorder::default(), a.path(), &dst, "t2").await;

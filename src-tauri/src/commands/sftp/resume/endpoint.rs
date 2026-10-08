@@ -1,3 +1,4 @@
+use crate::commands::sftp::RemoteFile;
 use crate::error::{AppError, ErrorCode};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -11,31 +12,73 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Stat {
     pub size: u64,
-    pub mtime: u64,
+    /// None when the server reports none: never stamped on a copy, never matched.
+    pub mtime: Option<u64>,
     pub is_dir: bool,
     pub mode: Option<u32>,
 }
 
 pub(crate) struct Listed {
     pub name: String,
-    pub stat: Stat,
+    /// None when the entry's metadata can't be read, e.g. a dangling symlink.
+    pub stat: Option<Stat>,
     pub is_symlink: bool,
+    /// Whether the listing vouches for the entry's type and size; when it
+    /// doesn't, a caller that needs them asks `stat`.
+    pub complete: bool,
+}
+
+impl From<RemoteFile> for Listed {
+    fn from(f: RemoteFile) -> Self {
+        Listed {
+            stat: Some(Stat {
+                size: f.size,
+                mtime: f.modified,
+                is_dir: f.is_dir,
+                mode: f.permissions,
+            }),
+            is_symlink: f.is_symlink,
+            name: f.name,
+            // A listing that can't tell an unknown size from 0 (docker's
+            // `stat || echo 0`) doesn't vouch for it.
+            complete: false,
+        }
+    }
 }
 
 pub(crate) type Reader = Box<dyn AsyncRead + Send + Unpin>;
 pub(crate) type Writer = Box<dyn AsyncWrite + Send + Unpin>;
 
-/// One side of a copy: this machine's disk or an SFTP session.
+/// One side of a copy: this machine's disk or a remote file backend.
 #[async_trait]
 pub(crate) trait Endpoint: Send + Sync {
     fn is_local(&self) -> bool;
-    fn split(&self, path: &str) -> (String, String);
-    fn join(&self, dir: &str, rel: &str) -> String;
+    fn split(&self, path: &str) -> (String, String) {
+        let trimmed = path.trim_end_matches('/');
+        match trimmed.rfind('/') {
+            Some(0) => ("/".into(), trimmed[1..].into()),
+            Some(i) => (trimmed[..i].into(), trimmed[i + 1..].into()),
+            None => (".".into(), trimmed.into()),
+        }
+    }
+    fn join(&self, dir: &str, rel: &str) -> String {
+        format!("{}/{rel}", dir.trim_end_matches('/'))
+    }
     async fn stat(&self, path: &str) -> Result<Option<Stat>, AppError>;
     async fn list(&self, dir: &str) -> Result<Vec<Listed>, AppError>;
     async fn mkdir(&self, path: &str) -> Result<(), AppError>;
     async fn open_read(&self, path: &str, offset: u64) -> Result<Reader, AppError>;
-    async fn open_write(&self, path: &str, offset: u64) -> Result<Writer, AppError>;
+    /// `offset` is 0 (truncate) or the file's current size; `len` bytes follow.
+    async fn open_write(&self, path: &str, offset: u64, len: u64) -> Result<Writer, AppError>;
+    /// Whether a write can carry on from the `have` bytes `path` already holds.
+    async fn appends(&self, _path: &str, _have: u64) -> bool {
+        true
+    }
+    /// Rewrite an existing file rather than swap a temp in: the server keeps per-file state
+    /// (mode, versions, shares) that a swap would lose.
+    fn overwrites_in_place(&self) -> bool {
+        false
+    }
     async fn rename(&self, from: &str, to: &str) -> Result<(), AppError>;
     async fn remove(&self, path: &str) -> Result<(), AppError>;
     async fn set_mtime(&self, path: &str, mtime: u64) -> Result<(), AppError>;
@@ -45,6 +88,10 @@ pub(crate) trait Endpoint: Send + Sync {
     /// The file a write to `path` lands in: a symlink's target, else `path` itself.
     async fn resolve(&self, path: &str) -> Result<String, AppError> {
         Ok(path.to_string())
+    }
+    /// A directory's canonical path, where listings follow symlinks; None where they never do.
+    async fn real_dir(&self, _path: &str) -> Option<String> {
+        None
     }
     /// None when no hash is to be had; an error only when the link died while hashing.
     async fn hash(&self, path: &str, token: &CancellationToken)
@@ -87,6 +134,9 @@ pub(crate) async fn swap_aside<E: Endpoint + ?Sized>(
         Some(s) if s.is_dir => return Err(in_the_way(target)),
         Some(_) => {}
     }
+    if fs.stat(old).await?.is_some() {
+        fs.remove(old).await?;
+    }
     fs.rename(target, old).await?;
     if let Err(e) = fs.rename(part, target).await {
         let _ = fs.rename(old, target).await;
@@ -99,11 +149,11 @@ pub(crate) async fn swap_aside<E: Endpoint + ?Sized>(
 }
 
 fn local_stat(m: &std::fs::Metadata) -> Stat {
+    // Unknown only when unreadable; a date before 1970 clamps to 0, as it always has.
     let mtime = m
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs());
+        .map(|t| t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()));
     #[cfg(unix)]
     let mode = Some(std::os::unix::fs::PermissionsExt::mode(&m.permissions()));
     #[cfg(not(unix))]
@@ -154,13 +204,16 @@ impl Endpoint for LocalFs {
         let mut rd = tokio::fs::read_dir(dir).await?;
         let mut out = Vec::new();
         while let Some(e) = rd.next_entry().await? {
-            if let Ok(m) = tokio::fs::metadata(e.path()).await {
-                out.push(Listed {
-                    name: e.file_name().to_string_lossy().into_owned(),
-                    stat: local_stat(&m),
-                    is_symlink: false,
-                });
-            }
+            out.push(Listed {
+                name: e.file_name().to_string_lossy().into_owned(),
+                stat: tokio::fs::metadata(e.path())
+                    .await
+                    .ok()
+                    .as_ref()
+                    .map(local_stat),
+                is_symlink: false,
+                complete: true,
+            });
         }
         Ok(out)
     }
@@ -175,7 +228,7 @@ impl Endpoint for LocalFs {
         Ok(Box::new(f))
     }
 
-    async fn open_write(&self, path: &str, offset: u64) -> Result<Writer, AppError> {
+    async fn open_write(&self, path: &str, offset: u64, _len: u64) -> Result<Writer, AppError> {
         if let Some(parent) = Path::new(path).parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -226,6 +279,11 @@ impl Endpoint for LocalFs {
         }
     }
 
+    async fn real_dir(&self, path: &str) -> Option<String> {
+        let real = tokio::fs::canonicalize(path).await.ok()?;
+        Some(real.to_string_lossy().into_owned())
+    }
+
     async fn hash(
         &self,
         path: &str,
@@ -263,18 +321,64 @@ impl Endpoint for LocalFs {
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
+    use crate::commands::sftp::resume::connection_lost;
+    use std::pin::Pin;
     use std::sync::Mutex;
+    use std::task::{ready, Context, Poll};
 
-    /// LocalFs with faults: renames that fail by call number, a hash that lies once,
-    /// a link that reads dead until waited on.
+    /// Passes `left` bytes through, flushed, then fails.
+    struct CutAfter {
+        inner: Writer,
+        left: u64,
+    }
+
+    impl AsyncWrite for CutAfter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            let this = &mut *self;
+            if this.left == 0 {
+                ready!(Pin::new(&mut this.inner).poll_flush(cx))?;
+                return Poll::Ready(Err(std::io::Error::other("cut")));
+            }
+            let n = buf.len().min(this.left as usize);
+            let written = ready!(Pin::new(&mut this.inner).poll_write(cx, &buf[..n]))?;
+            this.left -= written as u64;
+            Poll::Ready(Ok(written))
+        }
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    /// LocalFs with faults: renames that fail by call number or never overwrite (as on SFTP),
+    /// a hash that lies once, a link that reads dead until waited on, a server that reports
+    /// no mtimes.
     #[derive(Default)]
     pub(crate) struct TestFs {
         pub fail_renames: Vec<usize>,
+        pub sftp_rename: bool,
+        pub no_mtime: bool,
+        pub in_place: bool,
         pub lie_hash_once: bool,
         pub hash_fails_once: bool,
         pub cancel_on_hash: Option<CancellationToken>,
         pub lose_first_write: bool,
+        pub cut_first_write_after: Option<u64>,
+        pub lose_first_mkdir: bool,
         pub dead_until_waited: bool,
+        /// Listings that don't vouch for type or size, as a bare SFTP server sends them.
+        pub bare_listing: bool,
+        /// Fails this many link probes, then answers without being waited for.
+        pub dead_probes: usize,
         pub state: Mutex<TestState>,
     }
 
@@ -284,11 +388,25 @@ pub(crate) mod tests_support {
         pub lied: bool,
         pub hash_failed: bool,
         pub write_lost: bool,
+        pub write_cut: bool,
+        pub mkdir_lost: bool,
         pub waited: bool,
+        pub stats: usize,
+        pub lists: usize,
+        pub probes: usize,
     }
 
     fn once(flag: bool, done: &mut bool) -> bool {
         flag && !std::mem::replace(done, true)
+    }
+
+    impl TestFs {
+        fn shown(&self, mut s: Stat) -> Stat {
+            if self.no_mtime {
+                s.mtime = None;
+            }
+            s
+        }
     }
 
     #[async_trait]
@@ -303,28 +421,58 @@ pub(crate) mod tests_support {
             LocalFs.join(d, r)
         }
         async fn stat(&self, p: &str) -> Result<Option<Stat>, AppError> {
-            LocalFs.stat(p).await
+            self.state.lock().unwrap().stats += 1;
+            Ok(LocalFs.stat(p).await?.map(|s| self.shown(s)))
         }
         async fn list(&self, d: &str) -> Result<Vec<Listed>, AppError> {
-            LocalFs.list(d).await
+            self.state.lock().unwrap().lists += 1;
+            let mut listed = LocalFs.list(d).await?;
+            for e in &mut listed {
+                e.stat = e.stat.map(|s| self.shown(s));
+                if self.bare_listing {
+                    e.stat = Some(Stat {
+                        size: 0,
+                        mtime: None,
+                        is_dir: false,
+                        mode: None,
+                    });
+                    e.complete = false;
+                }
+            }
+            Ok(listed)
         }
         async fn mkdir(&self, p: &str) -> Result<(), AppError> {
+            if once(
+                self.lose_first_mkdir,
+                &mut self.state.lock().unwrap().mkdir_lost,
+            ) {
+                return Err(connection_lost());
+            }
             LocalFs.mkdir(p).await
         }
         async fn open_read(&self, p: &str, o: u64) -> Result<Reader, AppError> {
             LocalFs.open_read(p, o).await
         }
-        async fn open_write(&self, p: &str, o: u64) -> Result<Writer, AppError> {
+        async fn open_write(&self, p: &str, o: u64, n: u64) -> Result<Writer, AppError> {
             if once(
                 self.lose_first_write,
                 &mut self.state.lock().unwrap().write_lost,
             ) {
-                return Err(AppError::coded(
-                    ErrorCode::ConnectionLost,
-                    "Connection lost",
-                ));
+                return Err(connection_lost());
             }
-            LocalFs.open_write(p, o).await
+            let writer = LocalFs.open_write(p, o, n).await?;
+            match self.cut_first_write_after {
+                Some(left) if once(true, &mut self.state.lock().unwrap().write_cut) => {
+                    Ok(Box::new(CutAfter {
+                        inner: writer,
+                        left,
+                    }))
+                }
+                _ => Ok(writer),
+            }
+        }
+        fn overwrites_in_place(&self) -> bool {
+            self.in_place
         }
         async fn rename(&self, from: &str, to: &str) -> Result<(), AppError> {
             let n = {
@@ -332,7 +480,9 @@ pub(crate) mod tests_support {
                 st.renames += 1;
                 st.renames
             };
-            if self.fail_renames.contains(&n) {
+            if self.fail_renames.contains(&n)
+                || (self.sftp_rename && LocalFs.stat(to).await?.is_some())
+            {
                 return Err("rename refused".into());
             }
             LocalFs.rename(from, to).await
@@ -352,10 +502,7 @@ pub(crate) mod tests_support {
                 self.hash_fails_once,
                 &mut self.state.lock().unwrap().hash_failed,
             ) {
-                return Err(AppError::coded(
-                    ErrorCode::ConnectionLost,
-                    "Connection lost",
-                ));
+                return Err(connection_lost());
             }
             if once(self.lie_hash_once, &mut self.state.lock().unwrap().lied) {
                 return Ok(Some("0".repeat(64)));
@@ -363,7 +510,9 @@ pub(crate) mod tests_support {
             LocalFs.hash(p, t).await
         }
         async fn link_dead(&self) -> bool {
-            self.dead_until_waited && !self.state.lock().unwrap().waited
+            let mut state = self.state.lock().unwrap();
+            state.probes += 1;
+            state.probes <= self.dead_probes || (self.dead_until_waited && !state.waited)
         }
         async fn wait_for_link(
             &self,
@@ -389,10 +538,10 @@ mod tests {
     async fn local_writes_at_an_offset_and_reads_from_one() {
         let d = tempfile::tempdir().unwrap();
         let f = p(&d, "sub/x");
-        let mut w = LocalFs.open_write(&f, 0).await.unwrap();
+        let mut w = LocalFs.open_write(&f, 0, 5).await.unwrap();
         w.write_all(b"hello").await.unwrap();
         w.shutdown().await.unwrap();
-        let mut w = LocalFs.open_write(&f, 3).await.unwrap();
+        let mut w = LocalFs.open_write(&f, 3, 3).await.unwrap();
         w.write_all(b"LO!").await.unwrap();
         w.shutdown().await.unwrap();
         let mut s = String::new();
@@ -413,7 +562,7 @@ mod tests {
         std::fs::write(d.path().join("f"), b"abc").unwrap();
         LocalFs.set_mtime(&p(&d, "f"), 1_000_000).await.unwrap();
         let s = LocalFs.stat(&p(&d, "f")).await.unwrap().unwrap();
-        assert_eq!((s.size, s.mtime, s.is_dir), (3, 1_000_000, false));
+        assert_eq!((s.size, s.mtime, s.is_dir), (3, Some(1_000_000), false));
         assert!(
             LocalFs
                 .stat(&d.path().to_string_lossy())
@@ -422,6 +571,16 @@ mod tests {
                 .unwrap()
                 .is_dir
         );
+    }
+
+    #[tokio::test]
+    async fn local_stat_clamps_a_date_before_1970_to_0() {
+        let d = tempfile::tempdir().unwrap();
+        let f = std::fs::File::create(d.path().join("f")).unwrap();
+        f.set_modified(UNIX_EPOCH - Duration::from_secs(86_400))
+            .unwrap();
+        let s = LocalFs.stat(&p(&d, "f")).await.unwrap().unwrap();
+        assert_eq!(s.mtime, Some(0));
     }
 
     #[tokio::test]

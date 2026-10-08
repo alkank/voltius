@@ -1,7 +1,7 @@
 use super::local_tar::{self, Sink};
 use super::tar_failure::{explain, End};
 use super::{pump, TransferProgress, CHUNK_SIZE};
-use crate::sftp::backend::TransferEvents;
+use crate::sftp::backend::{report_skipped, TransferEvents};
 use crate::ssh::exec::{drain_channel, open_exec};
 use russh::client::{Handle, Handler, Msg};
 use russh::{ChannelReadHalf, ChannelWriteHalf};
@@ -61,12 +61,23 @@ pub struct Job<'a, E> {
 }
 
 impl<'a, E: TransferEvents> Job<'a, E> {
+    #[cfg(test)]
     pub fn new(events: &'a E, transfer_id: &'a str, token: &'a CancellationToken) -> Self {
+        Self::with_progress(events, transfer_id, token, Progress::default())
+    }
+
+    /// A job counting into `progress`, which someone else (a stall watchdog) also reads.
+    pub fn with_progress(
+        events: &'a E,
+        transfer_id: &'a str,
+        token: &'a CancellationToken,
+        progress: Progress,
+    ) -> Self {
         Self {
             events,
             transfer_id,
             token,
-            progress: Progress::default(),
+            progress,
         }
     }
 
@@ -80,8 +91,7 @@ impl<'a, E: TransferEvents> Job<'a, E> {
 
     fn succeed(&self, skipped: Vec<String>) {
         for path in skipped {
-            self.events
-                .send(&format!("sftp-skipped-{}", self.transfer_id), path);
+            report_skipped(self.events, self.transfer_id, &path);
         }
         self.finish();
     }
@@ -258,7 +268,7 @@ pub async fn upload<H: Handler, E: TransferEvents>(
     let packed = joined(packer.await);
 
     if let Err(e) = sent {
-        return Err(fail_remote(&tx, job.token, End::Remote, to.dir, &mut remote, e).await);
+        return Err(fail_remote(&tx, job.token, End::Remote, to.dir, &mut remote, e.into()).await);
     }
     let skipped = match packed {
         Ok(skipped) => skipped,

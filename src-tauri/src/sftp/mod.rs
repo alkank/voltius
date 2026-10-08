@@ -11,7 +11,7 @@ use crate::known_hosts::{ConflictPrompt, KnownHostsStore};
 use crate::proxy::ProxySpec;
 use crate::ssh::client::{
     authenticate_handle, chain_jumps, client_config, connect_first_hop_plain, hop_detail,
-    tunnel_hop, JumpHostConnect, SshClient,
+    tunnel_hop, HopRoute, JumpHostConnect, SshClient,
 };
 use crate::ssh::exec::open_exec;
 use crate::ssh::live_cells::{own_cell, read_cell, Cell};
@@ -63,6 +63,9 @@ struct SftpEntry {
     /// snapshot, so an SFTP session riding a terminal follows that terminal
     /// across a reconnect instead of staying pinned to the dead handle.
     handle: Option<SessionHandle>,
+    /// Whether `handle` is this entry's own connection (`connect`) rather than a
+    /// terminal session's, which only the terminal may swap. Only owned handles relink.
+    owns_handle: bool,
     cancel: CancellationToken,
     jump_handles: Vec<Arc<Handle<SshClient>>>,
 }
@@ -75,8 +78,10 @@ pub struct SftpManager {
     write_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
-fn relink_cell<T>(slot: &mut Option<Cell<T>>, value: T) -> Option<Cell<T>> {
-    let cell = slot.as_ref()?;
+/// Swap `value` into the slot's cell, unless the slot borrows it (`owned` false):
+/// a borrowed cell is a terminal session's live handle.
+fn relink_cell<T>(slot: &mut Option<Cell<T>>, owned: bool, value: T) -> Option<Cell<T>> {
+    let cell = slot.as_ref().filter(|_| owned)?;
     *cell.write().unwrap() = value;
     Some(Arc::clone(cell))
 }
@@ -134,7 +139,18 @@ impl SftpManager {
 
     /// A backend with no SSH connection underneath.
     async fn register_standalone(&self, backend: Arc<dyn FileBackend>) -> String {
-        self.register(backend, None, CancellationToken::new(), vec![])
+        self.register(backend, None, false, CancellationToken::new(), vec![])
+            .await
+    }
+
+    /// A backend riding a terminal session's handle, which a relink must not swap.
+    async fn register_riding(
+        &self,
+        backend: Arc<dyn FileBackend>,
+        handle: SessionHandle,
+        cancel: CancellationToken,
+    ) -> String {
+        self.register(backend, Some(handle), false, cancel, vec![])
             .await
     }
 
@@ -143,6 +159,7 @@ impl SftpManager {
         &self,
         backend: Arc<dyn FileBackend>,
         handle: Option<SessionHandle>,
+        owns_handle: bool,
         cancel: CancellationToken,
         jump_handles: Vec<Arc<Handle<SshClient>>>,
     ) -> String {
@@ -152,6 +169,7 @@ impl SftpManager {
             SftpEntry {
                 backend,
                 handle,
+                owns_handle,
                 cancel,
                 jump_handles,
             },
@@ -168,13 +186,18 @@ impl SftpManager {
         let cancel = CancellationToken::new();
         let backend = RealSftp::open(Arc::clone(&handle), opener, cancel.clone()).await?;
         Ok(self
-            .register(Arc::new(backend), Some(handle), cancel, vec![])
+            .register_riding(Arc::new(backend), handle, cancel)
             .await)
     }
 
-    /// Open SFTP by exec-ing an sftp-server command on the remote host (e.g. `docker exec -i <id> sftp-server`).
-    pub async fn open_exec(&self, handle: SessionHandle, cmd: &str) -> Result<String, String> {
-        self.register_real(handle, SftpOpener::Exec(cmd.to_string()))
+    /// Open SFTP by exec-ing `server` behind `inside` (e.g. `docker exec -i <id>` + `sftp-server`).
+    pub async fn open_exec(
+        &self,
+        handle: SessionHandle,
+        inside: String,
+        server: String,
+    ) -> Result<String, String> {
+        self.register_real(handle, SftpOpener::Exec { inside, server })
             .await
     }
 
@@ -191,7 +214,7 @@ impl SftpManager {
     ) -> Result<String, String> {
         let fs = DockerFs::new(Arc::clone(&handle), container_id);
         Ok(self
-            .register(Arc::new(fs), Some(handle), CancellationToken::new(), vec![])
+            .register_riding(Arc::new(fs), handle, CancellationToken::new())
             .await)
     }
 
@@ -238,7 +261,7 @@ impl SftpManager {
         keepalive_interval_secs: u64,
         keepalive_max: usize,
         legacy_algorithms: bool,
-        proxy: Option<ProxySpec>,
+        route: HopRoute,
         relink: Option<&str>,
     ) -> Result<String, String> {
         let config = Arc::new(client_config(
@@ -250,10 +273,9 @@ impl SftpManager {
         let mut jump_handles: Vec<Arc<Handle<SshClient>>> = Vec::new();
 
         let mut final_handle: Handle<SshClient> = if jump_hosts.is_empty() {
-            let (h, via) =
-                connect_first_hop_plain(&config, proxy.as_ref(), &known_hosts, host, port, 1)
-                    .await
-                    .map_err(|e| e.describe("SSH connection failed"))?;
+            let (h, via) = connect_first_hop_plain(&config, &route, &known_hosts, host, port, 1)
+                .await
+                .map_err(|e| e.describe("SSH connection failed"))?;
             emit_step(
                 app,
                 connect_id,
@@ -264,7 +286,7 @@ impl SftpManager {
         } else {
             let first = &jump_hosts[0];
             let (mut current_handle, via) = first
-                .connect_first(&config, proxy.as_ref(), &known_hosts, 1)
+                .connect_first(&config, &route, &known_hosts, 1)
                 .await?;
             emit_step(
                 app,
@@ -348,6 +370,7 @@ impl SftpManager {
             .register(
                 Arc::new(backend),
                 Some(Arc::clone(&handle)),
+                true,
                 cancel.clone(),
                 jump_handles,
             )
@@ -364,6 +387,7 @@ impl SftpManager {
     }
 
     /// Point an existing session at a fresh SSH handle, keeping its id and in-flight transfers.
+    /// None when the id is unknown or rides a terminal's handle; the caller opens a fresh id.
     async fn relink(
         &self,
         id: &str,
@@ -372,7 +396,7 @@ impl SftpManager {
     ) -> Option<(SessionHandle, CancellationToken)> {
         let mut sessions = self.sessions.lock().await;
         let entry = sessions.get_mut(id)?;
-        let cell = relink_cell(&mut entry.handle, handle)?;
+        let cell = relink_cell(&mut entry.handle, entry.owns_handle, handle)?;
         entry.jump_handles = jump_handles;
         Some((cell, entry.cancel.clone()))
     }
@@ -396,9 +420,7 @@ impl SftpManager {
         let entry = self.sessions.lock().await.remove(id);
         if let Some(e) = entry {
             e.cancel.cancel();
-            if let Some(fs) = e.backend.sftp_fs() {
-                fs.close_session().await;
-            }
+            e.backend.close().await;
         }
     }
 
@@ -643,9 +665,19 @@ mod tests {
         use crate::ssh::live_cells::{own_cell, Cell};
         let held = own_cell(1u32);
         let mut slot = Some(Arc::clone(&held));
-        let got = relink_cell(&mut slot, 2).expect("a cell to relink");
+        let got = relink_cell(&mut slot, true, 2).expect("a cell to relink");
         assert_eq!(read_cell(&held), 2);
         assert!(Arc::ptr_eq(&got, &held));
-        assert!(relink_cell(&mut None::<Cell<u32>>, 3).is_none());
+        assert!(relink_cell(&mut None::<Cell<u32>>, true, 3).is_none());
+    }
+
+    #[test]
+    fn a_borrowed_cell_is_never_relinked() {
+        use crate::ssh::live_cells::own_cell;
+        // A terminal session's cell: swapping it would move the terminal.
+        let terminal = own_cell(1u32);
+        let mut slot = Some(Arc::clone(&terminal));
+        assert!(relink_cell(&mut slot, false, 2).is_none());
+        assert_eq!(read_cell(&terminal), 1);
     }
 }

@@ -6,6 +6,7 @@
 
 #[cfg(target_os = "android")]
 mod android_ctx;
+mod app_lock;
 mod clock;
 mod commands;
 mod crypto;
@@ -16,6 +17,7 @@ mod ftp;
 mod keychain_android;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod keychain_bundle;
+mod knock;
 mod known_hosts;
 #[cfg(target_os = "linux")]
 mod linux_gfx;
@@ -33,6 +35,7 @@ mod sftp;
 mod shell_integration;
 mod ssh;
 mod storage;
+mod system_auth;
 mod terminal_kbd;
 mod tls;
 mod updater;
@@ -242,6 +245,7 @@ pub fn run() {
             #[cfg(desktop)]
             app.manage(updater::UpdaterState::default());
             app.manage(KnownHostsStore::load());
+            app.manage(app_lock::AppLock::load());
             app.manage(Arc::new(PendingConflicts::new()));
             app.manage(PortForwardManager::new(app.handle().clone()));
             app.manage(Arc::new(mcp::McpState::new()));
@@ -268,6 +272,10 @@ pub fn run() {
             updater::updater_get_state,
             commands::greet,
             commands::get_platform,
+            app_lock::app_lock_get,
+            app_lock::app_lock_set,
+            system_auth::system_auth_available,
+            system_auth::system_auth_verify,
             terminal_kbd::terminal_show_keyboard,
             terminal_kbd::terminal_hide_keyboard,
             commands::diagnostics::set_verbose_logging,

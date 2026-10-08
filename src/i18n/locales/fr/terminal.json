@@ -30,7 +30,9 @@
       "stopSharingTitle": "Arrêter le partage",
       "leaveSessionTitle": "Quitter la session",
       "stop": "Arrêter",
-      "leave": "Quitter"
+      "leave": "Quitter",
+      "waitingForKey": "En attente de l'hôte…",
+      "keyFailed": "L'hôte n'a pas partagé la clé"
     },
     "sftp": {
       "hostLabel": {
@@ -237,7 +239,8 @@
         "openingShell": "Ouverture du shell",
         "sftpSubsystem": "Sous-système SFTP",
         "openingPort": "Ouverture du port",
-        "ready": "Prêt"
+        "ready": "Prêt",
+        "portKnock": "Port knock"
       },
       "reconnectWait": {
         "offline": {

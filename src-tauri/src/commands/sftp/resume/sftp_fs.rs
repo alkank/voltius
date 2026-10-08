@@ -1,11 +1,8 @@
 use super::endpoint::{Endpoint, Listed, Reader, Stat, Writer};
-use super::names::parse_sha256;
 use crate::commands::sftp::{SftpFile, TarProbe};
-use crate::error::{AppError, ErrorCode};
+use crate::error::AppError;
 use crate::sftp::link::SftpLink;
 use crate::ssh::client::SshClient;
-use crate::ssh::exec::run_captured;
-use crate::ssh::live_cells::read_cell;
 use async_trait::async_trait;
 use russh::client::Handler;
 use russh_sftp::client::error::Error as SftpError;
@@ -68,10 +65,15 @@ impl SftpFs {
 fn stat_of(m: &Metadata) -> Stat {
     Stat {
         size: m.size.unwrap_or(0),
-        mtime: m.mtime.map_or(0, u64::from),
+        mtime: m.mtime.map(u64::from),
         is_dir: m.is_dir(),
         mode: m.permissions,
     }
+}
+
+/// Whether a listing's attributes say what the entry is and, for a non-directory, how big.
+fn listed_completely(m: &Metadata) -> bool {
+    m.permissions.is_some() && (m.is_dir() || m.size.is_some())
 }
 
 fn failed(what: &str, path: &str, e: &SftpError) -> AppError {
@@ -82,19 +84,6 @@ fn failed(what: &str, path: &str, e: &SftpError) -> AppError {
 impl<H: Handler> Endpoint for SftpFs<H> {
     fn is_local(&self) -> bool {
         false
-    }
-
-    fn split(&self, path: &str) -> (String, String) {
-        let trimmed = path.trim_end_matches('/');
-        match trimmed.rfind('/') {
-            Some(0) => ("/".into(), trimmed[1..].into()),
-            Some(i) => (trimmed[..i].into(), trimmed[i + 1..].into()),
-            None => (".".into(), trimmed.into()),
-        }
-    }
-
-    fn join(&self, dir: &str, rel: &str) -> String {
-        format!("{}/{rel}", dir.trim_end_matches('/'))
     }
 
     async fn stat(&self, path: &str) -> Result<Option<Stat>, AppError> {
@@ -118,16 +107,25 @@ impl<H: Handler> Endpoint for SftpFs<H> {
                 let m = e.metadata();
                 Listed {
                     name: e.file_name(),
-                    stat: stat_of(&m),
+                    stat: Some(stat_of(&m)),
                     is_symlink: m.is_symlink(),
+                    complete: listed_completely(&m),
                 }
             })
             .collect())
     }
 
     async fn mkdir(&self, path: &str) -> Result<(), AppError> {
-        let _ = self.session.lock().await.create_dir(path).await;
-        Ok(())
+        let sftp = self.session.lock().await;
+        match sftp.create_dir(path).await {
+            Ok(()) => Ok(()),
+            // Servers answer an existing directory with Failure or FileAlreadyExists.
+            Err(e @ SftpError::Status(_)) => match sftp.metadata(path).await {
+                Ok(m) if m.is_dir() => Ok(()),
+                _ => Err(failed("mkdir", path, &e)),
+            },
+            Err(e) => Err(failed("mkdir", path, &e)),
+        }
     }
 
     async fn open_read(&self, path: &str, offset: u64) -> Result<Reader, AppError> {
@@ -143,7 +141,7 @@ impl<H: Handler> Endpoint for SftpFs<H> {
         Ok(Box::new(file))
     }
 
-    async fn open_write(&self, path: &str, offset: u64) -> Result<Writer, AppError> {
+    async fn open_write(&self, path: &str, offset: u64, _len: u64) -> Result<Writer, AppError> {
         let mut flags = OpenFlags::CREATE | OpenFlags::WRITE;
         if offset == 0 {
             flags |= OpenFlags::TRUNCATE;
@@ -217,30 +215,9 @@ impl<H: Handler> Endpoint for SftpFs<H> {
         path: &str,
         token: &CancellationToken,
     ) -> Result<Option<String>, AppError> {
-        let (Some(link), Some(tar)) = (self.link.as_ref().filter(|l| l.host_shell()), &self.tar)
-        else {
-            return Ok(None);
-        };
-        let shell = tokio::select! {
-            _ = token.cancelled() => return Ok(None),
-            shell = tar.shell() => shell,
-        };
-        let Some(shell) = shell else {
-            return Ok(None);
-        };
-        let (handle, cmd) = (read_cell(&link.handle), shell.sha256(path));
-        let ran = tokio::select! {
-            _ = token.cancelled() => return Ok(None),
-            r = run_captured(&handle, &cmd) => r,
-        };
-        match ran {
-            Ok(out) if out.code == Some(0) => Ok(parse_sha256(&out.stdout_text())),
-            Ok(_) => Ok(None),
-            Err(e) if self.link_dead().await => Err(AppError::coded(
-                ErrorCode::ConnectionLost,
-                format!("Connection lost while verifying {path}: {e}"),
-            )),
-            Err(_) => Ok(None),
+        match &self.tar {
+            Some(tar) => tar.hash(path, token, self.link_dead()).await,
+            None => Ok(None),
         }
     }
 
@@ -277,21 +254,44 @@ pub(crate) mod tests {
     use crate::port_forward::test_ssh::TestClient;
     use crate::sftp::backend::test_tree::Recorder;
     use crate::sftp::real::SftpOpener;
-    use crate::ssh::live_cells::own_cell;
-    use crate::ssh::test_proc_server::{proc_server, ProcOptions};
+    use crate::ssh::exec::shell_quote;
+    use crate::ssh::live_cells::{own_cell, read_cell};
+    use crate::ssh::test_proc_server::{no_tar, proc_server, sftp_server_path, ProcOptions};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     pub(crate) async fn sftp_fs(opts: ProcOptions) -> SftpFs<TestClient> {
+        sftp_fs_via(opts, SftpOpener::Subsystem).await
+    }
+
+    async fn sftp_fs_via(opts: ProcOptions, opener: SftpOpener) -> SftpFs<TestClient> {
         let (handle, _) = proc_server(opts).await;
         let link = Arc::new(SftpLink {
             handle: own_cell(handle),
-            opener: SftpOpener::Subsystem,
+            opener,
             closed: CancellationToken::new(),
         });
         let session = Arc::new(Mutex::new(link.open().await.unwrap()));
-        let tar = Arc::new(TarProbe::new(Arc::clone(&link.handle), None));
+        let tar = Arc::new(TarProbe::new(
+            Arc::clone(&link.handle),
+            link.opener.inside(),
+        ));
         SftpFs::new(session, link, tar)
+    }
+
+    #[test]
+    fn a_listing_is_complete_only_with_the_type_and_a_file_s_size() {
+        let attrs = |size, permissions| FileAttributes {
+            size,
+            permissions,
+            ..FileAttributes::empty()
+        };
+        let (file, dir) = (Some(0o100644), Some(0o040755));
+        assert!(listed_completely(&attrs(Some(9), file)));
+        assert!(listed_completely(&attrs(None, dir)));
+        assert!(!listed_completely(&attrs(None, file)));
+        assert!(!listed_completely(&attrs(Some(9), None)));
+        assert!(!listed_completely(&FileAttributes::empty()));
     }
 
     #[tokio::test]
@@ -299,10 +299,10 @@ pub(crate) mod tests {
         let fs = sftp_fs(ProcOptions::default()).await;
         let d = tempfile::tempdir().unwrap();
         let f = format!("{}/x", d.path().display());
-        let mut w = fs.open_write(&f, 0).await.unwrap();
+        let mut w = fs.open_write(&f, 0, 5).await.unwrap();
         w.write_all(b"hello").await.unwrap();
         w.shutdown().await.unwrap();
-        let mut w = fs.open_write(&f, 3).await.unwrap();
+        let mut w = fs.open_write(&f, 3, 3).await.unwrap();
         w.write_all(b"LO!").await.unwrap();
         w.shutdown().await.unwrap();
         let mut s = String::new();
@@ -314,7 +314,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(s, "lLO!");
         fs.set_mtime(&f, 1_000_000).await.unwrap();
-        assert_eq!(fs.stat(&f).await.unwrap().unwrap().mtime, 1_000_000);
+        assert_eq!(fs.stat(&f).await.unwrap().unwrap().mtime, Some(1_000_000));
         let names: Vec<_> = fs
             .list(&d.path().to_string_lossy())
             .await
@@ -327,6 +327,26 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn mkdir_accepts_an_existing_folder_and_nothing_else() {
+        let fs = sftp_fs(ProcOptions::default()).await;
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("sub");
+        let dir = dir.to_string_lossy();
+        fs.mkdir(&dir).await.unwrap();
+        fs.mkdir(&dir).await.unwrap();
+        assert!(fs.stat(&dir).await.unwrap().unwrap().is_dir);
+        std::fs::write(d.path().join("f"), b"").unwrap();
+        assert!(fs
+            .mkdir(&format!("{}/f", d.path().display()))
+            .await
+            .is_err());
+        assert!(fs
+            .mkdir(&format!("{}/nope/sub", d.path().display()))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn hash_quotes_awkward_names() {
         let fs = sftp_fs(ProcOptions::default()).await;
         let d = tempfile::tempdir().unwrap();
@@ -334,6 +354,30 @@ pub(crate) mod tests {
         std::fs::write(&f, b"").unwrap();
         assert_eq!(
             fs.hash(&f.to_string_lossy(), &CancellationToken::new())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exec_session_without_tar_hashes_inside_its_container() {
+        let (_bin, no_tar) = no_tar();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("f"), b"").unwrap();
+        // Only inside `root` does the relative path name the file.
+        let inside = format!(
+            r#"{no_tar} sh -c 'cd "$1" && shift && exec "$@"' x {}"#,
+            shell_quote(&root.path().to_string_lossy())
+        );
+        let opener = SftpOpener::Exec {
+            inside,
+            server: sftp_server_path().to_string(),
+        };
+        let fs = sftp_fs_via(ProcOptions::default(), opener).await;
+        assert_eq!(
+            fs.hash("f", &CancellationToken::new())
                 .await
                 .unwrap()
                 .as_deref(),
@@ -543,7 +587,7 @@ mod live {
     use crate::known_hosts::KnownHostsStore;
     use crate::sftp::backend::test_tree::Recorder;
     use crate::sftp::real::{RealSftp, SftpOpener};
-    use crate::ssh::client::{connect_authenticated, SshClient};
+    use crate::ssh::client::{connect_authenticated, HopRoute, SshClient};
     use crate::ssh::live_cells::{own_cell, read_cell};
     use crate::ssh::session::SessionHandle;
     use crate::ssh::test_docker::{docker, Container};
@@ -579,6 +623,7 @@ mod live {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let known_hosts = Arc::new(KnownHostsStore::new());
+            let route = HopRoute::default();
             let attempt = connect_authenticated(
                 known_hosts,
                 "127.0.0.1",
@@ -588,7 +633,7 @@ mod live {
                 None,
                 None,
                 false,
-                None,
+                &route,
             );
             match attempt.await {
                 Ok(h) => return h,
