@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { createWebglAddon } from "@/utils/webglAddon";
+import { claimWebglRenderer } from "@/utils/webglAddon";
 import { suppressTerminalQueries } from "@/components/terminal/terminalQueries";
-import { disposeClosedTerminals, reattachTerminal, useTerminalMount, type CachedTerminal } from "@/components/terminal/terminalContainer";
+import { activateTerminal, disposeClosedTerminals, reattachTerminal, setTerminalVisible, useTerminalMount, type CachedTerminal } from "@/components/terminal/terminalContainer";
 import { useThemeStore } from "@/stores/themeStore";
 import { useTerminalSettingsStore } from "@/stores/terminalSettingsStore";
 import { getToggle } from "@/stores/toggleSettingsStore";
@@ -16,6 +16,7 @@ import "@xterm/xterm/css/xterm.css";
 interface Props {
   localSessionId: string;
   active?: boolean;
+  visible?: boolean;
 }
 
 // Cached like solo terminals: moving the tab into a split pane remounts the view.
@@ -53,11 +54,7 @@ function mountGuestTerminal(localSessionId: string, container: HTMLDivElement): 
   term.open(container);
   const queryGuard = suppressTerminalQueries(term);
 
-  try {
-    term.loadAddon(createWebglAddon());
-  } catch {
-    // fallback to canvas
-  }
+  claimWebglRenderer(term);
 
   const entry: GuestTerminal = { terminal: term, fitAddon, clip: null, dispose: () => {} };
   term.attachCustomKeyEventHandler((e) => entry.clip?.handleKeyEvent(e) ?? true);
@@ -86,15 +83,21 @@ function mountGuestTerminal(localSessionId: string, container: HTMLDivElement): 
   return entry;
 }
 
-export default function MultiplayerTerminalView({ localSessionId, active }: Props) {
+export default function MultiplayerTerminalView({ localSessionId, active, visible = true }: Props) {
   // No OSC 52: a guest's clipboard is written only by the guest's own action, never by the controller.
   const attach = useTerminalMount((container) => mountGuestTerminal(localSessionId, container), undefined, [localSessionId]);
 
   useEffect(() => {
+    const entry = guestTerminals.get(localSessionId);
+    if (entry) setTerminalVisible(entry, visible);
+  }, [visible, localSessionId]);
+
+  useEffect(() => {
     if (!active) return;
     const entry = guestTerminals.get(localSessionId);
-    entry?.terminal.focus();
-    entry?.fitAddon.fit();
+    if (!entry) return;
+    activateTerminal(entry);
+    entry.fitAddon.fit();
   }, [active, localSessionId]);
 
   // Live theme updates

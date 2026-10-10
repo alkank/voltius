@@ -16,7 +16,7 @@ export function useVaultAdmin(
   const { t } = useTranslation();
   const { teams, rolesByTeam, membersByTeam } = useTeamStore();
   const openMembersNav = useUIStore((s) => s.openMembersNav);
-  const openMembersRoles = useUIStore((s) => s.openMembersRoles);
+  const openMembersPanel = useUIStore((s) => s.openMembersPanel);
   const { pos, open: openAtPointer, openAt, close: closeMenu } = useContextMenu();
   const [dialog, setDialog] = useState<VaultDialog>(null);
   const [shareOpen, setShareOpen] = useState(false);
@@ -25,7 +25,7 @@ export function useVaultAdmin(
 
   const caps = target
     ? vaultAdminCapabilities(target, teams, rolesByTeam, myUserId)
-    : { isTeam: false, isOwner: false, canRename: false, canDelete: false, canMakePrivate: false, canLeave: false };
+    : { isTeam: false, isOwner: false, canRename: false, canSetLockPolicy: false, canDelete: false, canMakePrivate: false, canLeave: false };
   const memberCount = target?.teamId ? (membersByTeam[target.teamId]?.length ?? null) : null;
   // Mirrors MembersStack's render gate in VaultHeader: a private vault only has
   // someone to share with once cloud sync is on, but a team vault always does.
@@ -38,7 +38,8 @@ export function useVaultAdmin(
           switch (action) {
             case "share": opts?.onShare ? opts.onShare() : setShareOpen(true); return;
             case "members": opts?.onActivate?.(); openMembersNav(); return;
-            case "roles": opts?.onActivate?.(); openMembersRoles(); return;
+            case "roles":
+            case "security": opts?.onActivate?.(); openMembersPanel(action); return;
             case "rename":
             case "makePrivate":
             case "delete":

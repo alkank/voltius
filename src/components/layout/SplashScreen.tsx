@@ -8,8 +8,9 @@ import { useFolderStore } from "@/stores/folderStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { usePortForwardingStore } from "@/stores/portForwardingStore";
-import { autoLogin, getAppLock, isServerMode, setAppLock } from "@/services/account";
-import { systemAuthAvailable } from "@/services/appLock";
+import { autoLogin, getAccountMode, getAppLock, isServerMode, setAppLock } from "@/services/account";
+import { lockOnLaunchIfIdle, systemAuthAvailable } from "@/services/appLock";
+import { secretState } from "@/services/vaultSecret";
 import { useAppLockStore } from "@/stores/appLockStore";
 import { useSecurityStore } from "@/stores/securityStore";
 import { saveCurrentAccount } from "@/services/savedAccounts";
@@ -21,6 +22,7 @@ import { usePluginRegistryStore } from "@/stores/pluginRegistryStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
 import { usePlatform } from "@/utils/platform";
+import { canLockVault } from "@/utils/accountMode";
 import AuthPage from "./AuthPage";
 import LogoBadge from "./LogoBadge";
 
@@ -40,6 +42,11 @@ const KEYCHAIN_HINT_DELAY_MS = 3000;
  */
 function keepSwitcherFresh(): void {
   saveCurrentAccount().catch((e) => console.warn("[splash] could not save this account to the switcher:", e));
+}
+
+// An account can predate its vault file: a cloud one re-derives from the server, a local one never wrote a secret.
+async function hasAccountToUnlock(): Promise<boolean> {
+  return (await getVaultStatus()).exists || canLockVault(await getAccountMode());
 }
 
 export default function SplashScreen({ onReady }: Props) {
@@ -64,12 +71,13 @@ export default function SplashScreen({ onReady }: Props) {
       setStep("vault", "running");
       await delay(200);
 
-      if ((await getAppLock()) === "vault") {
-        setSystemAuth(useSecurityStore.getState().systemAuthUnlock && (await systemAuthAvailable()));
+      if (((await getAppLock()) ?? (await lockOnLaunchIfIdle().catch(() => null))) === "vault") {
+        const sealed = (await secretState().catch(() => "none")) === "sealed";
+        setSystemAuth(sealed || (useSecurityStore.getState().systemAuthUnlock && (await systemAuthAvailable())));
         try {
-          const { exists } = await getVaultStatus();
-          setStep("vault", "done", exists ? t("layout.splash.vaultLocked") : t("layout.splash.firstLaunch"));
-          setPhase(exists ? "auth-locked" : "auth-first-launch");
+          const locked = await hasAccountToUnlock();
+          setStep("vault", "done", locked ? t("layout.splash.vaultLocked") : t("layout.splash.firstLaunch"));
+          setPhase(locked ? "auth-locked" : "auth-first-launch");
         } catch {
           setStep("vault", "error", t("layout.splash.vaultCheckFailed"));
           setPhase("auth-first-launch");
@@ -78,6 +86,12 @@ export default function SplashScreen({ onReady }: Props) {
       }
 
       const outcome = await autoLogin();
+      if (outcome === "sealed") {
+        setSystemAuth(true);
+        setStep("vault", "done", t("layout.splash.vaultLocked"));
+        setPhase("auth-locked");
+        return;
+      }
       if (outcome === "ok") {
         setStep("vault", "done", t("layout.splash.sessionRestored"));
         setPhase("finishing");
@@ -96,9 +110,9 @@ export default function SplashScreen({ onReady }: Props) {
 
       // autoLogin failed — check if a vault already exists (locked) or first launch
       try {
-        const { exists } = await getVaultStatus();
-        setStep("vault", "done", exists ? t("layout.splash.vaultFound") : t("layout.splash.firstLaunch"));
-        setPhase(exists ? "auth-locked" : "auth-first-launch");
+        const locked = await hasAccountToUnlock();
+        setStep("vault", "done", locked ? t("layout.splash.vaultFound") : t("layout.splash.firstLaunch"));
+        setPhase(locked ? "auth-locked" : "auth-first-launch");
       } catch {
         setStep("vault", "error", t("layout.splash.vaultCheckFailed"));
         setPhase("auth-first-launch");
@@ -165,7 +179,7 @@ export default function SplashScreen({ onReady }: Props) {
   };
 
   const handleAuthReady = async () => {
-    await setAppLock(null).catch(() => {});
+    await setAppLock(null);
     setPhase("finishing");
     keepSwitcherFresh();
     await finishLoading();

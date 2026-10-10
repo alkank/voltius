@@ -248,6 +248,7 @@
       "share": "共享…",
       "members": "成员",
       "roles": "角色",
+      "security": "安全策略…",
       "rename": "重命名…",
       "makePrivate": "设为私有…",
       "delete": "删除保险库…",
@@ -288,7 +289,9 @@
       "systemAuthFailed": "身份验证失败。",
       "wrongPassword": "主密码错误。",
       "keychainEmpty": "系统钥匙串中已没有保险库密钥。请输入主密码。",
-      "promptReason": "解锁 Voltius"
+      "promptReason": "解锁 Voltius",
+      "sealReason": "确认以将保险库密钥保存在此设备上",
+      "bindingLost": "设备登录方式已更改。请输入主密码。"
     }
   }
 }

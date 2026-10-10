@@ -143,6 +143,12 @@
         },
         "needsSystemAuth": "开启系统身份验证后，才能锁定没有主密码的账户。",
         "immediateVaultWarning": "选择“锁定保险库”时，即使短暂离开 Voltius 也会关闭已打开的会话。“锁定屏幕”会让它们继续运行。",
+        "policy": {
+          "timeout": "{{teams}} 的策略：最长 {{duration}}。",
+          "timeoutImmediately": "{{teams}} 的策略：离开 Voltius 时立即锁定。",
+          "vault": "{{teams}} 的策略：必须使用“锁定保险库”。",
+          "yourTeam": "你的团队"
+        },
         "lockAction": {
           "label": "锁定方式",
           "vault": "锁定保险库（关闭会话）",
@@ -154,7 +160,18 @@
           "toggle": "使用系统身份验证解锁",
           "desc": "使用{{method}}代替输入主密码。",
           "unavailable": "此设备不支持。",
-          "disclosure": "锁定期间，保险库密钥保存在系统钥匙串中，受设备登录保护。",
+          "status": {
+            "bound": "已绑定到此设备的硬件。",
+            "unbound": "尚未绑定到此设备的硬件。",
+            "os-login": "受设备登录保护。",
+            "no-password": "受设备登录保护。设置主密码后即可将密钥绑定到此设备的硬件。"
+          },
+          "bindNow": "立即绑定",
+          "confirm": "确认",
+          "enableTitle": "将保险库密钥绑定到此设备",
+          "enableBody": "请输入主密码。如果此设备的登录方式发生变化，您将需要它。",
+          "disableTitle": "关闭系统身份验证",
+          "disableBody": "请输入主密码，以便启动时继续无需提示即可解锁。",
           "method": {
             "windows": "Windows Hello",
             "macos": "触控 ID 或 Mac 密码",
@@ -286,6 +303,7 @@
           "teamVaults": "共享团队保险库",
           "teamSharing": "团队共享（5 个会话 · 10 名访客）",
           "seats": "席位（按订阅数量）",
+          "lockPolicy": "团队锁定策略（自动锁定上限、锁定保险库）",
           "granularPermissions": "自定义角色、按成员和按对象的权限"
         }
       },
@@ -1059,6 +1077,7 @@
         "prevTab":        { "label": "上一个标签页",     "desc": "切换到上一个标签页" },
         "sidebar":        { "label": "切换侧边栏",   "desc": "显示/隐藏侧边栏" },
         "delete":         { "label": "删除所选",  "desc": "删除所选项目" },
+        "rename":         { "label": "重命名所选",  "desc": "就地重命名所选项目" },
         "copy":           { "label": "复制",             "desc": "将选中的项目复制到剪贴板" },
         "cut":            { "label": "剪切",             "desc": "将选中的项目剪切到剪贴板" },
         "paste":          { "label": "粘贴",             "desc": "将剪贴板中的项目粘贴到当前文件夹" },

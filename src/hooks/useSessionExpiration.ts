@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import { getAccountMode } from "@/services/account";
-import { lockApp } from "@/services/appLock";
+import { lockApp, recordLastActive, setHideInRecents } from "@/services/appLock";
 import { isLeaveLockSuppressed } from "@/services/leaveLockSuppression";
 import { useAppLockStore } from "@/stores/appLockStore";
+import { useEffectiveLockSettings } from "@/hooks/useEffectiveLockSettings";
 import { useSecurityStore } from "@/stores/securityStore";
 import { canLockApp } from "@/utils/accountMode";
 import { IMMEDIATELY } from "@/utils/sessionTimeout";
@@ -12,7 +13,7 @@ const IMMEDIATE_IDLE_MINUTES = 5;
 const ACTIVITY_EVENTS = ["pointerdown", "mousemove", "keydown", "touchstart"] as const;
 
 export function useSessionExpiration(ready = true): void {
-  const sessionTimeoutMinutes = useSecurityStore((s) => s.sessionTimeoutMinutes);
+  const { sessionTimeoutMinutes } = useEffectiveLockSettings();
   const systemAuthUnlock = useSecurityStore((s) => s.systemAuthUnlock);
 
   useEffect(() => {
@@ -21,13 +22,22 @@ export function useSessionExpiration(ready = true): void {
     const immediate = sessionTimeoutMinutes === IMMEDIATELY;
     const timeoutMs = (immediate ? IMMEDIATE_IDLE_MINUTES : sessionTimeoutMinutes) * 60_000;
     let lastActivityAt = Date.now();
+    let recordedAt = 0;
     let lockable = false;
     let disposed = false;
     let lockInProgress = false;
     let unlistenResize: (() => void) | null = null;
+    let hidingFromRecents = false;
 
     getAccountMode()
-      .then((mode) => { lockable = canLockApp(mode, systemAuthUnlock); })
+      .then((mode) => {
+        lockable = canLockApp(mode, systemAuthUnlock);
+        // Android snapshots recents before visibilitychange reaches us, so the lock alone can't cover it.
+        if (immediate && lockable && !disposed) {
+          hidingFromRecents = true;
+          void setHideInRecents(true);
+        }
+      })
       .catch(() => { lockable = false; });
 
     const lockNow = () => {
@@ -45,8 +55,15 @@ export function useSessionExpiration(ready = true): void {
       if (immediate && !isLeaveLockSuppressed()) lockNow();
     };
 
+    const persistActivity = () => {
+      if (recordedAt === lastActivityAt) return;
+      recordedAt = lastActivityAt;
+      void recordLastActive(lastActivityAt);
+    };
+
     const checkIdle = () => {
       if (Date.now() - lastActivityAt >= timeoutMs) lockNow();
+      else persistActivity();
     };
 
     const recordActivity = () => {
@@ -54,8 +71,10 @@ export function useSessionExpiration(ready = true): void {
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") lockOnLeave();
-      else checkIdle();
+      if (document.visibilityState === "hidden") {
+        persistActivity();
+        lockOnLeave();
+      } else checkIdle();
     };
 
     if (immediate) {
@@ -74,6 +93,7 @@ export function useSessionExpiration(ready = true): void {
     for (const e of ACTIVITY_EVENTS) window.addEventListener(e, recordActivity, { passive: true });
     window.addEventListener("focus", checkIdle);
     document.addEventListener("visibilitychange", onVisibilityChange);
+    persistActivity();
     const intervalId = window.setInterval(checkIdle, CHECK_INTERVAL_MS);
     const unsubscribeLock = useAppLockStore.subscribe((s, prev) => {
       if (prev.kind && !s.kind) lastActivityAt = Date.now();
@@ -81,6 +101,7 @@ export function useSessionExpiration(ready = true): void {
 
     return () => {
       disposed = true;
+      if (hidingFromRecents) void setHideInRecents(false);
       window.clearInterval(intervalId);
       unsubscribeLock();
       unlistenResize?.();

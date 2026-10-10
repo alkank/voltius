@@ -249,6 +249,12 @@
         },
         "needsSystemAuth": "Activez l'authentification système pour verrouiller un compte sans mot de passe principal.",
         "immediateVaultWarning": "Avec « Verrouiller le coffre », quitter Voltius même un instant ferme vos sessions ouvertes. « Verrouiller l'écran » les garde actives.",
+        "policy": {
+          "timeout": "Imposé par {{teams}} : au plus {{duration}}.",
+          "timeoutImmediately": "Imposé par {{teams}} : verrouillage dès que vous quittez Voltius.",
+          "vault": "Imposé par {{teams}} : « Verrouiller le coffre » obligatoire.",
+          "yourTeam": "votre équipe"
+        },
         "lockAction": {
           "label": "Au verrouillage",
           "vault": "Verrouiller le coffre (fermer les sessions)",
@@ -260,7 +266,18 @@
           "toggle": "Déverrouiller avec l'authentification système",
           "desc": "Utilisez {{method}} au lieu de saisir votre mot de passe principal.",
           "unavailable": "Non disponible sur cet appareil.",
-          "disclosure": "Pendant le verrouillage, la clé du coffre reste dans le trousseau système, protégée par la connexion de l'appareil.",
+          "status": {
+            "bound": "Liée au matériel de cet appareil.",
+            "unbound": "Pas encore liée au matériel de cet appareil.",
+            "os-login": "Protégée par la connexion de votre appareil.",
+            "no-password": "Protégée par la connexion de votre appareil. Définissez un mot de passe principal pour lier la clé au matériel de cet appareil."
+          },
+          "bindNow": "Lier maintenant",
+          "confirm": "Confirmer",
+          "enableTitle": "Lier la clé du coffre à cet appareil",
+          "enableBody": "Saisissez votre mot de passe principal. Il vous sera demandé si la connexion de cet appareil change.",
+          "disableTitle": "Désactiver l'authentification système",
+          "disableBody": "Saisissez votre mot de passe principal pour continuer à déverrouiller au lancement sans invite.",
           "method": {
             "windows": "Windows Hello",
             "macos": "Touch ID ou le mot de passe de votre Mac",
@@ -392,6 +409,7 @@
           "teamVaults": "Coffres-forts d'équipe partagés",
           "teamSharing": "Partage d'équipe (5 sessions · 10 invités)",
           "seats": "Sièges (selon l'abonnement)",
+          "lockPolicy": "Règle de verrouillage d'équipe (délai maximal, verrouillage du coffre)",
           "granularPermissions": "Rôles personnalisés, permissions par membre et par objet"
         }
       },
@@ -1074,6 +1092,10 @@
         "delete": {
           "label": "Supprimer la sélection",
           "desc": "Supprimer les éléments sélectionnés"
+        },
+        "rename": {
+          "label": "Renommer la sélection",
+          "desc": "Renommer l'élément sélectionné sur place"
         },
         "copy": { "label": "Copier", "desc": "Copier les éléments sélectionnés dans le presse-papiers" },
         "cut": { "label": "Couper", "desc": "Couper les éléments sélectionnés dans le presse-papiers" },

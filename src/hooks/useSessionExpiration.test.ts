@@ -4,13 +4,17 @@ import { renderHook, act, cleanup } from "@testing-library/react";
 
 const h = vi.hoisted(() => ({
   lockApp: vi.fn(async () => undefined),
+  hideInRecents: vi.fn(async (_on: boolean) => undefined),
+  recordLastActive: vi.fn(async (_at: number) => undefined),
   suppressed: false,
   mode: "local" as string | null,
   resized: null as null | (() => void),
   minimized: false,
 }));
 
-vi.mock("@/services/appLock", () => ({ lockApp: h.lockApp }));
+vi.mock("@/services/appLock", () => ({
+  lockApp: h.lockApp, setHideInRecents: h.hideInRecents, recordLastActive: h.recordLastActive,
+}));
 vi.mock("@/services/leaveLockSuppression", () => ({ isLeaveLockSuppressed: () => h.suppressed }));
 vi.mock("@/services/account", () => ({
   getAccountMode: async () => h.mode,
@@ -27,6 +31,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 import { useSessionExpiration } from "./useSessionExpiration";
 import { useSecurityStore } from "@/stores/securityStore";
 import { useAppLockStore } from "@/stores/appLockStore";
+import { useOrgLockPolicyStore } from "@/stores/orgLockPolicyStore";
 
 function setVisibility(state: "visible" | "hidden") {
   Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
@@ -42,6 +47,7 @@ beforeEach(() => {
   h.resized = null;
   useAppLockStore.setState({ kind: null });
   useSecurityStore.setState({ sessionTimeoutMinutes: null, lockAction: "vault", systemAuthUnlock: false });
+  useOrgLockPolicyStore.setState({ policy: null });
 });
 afterEach(() => {
   cleanup();
@@ -159,4 +165,56 @@ test("nothing locks before the app is past the splash and unlock screens", async
   await act(async () => { await vi.advanceTimersByTimeAsync(30 * 60_000); });
   await act(async () => { setVisibility("hidden"); });
   expect(h.lockApp).not.toHaveBeenCalled();
+});
+
+test("Immediately hides the app from recents while it is on, and only then", async () => {
+  useSecurityStore.setState({ sessionTimeoutMinutes: 0 });
+  const { unmount } = renderHook(() => useSessionExpiration(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(h.hideInRecents).toHaveBeenCalledWith(true);
+  unmount();
+  expect(h.hideInRecents).toHaveBeenLastCalledWith(false);
+});
+
+test("a timed auto-lock leaves recents alone", async () => {
+  useSecurityStore.setState({ sessionTimeoutMinutes: 5 });
+  await mount();
+  expect(h.hideInRecents).not.toHaveBeenCalled();
+});
+
+test("Immediately on an account that cannot lock leaves recents alone", async () => {
+  h.mode = "local-nopassword";
+  useSecurityStore.setState({ sessionTimeoutMinutes: 0, systemAuthUnlock: false });
+  await mount();
+  expect(h.hideInRecents).not.toHaveBeenCalled();
+});
+
+test("a policy timeout applies when the member chose Never", async () => {
+  useOrgLockPolicyStore.setState({ policy: { maxMinutes: 15, forceVault: false } });
+  await mount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15 * 60_000 + 5_000); });
+  expect(h.lockApp).toHaveBeenCalled();
+});
+
+test("the last activity is written down for the next launch, once per change", async () => {
+  useSecurityStore.setState({ sessionTimeoutMinutes: 15 });
+  await mount();
+  expect(h.recordLastActive).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(h.recordLastActive).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    window.dispatchEvent(new Event("keydown"));
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(h.recordLastActive).toHaveBeenCalledTimes(2);
+  expect(h.recordLastActive).toHaveBeenLastCalledWith(Date.now() - 5_000);
+});
+
+test("leaving the app writes down the last activity before it can be killed", async () => {
+  useSecurityStore.setState({ sessionTimeoutMinutes: 15 });
+  await mount();
+  await act(async () => { window.dispatchEvent(new Event("keydown")); });
+  const at = Date.now();
+  setVisibility("hidden");
+  expect(h.recordLastActive).toHaveBeenLastCalledWith(at);
 });

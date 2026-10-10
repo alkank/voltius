@@ -6,6 +6,7 @@ import {
   type TerminalClipboardHandle,
   type TerminalClipboardOptions,
 } from "@/components/terminal/terminalClipboard";
+import { claimWebglRenderer } from "@/utils/webglAddon";
 
 /** A terminal that outlives the views it is mounted in. */
 export interface CachedTerminal {
@@ -13,6 +14,8 @@ export interface CachedTerminal {
   fitAddon: FitAddon;
   /** The current mount's clipboard: a view-owned one would paste into whichever session the view shows next. */
   clip: TerminalClipboardHandle | null;
+  hidden?: boolean;
+  fitPending?: boolean;
 }
 
 /** Dispose and drop every cached terminal whose session tab is gone. */
@@ -28,21 +31,41 @@ export function disposeClosedTerminals(cache: Map<string, { dispose(): void }>, 
 /** Move a cached terminal's element into a new view's container. */
 export function reattachTerminal(entry: CachedTerminal, container: HTMLDivElement): void {
   if (entry.terminal.element) container.appendChild(entry.terminal.element);
+  claimWebglRenderer(entry.terminal);
   entry.fitAddon.fit();
 }
 
+/** Hidden terminals skip resize fits (each one reflows its whole buffer) and catch up when shown. */
+export function setTerminalVisible(entry: CachedTerminal, visible: boolean): void {
+  entry.hidden = !visible;
+  if (!visible || !entry.fitPending) return;
+  entry.fitPending = false;
+  entry.fitAddon.fit();
+}
+
+function fitIfVisible(entry: CachedTerminal): void {
+  if (entry.hidden) entry.fitPending = true;
+  else entry.fitAddon.fit();
+}
+
+/** Bring a cached terminal to the front: keyboard focus and a WebGL renderer. */
+export function activateTerminal(entry: CachedTerminal): void {
+  claimWebglRenderer(entry.terminal);
+  entry.terminal.focus();
+}
+
 function bindTerminalContainer(entry: CachedTerminal, container: HTMLDivElement, clipOptions?: TerminalClipboardOptions): () => void {
-  const { terminal, fitAddon } = entry;
+  const { terminal } = entry;
   const clip = attachTerminalClipboard(terminal, container, clipOptions);
   entry.clip = clip;
 
-  const handleWindowResize = () => fitAddon.fit();
+  const handleWindowResize = () => fitIfVisible(entry);
   window.addEventListener("resize", handleWindowResize);
 
   let fitTimer: ReturnType<typeof setTimeout> | null = null;
   const resizeObserver = new ResizeObserver(() => {
     if (fitTimer !== null) clearTimeout(fitTimer);
-    fitTimer = setTimeout(() => { fitTimer = null; fitAddon.fit(); }, 50);
+    fitTimer = setTimeout(() => { fitTimer = null; fitIfVisible(entry); }, 50);
   });
   resizeObserver.observe(container);
 

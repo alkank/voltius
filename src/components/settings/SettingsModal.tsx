@@ -7,7 +7,7 @@ import { Modal } from "@/components/shared/Modal";
 import { getSettingsNav } from "@/components/settings/settingsNav";
 import { renderSettingsSection } from "@/components/settings/settingsSections";
 import { useIsAndroid } from "@/utils/platform";
-import { useLocaleStore } from "@/stores/localeStore";
+import { useUiLanguage } from "@/i18n";
 import MobileSettings from "@/components/settings/MobileSettings";
 import { usePluginNavChildren, useResolvedPluginPage } from "@/components/settings/usePluginNavChildren";
 
@@ -18,7 +18,7 @@ export default function SettingsModal() {
   const setSection = useUIStore((s) => s.setSettingsSection);
   const isAndroid = useIsAndroid();
   const { t } = useTranslation();
-  const locale = useLocaleStore((s) => s.locale);
+  const locale = useUiLanguage();
   const nav = useMemo(() => getSettingsNav(), [locale]);
   const pluginChildren = usePluginNavChildren();
   const activePluginPage = useResolvedPluginPage();
@@ -43,7 +43,7 @@ export default function SettingsModal() {
       >
         <nav
           className="flex flex-col shrink-0 py-4 bg-(--t-bg-toolbar) border-r border-r-(--t-border)"
-          style={{ width: "13.333rem" }}
+          style={{ width: "15rem" }}
         >
           <div className="px-5 mb-4">
             <span className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">
@@ -115,7 +115,7 @@ export default function SettingsModal() {
                             onMouseLeave={(e) => { if (!childActive) e.currentTarget.style.background = "transparent"; }}
                           >
                             <Icon icon={child.icon} width={14} className="shrink-0" style={{ color: childActive ? "var(--t-accent)" : "inherit" }} />
-                            <span className="truncate">{child.label}</span>
+                            <span className="min-w-0 wrap-break-word">{child.label}</span>
                           </button>
                         );
                       })}

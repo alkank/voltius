@@ -1,4 +1,5 @@
 use crate::local::session::LocalSessionManager;
+use crate::terminal_output::TerminalOutputs;
 use serde::Serialize;
 use tauri::AppHandle;
 
@@ -90,8 +91,11 @@ pub async fn local_list_shells() -> Vec<ShellOption> {
         // so its presence proves nothing — require an installed distro. The
         // probe spawns wsl.exe, so cache it: every surface listing shells calls
         // this command on mount.
-        static HAS_DISTRO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *HAS_DISTRO.get_or_init(|| !crate::commands::wsl::list_distros().is_empty()) {
+        static HAS_DISTRO: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+        let has_distro = HAS_DISTRO
+            .get_or_init(|| async { !crate::commands::wsl::list_distros().await.is_empty() })
+            .await;
+        if *has_distro {
             push_shell(
                 &mut shells,
                 "WSL",
@@ -231,25 +235,20 @@ pub async fn local_connect(
         .await
 }
 
-/// The frontend's `local-output-<id>` / `local-closed-<id>` listeners are
-/// registered. Releases the startup gate so the shell's banner and first
-/// prompt are replayed instead of dropped.
+/// The terminal has subscribed to the session's output: replay what the shell
+/// wrote before that and go live.
 #[tauri::command]
-pub async fn local_ready(
-    app: AppHandle,
-    state: tauri::State<'_, LocalSessionManager>,
-    session_id: String,
-) -> Result<(), String> {
-    state.mark_ready(&app, &session_id);
-    Ok(())
+pub fn local_ready(outputs: tauri::State<'_, TerminalOutputs>, session_id: String) {
+    outputs.release(&session_id);
 }
 
 #[tauri::command]
 pub async fn local_disconnect(
+    app: AppHandle,
     state: tauri::State<'_, LocalSessionManager>,
     session_id: String,
 ) -> Result<(), String> {
-    state.disconnect(&session_id).await
+    state.disconnect(&app, &session_id).await
 }
 
 #[tauri::command]

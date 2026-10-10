@@ -37,6 +37,7 @@ mod ssh;
 mod storage;
 mod system_auth;
 mod terminal_kbd;
+mod terminal_output;
 mod tls;
 mod updater;
 mod vault_auth;
@@ -246,6 +247,7 @@ pub fn run() {
             app.manage(updater::UpdaterState::default());
             app.manage(KnownHostsStore::load());
             app.manage(app_lock::AppLock::load());
+            app.manage(app_lock::LastActive::load());
             app.manage(Arc::new(PendingConflicts::new()));
             app.manage(PortForwardManager::new(app.handle().clone()));
             app.manage(Arc::new(mcp::McpState::new()));
@@ -262,6 +264,7 @@ pub fn run() {
         .manage(ProcessStreamManager::new())
         .manage(SessionManager::new())
         .manage(LocalSessionManager::new())
+        .manage(terminal_output::TerminalOutputs::default())
         .manage(SecretsStore::new())
         .manage(SftpManager::new())
         .manage(SerialSessionManager::new())
@@ -274,6 +277,9 @@ pub fn run() {
             commands::get_platform,
             app_lock::app_lock_get,
             app_lock::app_lock_set,
+            app_lock::app_lock_hide_in_recents,
+            app_lock::app_lock_last_active,
+            app_lock::app_lock_touch,
             system_auth::system_auth_available,
             system_auth::system_auth_verify,
             terminal_kbd::terminal_show_keyboard,
@@ -325,6 +331,15 @@ pub fn run() {
             commands::keychain::keychain_get,
             commands::keychain::keychain_set,
             commands::keychain::keychain_delete,
+            commands::vault_secret::vault_secret_state,
+            commands::vault_secret::vault_secret_seal_available,
+            commands::vault_secret::vault_secret_get,
+            commands::vault_secret::vault_secret_set,
+            commands::vault_secret::vault_secret_bind,
+            commands::vault_secret::vault_secret_unbind,
+            commands::vault_secret::vault_secret_clear,
+            commands::vault_secret::vault_secret_export,
+            commands::vault_secret::vault_secret_import,
             storage::secrets::secrets_unlock,
             storage::secrets::secrets_verify,
             storage::secrets::secrets_exists,
@@ -373,6 +388,8 @@ pub fn run() {
             commands::local::local_list_shells,
             commands::local::local_connect,
             commands::local::local_ready,
+            terminal_output::terminal_output_attach,
+            terminal_output::terminal_output_detach,
             commands::local::local_disconnect,
             commands::local::local_send_input,
             commands::local::local_resize,

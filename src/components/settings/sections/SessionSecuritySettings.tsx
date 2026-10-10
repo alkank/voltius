@@ -7,28 +7,60 @@ import { systemAuthMethodKey } from "@/hooks/useSystemAuthPrompt";
 import { useSecurityStore, type LockAction } from "@/stores/securityStore";
 import { canLockApp, canLockVault } from "@/utils/accountMode";
 import { usePlatform } from "@/utils/platform";
-import { IMMEDIATELY, sessionTimeoutOptions, sessionTimeoutValue } from "@/utils/sessionTimeout";
+import { IMMEDIATELY, sessionTimeoutLabel, sessionTimeoutOptions, sessionTimeoutValue } from "@/utils/sessionTimeout";
+import { useEffectiveLockSettings } from "@/hooks/useEffectiveLockSettings";
+import { policyTeamNames, timeoutAllowed } from "@/services/lockPolicy";
+import { useTeamStore } from "@/stores/teamStore";
+import {
+  bindNow, bindingStatus, disableBinding, disableWithPassword, enableBinding, type BindingStatus,
+} from "@/services/vaultBinding";
+import { BindPasswordDialog } from "./BindPasswordDialog";
 
 export function SessionSecuritySettings({ mode }: { mode: string | null }) {
   const { t } = useTranslation();
   const platform = usePlatform();
-  const sessionTimeoutMinutes = useSecurityStore((s) => s.sessionTimeoutMinutes);
+  const { sessionTimeoutMinutes, lockAction, policy } = useEffectiveLockSettings();
+  const teams = useTeamStore((s) => s.teams);
   const setSessionTimeoutMinutes = useSecurityStore((s) => s.setSessionTimeoutMinutes);
-  const lockAction = useSecurityStore((s) => s.lockAction);
   const setLockAction = useSecurityStore((s) => s.setLockAction);
   const systemAuthUnlock = useSecurityStore((s) => s.systemAuthUnlock);
   const setSystemAuthUnlock = useSecurityStore((s) => s.setSystemAuthUnlock);
   const [providerAvailable, setProviderAvailable] = useState(false);
 
+  const [status, setStatus] = useState<BindingStatus | null>(null);
+  const [dialog, setDialog] = useState<"enable" | "disable" | null>(null);
+
   useEffect(() => { void systemAuthAvailable().then(setProviderAvailable); }, []);
+  const refreshStatus = () => { void bindingStatus(mode).then(setStatus); };
+  useEffect(refreshStatus, [mode, systemAuthUnlock]);
+
+  const reason = t("layout.appLock.sealReason");
+  const finish = (on: boolean) => {
+    setSystemAuthUnlock(on);
+    setDialog(null);
+    refreshStatus();
+  };
+  const onToggle = async (on: boolean) => {
+    if (on) {
+      if (status === "unbound") setDialog("enable");
+      else setSystemAuthUnlock(true);
+      return;
+    }
+    if ((await disableBinding(reason)) === "ok") finish(false);
+    else setDialog("disable");
+  };
 
   const lockable = canLockApp(mode, systemAuthUnlock);
   const vaultLockable = canLockVault(mode);
   const effectiveAction: LockAction = vaultLockable ? lockAction : "screen";
   const actionOptions = [
     ...(vaultLockable ? [{ value: "vault", label: t("settings.account.sessionSecurity.lockAction.vault") }] : []),
-    { value: "screen", label: t("settings.account.sessionSecurity.lockAction.screen") },
+    ...(policy?.forceVault && vaultLockable ? [] : [{ value: "screen", label: t("settings.account.sessionSecurity.lockAction.screen") }]),
   ];
+  const timeoutOptions = sessionTimeoutOptions(t).filter((o) =>
+    timeoutAllowed(o.value === "never" ? null : Number(o.value), policy));
+  const names = policy ? policyTeamNames(teams, policy) : null;
+  const who = (list: string[]) => (list.length ? list.join(", ") : t("settings.account.sessionSecurity.policy.yourTeam"));
 
   return (
     <div className="rounded-lg px-4 py-3 space-y-3 bg-(--t-bg-elevated) border border-(--t-border)">
@@ -36,7 +68,7 @@ export function SessionSecuritySettings({ mode }: { mode: string | null }) {
         <p className="text-xs text-(--t-text-dim)">{t("settings.account.sessionSecurity.autoLockLabel")}</p>
         <FormSelect
           value={sessionTimeoutValue(sessionTimeoutMinutes)}
-          options={sessionTimeoutOptions(t)}
+          options={timeoutOptions}
           ariaLabel={t("settings.account.sessionSecurity.autoLockLabel")}
           disabled={!lockable}
           onChange={(value) => {
@@ -45,6 +77,16 @@ export function SessionSecuritySettings({ mode }: { mode: string | null }) {
           }}
         />
         <p className="text-xs text-(--t-text-dim)">{t("settings.account.sessionSecurity.autoLockDesc")}</p>
+        {policy && names && (
+          <p className="text-xs text-(--t-text-muted)">
+            {policy.maxMinutes === IMMEDIATELY
+              ? t("settings.account.sessionSecurity.policy.timeoutImmediately", { teams: who(names.timeout) })
+              : t("settings.account.sessionSecurity.policy.timeout", {
+                  teams: who(names.timeout),
+                  duration: sessionTimeoutLabel(t, sessionTimeoutValue(policy.maxMinutes)),
+                })}
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -61,6 +103,11 @@ export function SessionSecuritySettings({ mode }: { mode: string | null }) {
             ? "settings.account.sessionSecurity.lockAction.screenDesc"
             : "settings.account.sessionSecurity.lockAction.vaultDesc")}
         </p>
+        {policy?.forceVault && names && (
+          <p className="text-xs text-(--t-text-muted)">
+            {t("settings.account.sessionSecurity.policy.vault", { teams: who(names.vault) })}
+          </p>
+        )}
         {sessionTimeoutMinutes === IMMEDIATELY && effectiveAction === "vault" && (
           <p className="text-xs text-(--t-status-warning)">
             {t("settings.account.sessionSecurity.immediateVaultWarning")}
@@ -76,17 +123,56 @@ export function SessionSecuritySettings({ mode }: { mode: string | null }) {
               ? t("settings.account.sessionSecurity.systemAuth.desc", { method: t(systemAuthMethodKey(platform)) })
               : t("settings.account.sessionSecurity.systemAuth.unavailable")}
           </p>
-          {systemAuthUnlock && (
-            <p className="text-xs mt-1 text-(--t-text-muted)">{t("settings.account.sessionSecurity.systemAuth.disclosure")}</p>
+          {systemAuthUnlock && status && (
+            <p className="text-xs mt-1 text-(--t-text-muted)">
+              {t(`settings.account.sessionSecurity.systemAuth.status.${status}`)}
+              {status === "unbound" && (
+                <button
+                  type="button"
+                  className="ml-1 underline hover:text-(--t-text-primary)"
+                  onClick={() => void bindNow(reason).then(refreshStatus)}
+                >
+                  {t("settings.account.sessionSecurity.systemAuth.bindNow")}
+                </button>
+              )}
+            </p>
           )}
         </div>
         <Toggle
           checked={systemAuthUnlock}
-          onChange={setSystemAuthUnlock}
+          onChange={(on) => void onToggle(on)}
           disabled={!providerAvailable && !systemAuthUnlock}
           aria-label={t("settings.account.sessionSecurity.systemAuth.toggle")}
         />
       </div>
+
+      {dialog === "enable" && (
+        <BindPasswordDialog
+          title={t("settings.account.sessionSecurity.systemAuth.enableTitle")}
+          body={t("settings.account.sessionSecurity.systemAuth.enableBody")}
+          onClose={() => setDialog(null)}
+          onSubmit={async (password) => {
+            const r = await enableBinding(password, reason);
+            if (r === "wrong-password") return t("layout.appLock.wrongPassword");
+            if (r === "cancelled") return null;
+            if (r !== "ok") return t("layout.appLock.systemAuthFailed");
+            finish(true);
+            return null;
+          }}
+        />
+      )}
+      {dialog === "disable" && (
+        <BindPasswordDialog
+          title={t("settings.account.sessionSecurity.systemAuth.disableTitle")}
+          body={t("settings.account.sessionSecurity.systemAuth.disableBody")}
+          onClose={() => setDialog(null)}
+          onSubmit={async (password) => {
+            if (!(await disableWithPassword(password))) return t("layout.appLock.wrongPassword");
+            finish(false);
+            return null;
+          }}
+        />
+      )}
 
       {!lockable && (
         <p className="text-xs text-(--t-text-muted)">{t("settings.account.sessionSecurity.needsSystemAuth")}</p>

@@ -1,8 +1,8 @@
-import { disposeClosedTerminals, reattachTerminal, useTerminalMount, type CachedTerminal } from "@/components/terminal/terminalContainer";
+import { activateTerminal, disposeClosedTerminals, reattachTerminal, setTerminalVisible, useTerminalMount, type CachedTerminal } from "@/components/terminal/terminalContainer";
 import { useEffect, useCallback } from "react";
 import { Terminal, type IBufferCell, type IBufferRange, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { createWebglAddon } from "@/utils/webglAddon";
+import { claimWebglRenderer } from "@/utils/webglAddon";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -995,11 +995,7 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         ta.spellcheck = false;
       });
 
-      try {
-        term.loadAddon(createWebglAddon());
-      } catch {
-        // WebGL not available, use default canvas renderer
-      }
+      claimWebglRenderer(term);
 
       // OSC 7 — shell-reported cwd (file://host/path). Used by the right-panel
       // SFTP tab's "follow cwd" feature. Silently no-ops for shells that don't
@@ -1070,10 +1066,7 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
           }),
         ];
         unlistenPromises.push(...localListeners);
-        // A PTY writes its banner and first prompt before these listeners are
-        // registered — Tauri drops an emit with no listener, which left the
-        // terminal blank behind a live shell. The backend holds that output
-        // until this ack, then replays it.
+        // The backend holds the shell's banner and first prompt until this ack.
         void Promise.all(localListeners)
           .then(() => localReady(sessionId))
           .catch((err) => log.debug(`local session ${sessionId} readiness ack failed`, err));
@@ -1194,8 +1187,9 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
     return () => window.removeEventListener("theme-preview", handler);
   }, [sessionId]);
 
-  const focus = useCallback(() => {
-    terminalCache.get(sessionId)?.terminal.focus();
+  const activate = useCallback(() => {
+    const entry = terminalCache.get(sessionId);
+    if (entry) activateTerminal(entry);
   }, [sessionId]);
 
   const fit = useCallback(() => {
@@ -1210,5 +1204,10 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
     sendResize(sessionId, sessionType, term.cols, term.rows);
   }, [sessionId, sessionType]);
 
-  return { attach, focus, fit };
+  const setVisible = useCallback((visible: boolean) => {
+    const entry = terminalCache.get(sessionId);
+    if (entry) setTerminalVisible(entry, visible);
+  }, [sessionId]);
+
+  return { attach, activate, fit, setVisible };
 }

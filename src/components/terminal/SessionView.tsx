@@ -10,7 +10,7 @@ import { MultiplayerBar } from "@/components/terminal/MultiplayerBar";
 import { TerminalStatusBar } from "@/components/terminal/TerminalStatusBar";
 import { useMultiplayerHostBroadcast } from "@/hooks/useMultiplayerHostBroadcast";
 import ConnectionOverlay, { getSshSteps, getSerialSteps } from "@/components/terminal/connection-overlay";
-import { useAllConnections } from "@/hooks/useAllConnections";
+import { useConnection } from "@/hooks/useAllConnections";
 import { NO_CONNECTION, useCredentialPlan } from "@/hooks/useCredentialPlan";
 import { getConnectionIcon } from "@/utils/icons";
 import type { ConnectRetryOverride, TerminalSession } from "@/types";
@@ -25,9 +25,12 @@ export function HostAwareTerminalView({
   compact,
   statusBar = true,
   statusBarVisible = true,
+  visible = true,
 }: {
   session: TerminalSession;
   active: boolean;
+  /** False while mounted off screen (a background tab, a hidden split workspace). */
+  visible?: boolean;
   onClosed: (remoteExit: boolean) => void;
   /** Mobile: render the terminal compact (no minimap) and suppress the status-bar footer. */
   compact?: boolean;
@@ -57,6 +60,7 @@ export function HostAwareTerminalView({
           sessionId={session.id}
           sessionType={terminalType as "ssh" | "local" | "serial"}
           active={active}
+          visible={visible}
           onClosed={onClosed}
           inputGate={inputGateRef}
           encoding={session.encoding}
@@ -89,8 +93,7 @@ export function SessionConnectionOverlay({ session }: { session: TerminalSession
 
 function SessionConnectionOverlayPanel({ session }: { session: TerminalSession }) {
   const { t } = useTranslation();
-  const connections = useAllConnections();
-  const connection = connections.find((c) => c.id === session.connectionId);
+  const connection = useConnection(session.connectionId);
   const { plan } = useCredentialPlan(connection ?? NO_CONNECTION);
   const connectSerialEphemeralFinalize = useSessionStore((s) => s.connectSerialEphemeralFinalize);
   const resetSerialEphemeral = useSessionStore((s) => s.resetSerialEphemeral);

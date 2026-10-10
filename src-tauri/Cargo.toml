@@ -1,6 +1,6 @@
 [package]
 name = "voltius"
-version = "0.50.1"
+version = "0.52.1"
 description = "Open-Source SSH & SFTP Client"
 authors = ["Voltius Contributors"]
 edition = "2021"
@@ -32,7 +32,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 # `des` enables the 3des-cbc cipher for the optional legacy-algorithms toggle.
-russh = { version = "0.63.2", features = ["des"] }
+russh = { version = "0.63.2", default-features = false, features = ["flate2", "rsa", "ring", "des"] }
 russh-sftp = "2.3"
 tokio-socks = "0.5"
 tokio-util = { version = "0.7", default-features = false, features = ["io", "io-util", "rt"] }
@@ -51,6 +51,7 @@ chacha20poly1305 = { version = "0.10", features = ["rand_core"] }
 voltius-crypto = { path = "../crates/voltius-crypto" }
 hkdf = "0.12"
 sha2 = "0.10"
+zeroize = "1"
 rand = "0.8"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 keyring-core = "1"
@@ -72,7 +73,7 @@ sysinfo = "0.39"
 fontdb = { version = "0.24", default-features = false, features = ["fs", "memmap", "std"] }
 bollard = "0.21"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 serialport = { version = "4", default-features = false }
 aes = "0.9"
 cfb8 = "0.9"
