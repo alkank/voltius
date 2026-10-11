@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.53.1] - 2026-10-11
+
+### Changed
+
+- Port Forwarding: the "Active session forwards" header folds the host cards away, so a host with many detected ports no longer pushes saved rules off the page. The header keeps the host count, tunnel total and an error count when a forward failed (#610)
+
+### Fixed
+
+- Team vaults: a secret the server refused is no longer shown as saved. The editor goes back to what the server holds (#608)
+- Team vaults: a secret that could not reach the server (offline, timeout, server error) stays usable and is sent again until it lands, instead of vanishing at the next vault load (#611)
+- Team vaults: saving a port-knock sequence against a server too old to store it now says the server needs an update, and the knock panel explains why instead of offering ports (#608)
+- A secret that fails to save during a connect prompt, import, paste, duplicate, copy to vault, undo or plugin key creation shows an error instead of failing silently (#611)
+- Creating a host, key or identity whose secret fails to save no longer creates the object again on every autosave (#613)
+- A card's "more options" menu stays whole near the bottom of the window, and the terminal status bar menu in the top pane of a split (#610)
+
+## [0.53.0] - 2026-10-10
+
+### Added
+
+- Local forwards and SOCKS proxies can be shared with other devices. A rule's new **Who can connect** choice listens on this computer only, on the whole network, or on one address such as `192.168.1.2` (#607)
+- The rule editor shows one line saying where a rule's traffic goes, with the matching `ssh` command to copy
+
+### Changed
+
+- The port forwarding rule editor is laid out as the route traffic takes: your computer, the SSH server, the service. "Apply to" now sits in the SSH server box
+- PuTTY imports keep the address each tunnel listens on
+
+### Fixed
+
+- A port forwarding rule that cannot start says why on its row, in the rules page, the terminal's Ports panel and on mobile, instead of failing silently
+
 ## [0.52.1] - 2026-10-09
 
 ### Fixed
