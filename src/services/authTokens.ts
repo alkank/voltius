@@ -74,10 +74,11 @@ export async function refreshAccessToken(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh_token: refreshToken }),
   });
+  // A pair adopted while this request was in flight (password change, two-factor, account switch) supersedes its answer.
+  const superseded = async () =>
+    (await invoke<string | null>("keychain_get", { key: "refresh_token" })) !== refreshToken;
   if (res.status === 401) {
-    // A pair adopted while this request was in flight (password change, two-factor) supersedes its answer.
-    const current = await invoke<string | null>("keychain_get", { key: "refresh_token" });
-    if (current !== refreshToken) return refreshAccessToken({ fetchImpl, quiet });
+    if (await superseded()) return refreshAccessToken({ fetchImpl, quiet });
     revoked = true;
     // `quiet` for a caller that is about to sign in again by itself.
     if (!quiet) void announceSessionRevoked().catch(() => undefined);
@@ -85,13 +86,14 @@ export async function refreshAccessToken(
   }
   if (!res.ok) return "failed";
   const { jwt_token } = await res.json();
+  if (await superseded()) return "failed";
   await invoke("keychain_set", { key: "jwt", value: jwt_token });
   return { jwt: jwt_token };
 }
 
 /** Try to refresh the access token using the stored refresh_token. Returns new JWT or null. */
-export async function tryRefreshJwt(): Promise<string | null> {
-  const outcome = await refreshAccessToken();
+export async function tryRefreshJwt(fetchImpl?: typeof appFetch): Promise<string | null> {
+  const outcome = await refreshAccessToken({ fetchImpl });
   if (typeof outcome === "string") return null;
   await useSubscriptionStore.getState().load().catch(() => undefined);
   return outcome.jwt;
