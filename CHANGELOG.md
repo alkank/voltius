@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-10-16
+
+### Added
+
+- Import hosts and keys from `~/.ssh/config` through the new OpenSSH source in **Import/Export**. It follows `Include` lines, wildcards included, as long as the paths are inside `~/.ssh`, and brings in the keys named by `IdentityFile`. A preview lets you pick the vault and lists what can't be imported: patterns, `Match` blocks and `ProxyCommand` hosts. Keys start unchecked when the destination is a team vault. On first run on desktop, the notification centre offers a one-time import
+- Keep hosts in step with `~/.ssh/config`. This is opt-in and desktop only: turn it on in **Settings → Hosts → ~/.ssh/config** after a preview of every alias. The sync owns only the fields the config sets (address, port, user, key and jump hosts), and a host's name, notes and everything else stay yours. Synced hosts carry a badge, and their editor shows a "Managed by ~/.ssh/config" banner with Detach. A host is deleted only when no device still has its alias
+- Host pickers open with the five most recently used hosts at the top. This covers the SFTP host picker, the key's "Add to host", and snippet targets and remote paths (#643)
+
+### Changed
+
+- "Specific connections" in a port forwarding rule now uses the shared host picker, with a filter, folders and recent hosts. Selected hosts show as chips (#644)
+
+### Removed
+
+- The SSH Config Sync plugin, which renamed hand-edited hosts back on every sync. Its hosts lose the `ssh-config` tag and are otherwise unchanged. If you had its sync on, a notice links to the new built-in sync
+
+### Fixed
+
+- A host's status dot turned red after a single failed probe, for example right after waking from sleep. A host now shows as down only after probes have failed for 15 seconds, and turns green again on the first success (#646)
+- Import/Export menu rows were squashed to 23 px, and the submenu closed as you moved onto it. On mobile, Import/Export now opens from **More**, where it had no entry point before
+
+## [0.57.0] - 2026-10-14
+
+### Added
+
+- Change the master password on a signed-in device without typing the current one. "Forgot it? Confirm with …" in the change-password dialog lets the system confirm it's you (Windows Hello, Touch ID, polkit, or the Android unlock prompt). The server still checks your second factor (#629)
+- The sync server emails you when your master password changes (VoltiusApp/server#112)
+- Paste an image into an SSH session. When the clipboard holds an image and no text, pasting (Ctrl+V, Ctrl+Shift+V, right-click, or Cmd+V on macOS) uploads it to the host under `~/.cache/voltius/pastes` and types its path, so tools on the host such as Claude Code can attach a screenshot. Pasted files are owner-only and removed after 7 days. A toast shows progress with Cancel, Retry on failure, and "Delete from host" once done. Turn it off in **Settings → Terminal** (#630, by @ghecko)
+- Images opened from the SFTP panel or page now show in the editor tab instead of "Binary file — can't edit": PNG, JPEG, GIF, WebP, BMP, ICO, AVIF and SVG, with Fit/100%, zoom, pan, copy and download. Files over 25 MB ask before loading (#634)
+- Port forwarding on Android. The Port Forwarding screen lists the session's active forwards, auto-detected ones included, and the terminal's panel row opens it. Tunnels keep running while Voltius is in the background, with a "N ports forwarded" notification that opens the screen (#637)
+
+### Changed
+
+- A single click opens a vault folder card; Ctrl/Cmd/Shift-click selects it. SFTP folders still open with a double click
+
+### Fixed
+
+- Accounts linked from a local vault, or migrated, had a different team identity on each device, and a master password change could cut a device off from its team vaults. The identity is now stored with the account and survives password changes and linked devices. A device left on the old password after a change made elsewhere opens again at sign-in, and biometric unlock picks up the new password
+- In a Proxmox LXC tab opened with `pct exec`, the Docker panel, process manager, metrics and system info showed, and acted on, the Proxmox host instead of the container. They now run inside the LXC (#642)
+- Stopping an auto-forwarded port lasted only until the host's last terminal closed or the app restarted. Stopped ports are now remembered per connection on this device (#632)
+- Under tmux with mouse tracking (for example, a pane running Claude Code), the next mouse move cleared a fresh selection, so copy-on-select, Ctrl+Shift+C and search prefill got nothing (#631)
+- Ctrl+S in an SFTP editor tab with no loaded text (a binary file, or one still loading) saved an empty file over the original (#634)
+- Opening a `voltius://` link crashed the Android app (#637)
+- The app's own notifications carried a "[Voltius]" tag. Only plugin notifications show a tag now (#635)
+
 ## [0.56.0] - 2026-10-12
 
 ### Added

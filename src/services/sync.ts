@@ -37,6 +37,7 @@ import { onForeground, onNetworkBack } from "@/lib/networkSignals";
 import { useCrossDeviceSessionsStore } from "@/stores/crossDeviceSessionsStore";
 import { parseUsingEvent } from "@/services/presenceEvent";
 import { bytesToBase64, base64ToByteArray } from "@/services/teamVaultSyncCore";
+import { applyRemoteSshConfigState } from "@/services/sshConfig/state";
 
 export interface BlobPayload {
   files: Record<string, string>;
@@ -164,10 +165,10 @@ async function tryRefreshJwt(): Promise<string | null> {
   }
 
   if (wasProBefore && !isProNow) {
-    const { useNotificationStore } = await import("@/stores/notificationStore");
+    const { APP_SOURCE, useNotificationStore } = await import("@/stores/notificationStore");
     const { useUIStore } = await import("@/stores/uiStore");
     useNotificationStore.getState().addToast({
-      source: { kind: "plugin", id: "system", name: "Voltius" },
+      source: APP_SOURCE,
       type: "toast",
       message: i18n.t("common.toast.proSubscriptionEnded"),
       severity: "warning",
@@ -226,7 +227,7 @@ let _deviceId: string | null = null;
  * share the ID, which means one won't receive live SSE nudges from itself — a
  * minor degradation that's acceptable vs. unbounded blob accumulation.
  */
-async function getDeviceId(): Promise<string> {
+export async function getDeviceId(): Promise<string> {
   if (_deviceId) return _deviceId;
   let id = localStorage.getItem("voltius.device_id");
   if (!id) {
@@ -461,6 +462,15 @@ async function reloadAllStores(): Promise<void> {
   ]);
 }
 
+async function settleVault(): Promise<void> {
+  try {
+    const { settleVaultOnDek } = await import("@/services/account");
+    await settleVaultOnDek();
+  } catch (e) {
+    logFailure("settle vault on dek")(e);
+  }
+}
+
 async function completeTeamLoginSetup(): Promise<void> {
   // Register the public key even for users with no linked vaults, so it is
   // already there when they're added to a team. publishMyPublicKey still
@@ -560,6 +570,8 @@ async function pullRemotePayload(serverUrl: string, remoteDeviceId: string): Pro
   return remotePayload;
 }
 
+const applyRemoteSshConfig = (payload: BlobPayload) => applyRemoteSshConfigState(payload.files["ssh-config.json"]).catch(() => {});
+
 /** Run `step` per remote blob source; a failing source is skipped and returned, never thrown. */
 export async function forEachRemoteBlob<T>(
   sources: T[],
@@ -594,10 +606,9 @@ async function pullAndMerge(remoteDeviceId: string): Promise<boolean> {
   if (!remotePayload) return false;
 
   const { payload, changed } = mergeBlobPayload(await invoke<BlobPayload>("state_export_raw"), remotePayload);
-  if (!changed) return false;
-
-  await importMergedPayload(payload);
-  return true;
+  if (changed) await importMergedPayload(payload);
+  await applyRemoteSshConfig(remotePayload);
+  return changed;
 }
 
 /**
@@ -686,6 +697,7 @@ async function readDeviceSecrets(): Promise<SecretMaps> {
  * For new cloud accounts (linkToCloud), use syncOnLogin instead.
  */
 export async function syncOnLoginReplace(): Promise<void> {
+  await settleVault();
   try {
     await unlockVaultIfNeeded();
 
@@ -706,12 +718,16 @@ export async function syncOnLoginReplace(): Promise<void> {
       ...(await readDeviceSecrets()),
     };
 
+    const pulled: BlobPayload[] = [];
     await forEachRemoteBlob(devices, deviceLabel, async (device) => {
       const remotePayload = await pullRemotePayload(serverUrl, device.device_id);
-      if (remotePayload) merged = mergeBlobPayload(merged, remotePayload).payload;
+      if (!remotePayload) return;
+      merged = mergeBlobPayload(merged, remotePayload).payload;
+      pulled.push(remotePayload);
     });
 
     await importMergedPayload(merged);
+    for (const remotePayload of pulled) await applyRemoteSshConfig(remotePayload);
     await reloadAllStores();
     await push();
     await completeTeamLoginSetup();
@@ -730,6 +746,7 @@ export async function syncOnLoginReplace(): Promise<void> {
 /** Pull on login to restore data from server, then push local state. */
 export async function syncOnLogin(): Promise<void> {
   _loginSyncOwed = false;
+  await settleVault();
   try {
     await unlockVaultIfNeeded();
 
@@ -785,7 +802,8 @@ export function syncInBackground(forcePush = false): Promise<void> {
 
 /** Launch sync. A paused device skips it; resuming runs it then. */
 export async function syncOnLaunch(): Promise<void> {
-  if (!isSyncPaused()) await syncOnLogin();
+  if (isSyncPaused()) await settleVault();
+  else await syncOnLogin();
 }
 
 export function setSyncPaused(paused: boolean): void {
@@ -864,6 +882,8 @@ export function haltSync(): void {
   if (_syncTimer) clearTimeout(_syncTimer);
   _syncTimer = null;
 }
+
+export const isSyncHalted = (): boolean => _halted;
 
 export function resumeSync(): void {
   _halted = false;

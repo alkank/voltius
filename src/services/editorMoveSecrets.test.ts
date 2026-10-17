@@ -44,7 +44,7 @@ vi.mock("@/services/vault", () => ({
   deleteSecret: (k: string) => h.remove(h.teamOf(h.location.vault), k),
   getSecret: vi.fn(),
 }));
-vi.mock("@/stores/connectionStore", () => ({ useConnectionStore: { getState: () => ({ updateConnection: h.moveTo }) } }));
+vi.mock("@/stores/connectionStore", () => ({ useConnectionStore: { getState: () => ({ updateConnection: h.moveTo }) }, findAnyConnection: () => undefined }));
 vi.mock("@/stores/keyStore", () => ({ useKeyStore: { getState: () => ({ updateKey: h.moveTo }) } }));
 vi.mock("@/stores/identityStore", () => ({ useIdentityStore: { getState: () => ({ updateIdentity: h.moveTo }) } }));
 vi.mock("@/stores/pendingTeamSecretUploadStore", () => ({
@@ -56,7 +56,7 @@ vi.mock("@/stores/pendingTeamSecretUploadStore", () => ({
 vi.mock("@/stores/teamVaultStateStore", () => ({
   useTeamVaultStateStore: { getState: () => ({ credentialsUnavailableByTeamId: h.unavailable }) },
 }));
-vi.mock("@/stores/notificationStore", () => ({ useNotificationStore: { getState: () => ({ addToast: h.addToast, toasts: [] }) } }));
+vi.mock("@/stores/notificationStore", () => ({ APP_SOURCE: { kind: "app" }, useNotificationStore: { getState: () => ({ addToast: h.addToast, toasts: [] }) } }));
 vi.mock("@/i18n", () => ({ default: { t: (k: string) => k } }));
 vi.mock("@/lib/logger", () => ({ logFailure: () => () => {} }));
 

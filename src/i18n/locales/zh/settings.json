@@ -37,6 +37,10 @@
         "title": "纯文本粘贴（无括号粘贴）",
         "desc": "不带 \\x1b[200~ / \\x1b[201~ 标记的纯文本粘贴。修复粘贴到 sudo 提示符或不支持括号粘贴的 CLI 应用时的乱码问题。"
       },
+      "pasteImageAsPath": {
+        "title": "以文件路径粘贴图片",
+        "desc": "剪贴板中是图片时，将其上传到 SSH 主机（~/.cache/voltius/pastes，仅所有者可访问，7 天后清理）并粘贴其路径。让主机上的工具（如 Claude Code）可以附加截图。若从该主机再 SSH 到其他主机，路径仍指向这第一台主机。"
+      },
       "keywordHighlight": {
         "title": "关键词高亮",
         "desc": "为命令输出中的“error”“warning”等词语着色。仅在启用 Shell 集成的会话中生效。",
@@ -234,6 +238,11 @@
         "sub": "更新密码而无需重新加密保险库",
         "title": "更改主密码",
         "currentPlaceholder": "当前密码",
+        "verifyWithDevice": "忘记了？改用{{method}}确认",
+        "verifiedWithDevice": "已在此设备上确认",
+        "deviceReason": "确认以更改主密码",
+        "deviceFailed": "此设备无法确认您的身份。请改为输入当前密码。",
+        "deviceSignedOut": "此设备已退出登录，可能是因为在其他设备上更改了密码。请使用新密码重新登录。",
         "newPlaceholder": "新密码（至少 8 个字符）",
         "confirmPlaceholder": "确认新密码",
         "errorCurrentRequired": "需要当前密码",
@@ -1083,6 +1092,80 @@
       "teamPresence": {
         "title": "共享您正在使用的团队保险库主机",
         "desc": "开启后，当您打开到某台主机的终端时，您的头像会出现在该主机卡片上。只有有权访问该主机的队友才能看到。"
+      },
+      "sshConfig": {
+        "switch": {
+          "title": "从 ~/.ssh/config 持续同步",
+          "desc": "配置中的主机会在 Voltius 中创建并保持最新，覆盖你所有的电脑。适用于由工具生成配置的情况（gcloud、MDM…）。"
+        },
+        "vault": {
+          "title": "保险库",
+          "desc": "新的托管主机创建的位置。仅限个人保险库。",
+          "personal": "个人"
+        },
+        "status": {
+          "title": "状态",
+          "line": "上次读取 {{when}} · {{managed}} 个托管 · {{skipped}} 个未同步",
+          "never": "尚未读取",
+          "view": "查看主机…",
+          "syncNow": "立即同步"
+        },
+        "off": {
+          "title": "关闭持续同步？",
+          "message_other": "{{count}} 个托管主机将保留在 Voltius 中并变为普通主机：它们在你所有的电脑上都不再跟随 ~/.ssh/config。",
+          "confirm": "关闭"
+        },
+        "dialog": {
+          "activateTitle": "开启持续同步",
+          "reviewTitle": "来自 ~/.ssh/config 的主机",
+          "intro": "已关联的主机保留其名称、文件夹和设置。只有文件中指定的内容（地址、端口，以及存在时的用户、密钥或跳板机）会跟随文件，覆盖你所有的电脑。",
+          "turnOn": "开启",
+          "cancel": "取消",
+          "close": "关闭",
+          "linkAgain": "重新关联",
+          "recreate": "重新创建",
+          "counts": "{{create}} 个待创建 · {{link}} 个待关联 · {{skipped}} 个未同步 · 保险库 {{vault}}"
+        },
+        "row": {
+          "create": "将被创建",
+          "link": {
+            "legacy": "将关联到“{{name}}” · 之前的同步",
+            "detached": "将关联到“{{name}}” · 此前已分离",
+            "name": "将关联到“{{name}}” · 名称和地址相同",
+            "address": "将关联到“{{name}}” · 地址相同"
+          },
+          "ambiguous": "有歧义（{{names}} 均匹配）· 将创建新主机",
+          "managed": "托管 · “{{name}}”",
+          "detached": "已分离 · “{{name}}”不再跟随文件",
+          "deleted": "已删除 · 同步不会重新创建",
+          "ignored": "已忽略 · 不会同步",
+          "identityReplaced": "身份“{{name}}”将被文件中的密钥替换",
+          "skipped": {
+            "pattern": "未同步 · 通配模式，不是主机",
+            "match": "未同步 · Match 块",
+            "include": "未同步 · 无法读取 Include",
+            "includeOutside": "未同步 · ~/.ssh 之外的 Include",
+            "proxyCommand": "未同步 · 不支持 ProxyCommand",
+            "key": "密钥无法读取 · 主机将不带密钥创建",
+            "keyNotCopied": "密钥未复制 · 主机将不带密钥创建",
+            "pending": "等待中 · 主机尚未从您的其他设备同步过来"
+          }
+        },
+        "keys": {
+          "title": "密钥",
+          "switch": "将私钥复制到保险库",
+          "warning": "复制的密钥会进入 {{vault}}，并同步到你所有的设备（包括手机，已加密）。",
+          "settingDesc": "关闭：主机使用保险库中已有的密钥（相同公钥或名称），否则不使用密钥。复制的密钥会同步到你所有的设备。",
+          "copy": "将被复制",
+          "notCopied": "未复制",
+          "exists": "已在保险库中",
+          "unreadable": "无法读取"
+        },
+        "here": {
+          "title": "此计算机",
+          "desc": "你的账户已开启同步，但这台计算机的 ~/.ssh/config 尚未检查。在你检查之前，这里不会读取或复制任何内容。",
+          "action": "检查…"
+        }
       }
     },
     "toggleDefs": {
@@ -1092,6 +1175,7 @@
       "dragSelectsText": { "label": "拖动即选择文本" },
       "groupTabsByHost": { "label": "按主机分组标签页" },
       "ignoreBracketedPaste": { "label": "纯文本粘贴（无括号粘贴）" },
+      "pasteImageAsPath": { "label": "以文件路径粘贴图片" },
       "keywordHighlight": { "label": "关键词高亮" },
       "autoForward": { "label": "自动端口转发" },
       "forwardingNotifications": { "label": "端口转发通知" },
