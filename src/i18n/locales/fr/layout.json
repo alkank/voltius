@@ -22,12 +22,15 @@
       "vaultUnreadableRetry": "Essayer un autre mot de passe",
       "chooseHowToUse": "Choisissez comment utiliser Voltius",
       "getStarted": "Commencer",
-      "getStartedSub": "Sécurisé par le trousseau du système — aucun mot de passe requis",
+      "getStartedSub": "Sans compte — associez les appareils de votre réseau",
+      "getStartedSub_ios": "Sécurisé par le trousseau du système — aucun mot de passe requis",
       "or": "ou",
       "cloudAccount": "Compte cloud",
-      "cloudAccountSub": "Synchronisez sur tous vos appareils — connectez-vous ou créez un compte",
+      "cloudAccountSub": "Gratuit · appareils associés automatiquement. Pro ajoute le cloud et la sauvegarde.",
+      "cloudAccountSub_ios": "Synchronisez sur tous vos appareils — connectez-vous ou créez un compte",
       "back": "Retour",
-      "signupPrompt": "Créez un compte pour synchroniser sur tous vos appareils",
+      "signupPrompt": "Créez un compte pour associer vos appareils automatiquement",
+      "signupPrompt_ios": "Créez un compte pour synchroniser sur tous vos appareils",
       "signinPrompt": "Connectez-vous pour restaurer vos données synchronisées",
       "emailPlaceholder": "E-mail",
       "masterPasswordMinPlaceholder": "Mot de passe principal (8 caractères min.)",
@@ -43,25 +46,59 @@
       "newHere": "Nouveau ici ? ",
       "e2eeNotice": "Vos données sont chiffrées de bout en bout — le serveur ne peut pas les lire.",
       "openSource": "Open source.",
-      "agreeToTerms": "En créant un compte, vous acceptez nos ",
-      "and": " et ",
-      "termsOfService": "conditions d'utilisation",
-      "privacyPolicy": "politique de confidentialité",
-      "accountCreatedToast": "Compte créé ! Vérifiez votre e-mail pour le confirmer.",
+      "agreeToTerms": "En créant un compte, vous acceptez nos <terms>conditions d'utilisation</terms> et notre <privacy>politique de confidentialité</privacy>.",
+      "accountCreatedToast": "Compte créé. Vérifiez votre e-mail pour le confirmer.",
       "vaultUnreadableBodyNoPassword": "Le fichier de secrets de cet appareil ne peut pas être ouvert avec la clé enregistrée sur cette machine. Rien n'a été supprimé. Mettez-le de côté pour repartir d'un coffre vide, ou restaurez une des sauvegardes ci-dessous.",
       "vaultSetAsideLocal": "Mettre de côté et repartir à zéro",
-      "vaultSetAsideLocalSub": "Conserve une copie de sauvegarde sur cet appareil"
+      "vaultSetAsideLocalSub": "Conserve une copie de sauvegarde sur cet appareil",
+      "addAccountLater": "Vous pourrez créer un compte plus tard en conservant vos hôtes.",
+      "errorEmailRequired": "Saisissez votre e-mail",
+      "masterPasswordNote": "Ce mot de passe chiffre vos données. Il ne peut être ni réinitialisé ni récupéré : conservez-le en lieu sûr.",
+      "invitation": {
+        "toggle": "Vous avez un lien d'invitation ?",
+        "placeholder": "Lien d'invitation",
+        "use": "Utiliser",
+        "checking": "Vérification…",
+        "invalid": "Ce n'est pas un lien d'invitation. Collez le lien complet de l'e-mail.",
+        "notFound": "Aucune invitation en attente sur {{server}} ne correspond à ce lien. Vérifiez l'adresse du serveur ou demandez une nouvelle invitation.",
+        "closedHint": "Ce serveur ne crée de comptes que sur invitation. Collez le lien de votre e-mail d'invitation.",
+        "joining": "Rejoindre {{team}}",
+        "invitedBy": "{{inviter}} vous a invité en tant que {{role}}",
+        "invitedAs": "Invité en tant que {{role}}",
+        "remove": "Retirer l'invitation",
+        "createAndJoin": "Créer le compte et rejoindre"
+      }
     },
     "cloudAuthModal": {
       "registerTitle": "Créer un compte cloud",
       "signinTitle": "Connexion au compte cloud",
-      "registerDesc": "Créez un compte pour synchroniser ce coffre et débloquer les fonctionnalités cloud. Vos données restent chiffrées de bout en bout.",
-      "signinDesc": "Connectez-vous pour activer la synchronisation, les abonnements, les fonctionnalités d'équipe et les coffres partagés.",
+      "registerDesc": "Créez un compte pour associer automatiquement vos appareils et débloquer les fonctionnalités cloud. Vos données restent chiffrées de bout en bout.",
+      "registerDesc_ios": "Créez un compte pour synchroniser ce coffre et débloquer les fonctionnalités cloud. Vos données restent chiffrées de bout en bout.",
+      "signinDesc": "Connectez-vous pour associer automatiquement vos appareils et utiliser la synchronisation cloud, les abonnements, les fonctionnalités d'équipe et les coffres partagés.",
+      "signinDesc_ios": "Connectez-vous pour activer la synchronisation, les abonnements, les fonctionnalités d'équipe et les coffres partagés.",
+      "addTitle": "Ajouter un autre compte",
+      "addDesc": "Connectez-vous à un autre compte cloud ou créez-en un. Le compte actuel reste dans le menu du compte pour y revenir.",
       "createMasterPasswordPlaceholder": "Créer un mot de passe principal",
       "confirmMasterPasswordPlaceholder": "Confirmer le mot de passe principal",
       "errorPasswordRequired": "Mot de passe requis",
-      "errorMinLength4": "Au moins 4 caractères",
-      "pleaseWait": "Veuillez patienter…"
+      "pleaseWait": "Veuillez patienter…",
+      "reauthTitle": "Se reconnecter",
+      "reauthDesc": "Votre session sur cet appareil a pris fin. Saisissez votre mot de passe principal pour vous reconnecter."
+    },
+    "twoFactor": {
+      "prompt": "Saisissez le code à 6 chiffres de votre application d'authentification.",
+      "recoveryPrompt": "Saisissez l'un de vos codes de récupération. Chacun ne fonctionne qu'une fois.",
+      "codePlaceholder": "Code à 6 chiffres",
+      "recoveryPlaceholder": "Code de récupération",
+      "useRecovery": "Utiliser un code de récupération",
+      "useCode": "Utiliser un code d'authentification",
+      "verify": "Vérifier",
+      "usePasskey": "Utiliser une clé d'accès",
+      "passkeyOrCodePrompt": "Utilisez votre clé d'accès, ou saisissez le code à 6 chiffres de votre application d'authentification.",
+      "passkeyOrRecoveryPrompt": "Utilisez votre clé d'accès, ou saisissez l'un de vos codes de récupération.",
+      "passkeyWaiting": "Continuez dans votre navigateur, puis revenez ici.",
+      "passkeyDoneTitle": "Terminé",
+      "passkeyDoneBody": "Revenez à Voltius. Vous pouvez fermer cet onglet."
     },
     "mainPanel": {
       "noVaultSelectedTitle": "Aucun coffre sélectionné",
@@ -71,6 +108,8 @@
         "offlineBody": "Les coffres d'équipe nécessitent une connexion internet. Votre coffre personnel reste disponible hors ligne.",
         "forbiddenTitle": "Accès révoqué",
         "forbiddenBody": "Vous n'avez plus accès à ce coffre d'équipe. Contactez le propriétaire de l'équipe.",
+        "planLapsedTitle": "Forfait Business expiré",
+        "planLapsedBody": "Votre accès venait de permissions Business. Demandez au propriétaire de l'équipe de renouveler Business.",
         "waitingForAccessTitle": "En attente d'accès",
         "waitingForAccessBody": "Un propriétaire du coffre d'équipe doit vous accorder l'accès. Cela se fait automatiquement à la prochaine connexion d'un propriétaire.",
         "waitingForAccessBodyNamed": "En attente que {{owner}} vous accorde l'accès — une seule connexion de sa part suffit.",
@@ -80,10 +119,13 @@
         "keyMismatchTitle": "Cet appareil ne peut pas ouvrir la clé du coffre",
         "keyMismatchBody": "Votre clé est bien sur le serveur, mais les clés de compte de cet appareil ne correspondent pas. Déconnectez-vous de ce compte puis reconnectez-vous avec votre mot de passe principal.",
         "errorTitle": "Impossible de charger le coffre d'équipe",
-        "errorBody": "Une erreur s'est produite. Réessayez."
+        "errorBody": "Une erreur s'est produite. Réessayez.",
+        "updateRequiredTitle": "Mise à jour requise",
+        "updateRequiredBody": "Ce coffre d'équipe utilise des fonctionnalités que cette version de Voltius ne prend pas en charge. Mettez à jour Voltius pour l'ouvrir."
       },
       "manageSubscription": "Gérer l'abonnement →",
-      "tryAgain": "Réessayer"
+      "tryAgain": "Réessayer",
+      "checkForUpdates": "Rechercher des mises à jour"
     },
     "newSession": {
       "searchPlaceholder": "ssh utilisateur@hôte · série · local …",
@@ -92,10 +134,6 @@
       "sectionLocal": "Local",
       "noHostsMatch": "Aucun hôte ne correspond à \"{{query}}\"",
       "noHostsYet": "Aucun hôte pour le moment",
-      "connectTo": "Se connecter à {{user}}@{{host}}",
-      "portSsh": "Port {{port}} · SSH",
-      "serialConnection": "Connexion série",
-      "configurePortBaud": "Configurer le port et le débit",
       "localShellFallback": "Shell local"
     },
     "sidebarAccount": {
@@ -105,7 +143,7 @@
       "modeCloud": "Compte cloud",
       "modeLocalPassword": "Local · protégé par mot de passe",
       "modeLocal": "Compte local",
-      "lockVault": "Verrouiller le coffre",
+      "lockVault": "Verrouiller maintenant",
       "reportBug": "Signaler un bug…",
       "appearance": "Apparence",
       "toggleTheme": "Basculer clair / sombre",
@@ -119,10 +157,14 @@
       "leaveLocalTitle": "Quitter ce compte local ?",
       "leaveLocalMessage": "Les hôtes, clés et snippets de ce compte sont stockés uniquement sur cette machine. Passer à {{account}} les efface définitivement.",
       "leaveLocalConfirm": "Effacer et changer",
+      "removeTitle": "Retirer ce compte de cet appareil ?",
+      "removeMessage": "Les hôtes, clés et snippets de {{account}} enregistrés sur cet appareil sont supprimés. Ce qui n'a pas été synchronisé ne pourra pas être récupéré.",
+      "removeConfirm": "Retirer",
       "autoLock": "Réglages du verrouillage auto…",
       "autoLockOff": "Verrouillage auto désactivé",
       "autoLockAfter": "Verrouillage auto après {{duration}}",
-      "addAccount": "Ajouter un autre compte…"
+      "addAccount": "Ajouter un autre compte…",
+      "autoLockImmediately": "Se verrouille quand vous quittez l'app"
     },
     "splash": {
       "steps": {
@@ -137,12 +179,12 @@
       "vaultFound": "Coffre trouvé",
       "connectionsUnavailable": "Connexions indisponibles",
       "sshClient": "Client SSH",
-      "vaultUnreadable": "Coffre illisible"
+      "vaultUnreadable": "Coffre illisible",
+      "keychainHint": "Si macOS demande le mot de passe de votre trousseau, saisissez le mot de passe de session de votre Mac et choisissez « Toujours autoriser ». macOS le redemande après chaque mise à jour de Voltius."
     },
     "sync": {
       "title": "Synchronisation",
-      "voltiusSync": "Synchronisation Voltius",
-      "gistE2ee": "Gist E2EE",
+      "moreProviders": "Autres fournisseurs de synchronisation",
       "syncNow": "Synchroniser maintenant",
       "signInForSync": "Connectez-vous pour la synchronisation cloud",
       "requiresPro": "Nécessite Pro",
@@ -151,26 +193,118 @@
       "enableArrow": "Activer →",
       "notConfigured": "Non configuré",
       "configureArrow": "Configurer →",
+      "paused": "En pause",
+      "resumeArrow": "Reprendre →",
+      "pause": "Mettre la synchronisation en pause",
+      "resume": "Reprendre la synchronisation",
       "encryptedBlob": "Bloc chiffré · {{size}}",
+      "local": {
+        "intro": "Voltius va demander à trouver vos appareils sur ce réseau afin qu'ils se synchronisent directement.",
+        "introContinue": "Continuer",
+        "title": "Réseau local",
+        "pause": "Mettre la synchronisation locale en pause",
+        "resume": "Reprendre la synchronisation locale",
+        "status": {
+          "live_one": "Connecté à {{count}} appareil",
+          "live_many": "Connecté à {{count}} appareils",
+          "live_other": "Connecté à {{count}} appareils",
+          "syncing": "Synchronisation avec {{name}}…",
+          "none": "Aucun appareil à proximité",
+          "paused": "Synchronisation locale en pause",
+          "blocked": "Voltius ne peut pas accéder à votre réseau. Autorisez l'accès au réseau local dans Réglages Système › Confidentialité et sécurité.",
+          "blockedOther": "Voltius ne peut pas accéder à votre réseau. Vérifiez que votre pare-feu autorise Voltius sur les réseaux privés.",
+          "blockedNetwork": "Voltius ne peut pas accéder à votre réseau local. Vérifiez que vous êtes connecté au Wi-Fi."
+        },
+        "openSettings": "Ouvrir les réglages",
+        "route": {
+          "lan": "Même Wi-Fi",
+          "tailscale": "Tailscale",
+          "vpn": "VPN"
+        },
+        "row": {
+          "syncing_one": "Synchronisation de {{count}} modification",
+          "syncing_many": "Synchronisation de {{count}} modifications",
+          "syncing_other": "Synchronisation de {{count}} modifications",
+          "behind_one": "Hors ligne · {{count}} modification de retard",
+          "behind_many": "Hors ligne · {{count}} modifications de retard",
+          "behind_other": "Hors ligne · {{count}} modifications de retard",
+          "offlineOk": "Hors ligne · à jour",
+          "seenBehind_one": "Vu {{when}} · {{count}} de retard",
+          "seenBehind_many": "Vu {{when}} · {{count}} de retard",
+          "seenBehind_other": "Vu {{when}} · {{count}} de retard",
+          "seenOk": "Vu {{when}} · à jour",
+          "paused": "En pause",
+          "keyChanged": "Impossible de vérifier cet appareil · Associez-le à nouveau pour le vérifier",
+          "moved": "Passé sur un compte Voltius — connectez-vous là-bas pour continuer à synchroniser"
+        },
+        "catchUp": "Les modifications leur parviendront la prochaine fois que les deux appareils seront en ligne et pourront se joindre.",
+        "upsell": "Voltius Cloud garde vos appareils synchronisés même lorsqu'ils ne sont pas en ligne en même temps.",
+        "tooltip": "Synchronisation avec les appareils proches",
+        "toast": {
+          "lan": "{{name}} est à proximité · Synchronisation via le Wi-Fi",
+          "tailscale": "{{name}} est à proximité · Synchronisation via Tailscale",
+          "vpn": "{{name}} est à proximité · Synchronisation via le VPN"
+        },
+        "pair": {
+          "title": "Associer un appareil",
+          "searching": "Ouvrez aussi « Associer un appareil » sur votre autre appareil. Gardez les deux sur le même réseau.",
+          "signedInHint": "L'autre appareil est-il connecté à un compte Voltius ? Connectez-vous plutôt ici avec le même compte.",
+          "compare": "Vérifiez que les deux écrans affichent ce code",
+          "confirm": "Les codes correspondent",
+          "cancel": "Annuler",
+          "peerConfirmed": "{{name}} a confirmé",
+          "combine": "Fusionner les deux",
+          "useTheirs": "Utiliser les données de {{name}}",
+          "done": "Associé à {{name}}",
+          "close": "Fermer",
+          "tryAgain": "Réessayer",
+          "joining": "Association…",
+          "hasData": "Cet appareil contient déjà des données. Fusionnez-les avec celles de {{name}}, ou utilisez plutôt les données de {{name}}.",
+          "replaces": "Remplace {{name}}"
+        },
+        "forget": {
+          "label": "Oublier",
+          "aria": "Oublier {{name}}",
+          "account": "Arrêter la synchronisation avec {{name}} sur le réseau local depuis cet appareil. Pour le retirer complètement, déconnectez-vous sur cet appareil.",
+          "group": "Retirer {{name}} de vos appareils. Il conserve ce qu'il a déjà et ne reçoit plus rien de nouveau tant que vous ne l'associez pas à nouveau.",
+          "keyChanged": "L'identité de cet appareil a changé. Associez-le à nouveau pour vérifier la nouvelle identité avec un code, et seulement si vous reconnaissez cet appareil.",
+          "failed": "Impossible d'oublier {{name}}. Réessayez."
+        },
+        "leave": {
+          "label": "Quitter ce groupe",
+          "prompt": "Cet appareil arrête de se synchroniser avec vos autres appareils sur le réseau local. Il conserve ce qu'il a déjà, et les autres le retirent de leur liste. Vous pourrez l'associer à nouveau plus tard.",
+          "confirm": "Quitter",
+          "failed": "Impossible de quitter le groupe. Réessayez."
+        }
+      },
       "status": {
         "syncing": "Synchronisation…",
         "synced": "Synchronisé",
         "syncedAt": "Synchronisé · {{time}}",
         "error": "Erreur de synchronisation",
         "errorDetail": "Erreur de synchronisation : {{error}}",
-        "offline": "Hors ligne",
+        "errorDetailFrom": "Erreur de synchronisation · {{source}} : {{error}}",
+        "offline": "Serveur injoignable",
+        "offlineDetail": "Serveur injoignable : {{error}}",
         "idle": "Inactif",
         "notConfigured": "Synchronisation non configurée",
+        "paused": "Synchronisation en pause",
         "default": "Synchronisation",
-        "unknown": "inconnu"
-      }
+        "unknown": "inconnu",
+        "partial": "Synchronisation partielle",
+        "partialAt": "Synchronisation partielle · {{time}}",
+        "partialTooltip": "Synchronisation partielle : {{error}}",
+        "partialDetail_one": "{{count}} appareil n'a pas pu être synchronisé",
+        "partialDetail_many": "{{count}} appareils n'ont pas pu être synchronisés",
+        "partialDetail_other": "{{count}} appareils n'ont pas pu être synchronisés"
+      },
+      "showDevices": "Voir les appareils →"
     },
     "titleBar": {
       "sftp": "SFTP",
       "sftpTitle": "Transfert de fichiers (SFTP)",
       "unifiedSplitTab": "Onglet divisé unifié",
       "splitFallback": "Division",
-      "splitCountSuffix": " + {{count}}",
       "ended": "Terminée",
       "watching": "En observation",
       "sharingCurrently": "Partage en cours",
@@ -187,6 +321,31 @@
       "newSession": "Nouvelle session",
       "renameTab": "Renommer l'onglet",
       "closeTab": "Fermer l'onglet",
+      "stack": {
+        "sessions_one": "{{host}} · {{count}} session",
+        "sessions_many": "{{host}} · {{count}} sessions",
+        "sessions_other": "{{host}} · {{count}} sessions",
+        "heading_one": "<host>{{host}}</host> · {{count}} session",
+        "heading_many": "<host>{{host}}</host> · {{count}} sessions",
+        "heading_other": "<host>{{host}}</host> · {{count}} sessions",
+        "count_one": "{{count}} session",
+        "count_many": "{{count}} sessions",
+        "count_other": "{{count}} sessions",
+        "newSessionOn": "Nouvelle session sur {{host}}",
+        "closeAll": "Tout fermer ({{count}})",
+        "openInSplit": "Ouvrir en vue scindée",
+        "inSplit": "en vue scindée",
+        "pin": "Afficher dans le panneau latéral",
+        "unpin": "Masquer le panneau latéral",
+        "status": {
+          "connected": "Connecté · {{time}}",
+          "connecting": "Connexion…",
+          "disconnected": "Déconnecté",
+          "offline": "En attente du réseau",
+          "reconnecting": "Reconnexion…",
+          "error": "Erreur · {{message}}"
+        }
+      },
       "splitMenu": {
         "rename": "Renommer l'onglet…",
         "broadcastOn": "Diffuser la saisie dans tous les panneaux",
@@ -195,15 +354,26 @@
         "pane": "{{index}} · {{name}}",
         "splitApart": "Séparer en onglets",
         "closeTab_one": "Fermer l'onglet ({{count}} session)",
+        "closeTab_many": "Fermer l'onglet ({{count}} sessions)",
         "closeTab_other": "Fermer l'onglet ({{count}} sessions)"
       },
       "plan": {
-        "proTrial": "Essai Pro — {{daysLeft}}j restants",
-        "teams": "Teams",
-        "business": "Business",
-        "pro": "Pro",
         "upgradeTrial": "Mettre à niveau · Essai gratuit de 14j",
         "upgrade": "Mettre à niveau"
+      },
+      "splitLabelMore": "{{label}} + {{count}}",
+      "lock": {
+        "keptToast_one": "{{count}} onglet verrouillé conservé",
+        "keptToast_many": "{{count}} onglets verrouillés conservés",
+        "keptToast_other": "{{count}} onglets verrouillés conservés",
+        "closeBlocked": "Déverrouillez l'onglet pour le fermer",
+        "unlockHint": "Verrouillé · cliquez pour déverrouiller",
+        "lockTab": "Verrouiller l'onglet",
+        "unlockTab": "Déverrouiller l'onglet",
+        "lockPane": "Verrouiller le panneau",
+        "unlockPane": "Déverrouiller le panneau",
+        "pinTab": "Épingler l'onglet",
+        "unpinTab": "Désépingler l'onglet"
       }
     },
     "vaultHeader": {
@@ -213,21 +383,17 @@
       "noOneOnline": "personne en ligne",
       "onlineCount": "{{count}} en ligne",
       "inviteMember": "Inviter un membre",
-      "jumpTo": "Aller à...",
-      "relativeTime": {
-        "justNow": "à l'instant",
-        "minutesAgo": "il y a {{count}}min",
-        "hoursAgo": "il y a {{count}}h",
-        "daysAgo": "il y a {{count}}j"
-      }
+      "jumpTo": "Aller à..."
     },
     "vaultMenu": {
       "share": "Partager…",
       "members": "Membres",
       "roles": "Rôles",
+      "security": "Règle de sécurité…",
       "rename": "Renommer…",
       "makePrivate": "Rendre privé…",
       "delete": "Supprimer le coffre…",
+      "leave": "Quitter le coffre-fort…",
       "openMenu": "Menu du coffre"
     },
     "vaultSidebar": {
@@ -252,8 +418,100 @@
       "checkingForUpdates": "Recherche de mises à jour…",
       "downloadingUpdate": "Téléchargement de la mise à jour v{{version}}…",
       "updateReady": "Mise à jour v{{version}} prête — cliquez pour voir et redémarrer",
+      "updateAvailable": "Mise à jour v{{version}} disponible — cliquez pour voir et télécharger",
       "settings": "Paramètres",
       "addVault": "Ajouter un coffre"
+    },
+    "appLock": {
+      "title": "Voltius est verrouillé",
+      "subtitle": "Vos sessions continuent de tourner.",
+      "unlockWith": "Déverrouiller avec {{method}}",
+      "tryAgain": "Réessayer",
+      "systemAuthFailed": "Échec de l'authentification.",
+      "wrongPassword": "Mot de passe principal incorrect.",
+      "keychainEmpty": "La clé du coffre n'est plus dans le trousseau système. Saisissez votre mot de passe principal.",
+      "promptReason": "Déverrouiller Voltius",
+      "sealReason": "Confirmez pour garder la clé du coffre sur cet appareil",
+      "bindingLost": "La connexion de votre appareil a changé. Saisissez votre mot de passe principal."
+    },
+    "deviceFiles": {
+      "title": "{{name}} veut ouvrir vos fichiers",
+      "subtitle": "Votre appareil · {{route}}",
+      "newDevice": "Nouvel appareil",
+      "folders": "Il verra les dossiers que vous partagez dans Paramètres › Appareils : {{folders}}.",
+      "readWrite": "Il peut y copier, renommer et supprimer des fichiers.",
+      "readOnly": "Il peut y copier des fichiers.",
+      "deny": "Refuser",
+      "once": "Autoriser une fois",
+      "always": "Toujours autoriser",
+      "sessionToast": "{{name}} a ouvert vos fichiers"
+    },
+    "enroll": {
+      "title": "Se connecter à {{team}}",
+      "subtitle": "Créez votre compte Voltius ou connectez-vous pour rejoindre {{team}}.",
+      "orgServer": "Le serveur de votre organisation",
+      "domainNote": "Utilisez votre e-mail {{domains}}",
+      "approvalNote": "Un administrateur approuve chaque demande",
+      "domainError": "{{team}} n'accepte que les e-mails {{domains}}.",
+      "createAndJoin": "Créer un compte et rejoindre",
+      "signInAndJoin": "Se connecter et rejoindre",
+      "skip": "Passer pour l'instant",
+      "continue": "Continuer",
+      "currentPasswordPlaceholder": "Mot de passe principal actuel",
+      "resolving": "Vérification du jeton d'enrôlement…",
+      "confirm": {
+        "title": "{{team}} sur {{host}}",
+        "body": "Ne continuez que si votre entreprise vous a envoyé ce lien. Voltius enverra votre connexion à {{host}}."
+      },
+      "error": {
+        "title": "Impossible d'utiliser ce jeton d'enrôlement",
+        "gone": "Ce jeton d'enrôlement a été révoqué ou a expiré. Demandez-en un nouveau à votre administrateur.",
+        "lapsed": "L'abonnement de {{team}} a expiré, son jeton d'enrôlement ne fonctionne donc pas pour le moment.",
+        "lapsedNoTeam": "L'abonnement de cette équipe a expiré, son jeton d'enrôlement ne fonctionne donc pas pour le moment.",
+        "serverTooOld": "Ce serveur ne prend pas encore en charge les jetons d'enrôlement.",
+        "rateLimited": "Trop de tentatives depuis ce réseau. Réessayez dans une minute.",
+        "unreachable": "Impossible de joindre {{host}}."
+      },
+      "outcome": {
+        "member": {
+          "title": "Vous avez rejoint {{team}}",
+          "body": "Les coffres de l'équipe apparaîtront dès que le Voltius d'un administrateur sera en ligne."
+        },
+        "approval": {
+          "title": "Demande envoyée",
+          "body": "Un administrateur de {{team}} doit l'approuver. Vous recevrez une notification."
+        },
+        "email": {
+          "title": "Vérifiez votre e-mail pour rejoindre {{team}}",
+          "body": "Nous avons envoyé un lien à {{email}}. Vous rejoindrez l'équipe automatiquement une fois l'adresse vérifiée.",
+          "resend": "Renvoyer l'e-mail"
+        },
+        "seat": {
+          "title": "{{team}} n'a plus de place libre",
+          "body": "Un administrateur a été prévenu. Vous rejoindrez l'équipe dès qu'une place se libérera."
+        }
+      },
+      "tokenEntry": {
+        "toggle": "Vous avez un jeton d'enrôlement ?",
+        "placeholder": "vte1.…",
+        "invalid": "Ce n'est pas un jeton d'enrôlement."
+      },
+      "localNote": "Les hôtes de cet appareil passent dans le coffre privé du nouveau compte. {{team}} ne peut pas les lire.",
+      "already": {
+        "title": "Vous êtes déjà dans {{team}}",
+        "body": "{{email}} est déjà membre."
+      },
+      "join": {
+        "title": "Rejoindre {{team}} en tant que {{email}}",
+        "body": "Utilise le compte avec lequel vous êtes connecté sur {{host}}.",
+        "action": "Rejoindre",
+        "other": "Utiliser un autre compte"
+      },
+      "replace": {
+        "title": "Remplacer les données de cet appareil ?",
+        "body": "Se connecter en tant que {{email}} remplace les hôtes, clés et snippets de cet appareil par ceux enregistrés dans ce compte.",
+        "confirm": "Se connecter et remplacer"
+      }
     }
   }
 }

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { useConnectionStore } from "@/stores/connectionStore";
-import { matchesSearch, compareConnections } from "@/utils/connectionFilter";
+import { useFolderStore } from "@/stores/folderStore";
+import { useHostPicker } from "@/hooks/useHostPicker";
 import { ConnectionAvatar } from "./ConnectionAvatar";
 import { ToolbarDropdown } from "./ToolbarDropdown";
 import { wslListDistros } from "@/services/sftp";
@@ -10,12 +11,19 @@ import { getConnectionIcon, getConnectionIconColor } from "@/utils/icons";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { SORT_MODE_ICONS, useFilterShortcut } from "./ToolbarViewControls";
 import type { SortMode } from "./ToolbarViewControls";
-import { useIsAndroid } from "@/utils/platform";
+import { useIsMobile } from "@/utils/platform";
 import type { Connection } from "@/types";
+import { connectionDisplayName } from "@/utils/connectionDisplayName";
+import { searchMatcher } from "@/utils/search";
+import { HostPickerTree } from "./HostPickerTree";
+import { HostRow } from "./HostRow";
+import { MyDevicesGroup } from "./MyDevicesGroup";
+import type { MyDevice } from "@/services/myDevices";
 
 export type HostChoice =
   | { kind: "local"; wslDistro?: string }
-  | { kind: "remote"; connection: Connection };
+  | { kind: "remote"; connection: Connection }
+  | { kind: "device"; device: MyDevice };
 
 interface Props {
   onPick: (h: HostChoice) => void;
@@ -23,30 +31,27 @@ interface Props {
   onBack?: () => void;
   sshOnly?: boolean;
   vaultId?: string;
+  showRecents?: boolean;
+  devices?: boolean;
 }
 
-export function HostPickerPanel({ onPick, selectedHostId, onBack, sshOnly, vaultId }: Props) {
+export function HostPickerPanel({ onPick, selectedHostId, onBack, sshOnly, vaultId, showRecents = true, devices = false }: Props) {
   const { t } = useTranslation();
-  const { connections, loadConnections } = useConnectionStore();
-  useEffect(() => { void loadConnections(); }, [loadConnections]);
+  const loadConnections = useConnectionStore((s) => s.loadConnections);
+  const loadFolders = useFolderStore((s) => s.loadFolders);
+  useEffect(() => { void loadConnections(); void loadFolders(); }, [loadConnections, loadFolders]);
 
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("newest");
   const [wslDistros, setWslDistros] = useState<string[]>([]);
   useEffect(() => { wslListDistros().then(setWslDistros).catch(() => {}); }, []);
   // Android sandbox can't spawn a local shell — hide local/WSL host targets.
-  const isAndroid = useIsAndroid();
+  const isMobile = useIsMobile();
   const searchRef = useRef<HTMLInputElement>(null);
   useFilterShortcut(searchRef);
 
-  const filtered = useMemo(
-    () => connections
-      .filter((c) => !vaultId || (c.vault_id ?? "personal") === vaultId)
-      .filter((c) => !sshOnly || c.connection_type !== "serial")
-      .filter((c) => matchesSearch(c, search))
-      .sort((a, b) => compareConnections(a, b, sortMode)),
-    [connections, search, sortMode, sshOnly, vaultId],
-  );
+  const { rows, recent, vaults, vaultFilter, setVaultFilter, toggleFolder, hasHosts } = useHostPicker({ query: search, sortMode, sshOnly, vaultId });
+  const matchesQuery = searchMatcher(search);
 
   return (
     <div className="flex flex-col h-full bg-(--t-bg-base)">
@@ -84,6 +89,20 @@ export function HostPickerPanel({ onPick, selectedHostId, onBack, sshOnly, vault
           />
         </div>
 
+        {vaults.length > 1 && (
+          <ToolbarDropdown
+            icon="lucide:vault"
+            label={vaults.find((v) => v.id === vaultFilter)?.name ?? t("shared.hostPicker.allVaults")}
+            value={vaultFilter ?? ALL_VAULTS}
+            menuWidth={200}
+            options={[
+              { value: ALL_VAULTS, label: t("shared.hostPicker.allVaults"), icon: "lucide:layers" },
+              ...vaults.map((v) => ({ value: v.id, label: v.name, icon: "lucide:vault" })),
+            ]}
+            onChange={(v) => setVaultFilter(v === ALL_VAULTS ? null : v)}
+          />
+        )}
+
         <ToolbarDropdown
           icon={SORT_MODE_ICONS[sortMode]}
           value={sortMode}
@@ -100,7 +119,7 @@ export function HostPickerPanel({ onPick, selectedHostId, onBack, sshOnly, vault
 
       {/* List */}
       <div className="flex-1 overflow-y-auto py-1.5 px-2">
-        {!isAndroid && (
+        {!isMobile && (
           <HostRow
             avatar={
               <div
@@ -116,8 +135,8 @@ export function HostPickerPanel({ onPick, selectedHostId, onBack, sshOnly, vault
           />
         )}
 
-        {!isAndroid && wslDistros
-          .filter((d) => d.toLowerCase().includes(search.toLowerCase()))
+        {!isMobile && wslDistros
+          .filter((d) => matchesQuery(d))
           .map((d) => {
             const icon = getConnectionIcon(d.split(/[-_ ]/)[0]);
             return (
@@ -139,49 +158,50 @@ export function HostPickerPanel({ onPick, selectedHostId, onBack, sshOnly, vault
             );
           })}
 
-        {connections.length === 0 && (
+        {devices && <MyDevicesGroup density="compact" query={search} onPick={(device) => onPick({ kind: "device", device })} />}
+
+        {!hasHosts && (
           <p className="px-3 py-4 text-xs text-center text-(--t-text-muted)">{t("shared.hostPicker.noHostsConfigured")}</p>
         )}
-        {connections.length > 0 && filtered.length === 0 && (
+        {hasHosts && rows.length === 0 && (
           <p className="px-3 py-4 text-xs text-center text-(--t-text-muted)">{t("shared.hostPicker.noHostsMatch")}</p>
         )}
 
-        {filtered.map((c) => (
-          <HostRow
-            key={c.id}
-            avatar={<ConnectionAvatar connection={c} size={28} />}
-            name={c.name ?? `${c.username}@${c.host}`}
-            sub={`${c.username}@${c.host}:${c.port}`}
-            isSelected={c.id === selectedHostId}
-            onClick={() => onPick({ kind: "remote", connection: c })}
-          />
-        ))}
+        <HostPickerTree
+          rows={rows}
+          recent={showRecents ? recent : []}
+          onToggleFolder={toggleFolder}
+          renderHost={(c) => (
+            <ConnectionHostRow connection={c} isSelected={c.id === selectedHostId} onClick={() => onPick({ kind: "remote", connection: c })} />
+          )}
+        />
       </div>
     </div>
   );
 }
 
-export function HostRow({ avatar, name, sub, isSelected, onClick }: {
-  avatar: React.ReactNode;
-  name: string;
-  sub: string;
+const ALL_VAULTS = "__all__";
+
+/** `multiSelect`: a selected row shows a check tile in place of its avatar. */
+export function ConnectionHostRow({ connection: c, isSelected, onClick, multiSelect }: {
+  connection: Connection;
   isSelected: boolean;
   onClick: () => void;
+  multiSelect?: boolean;
 }) {
   return (
-    <button
+    <HostRow
+      avatar={multiSelect && isSelected
+        ? (
+          <div className="rounded-lg flex items-center justify-center shrink-0 w-[1.867rem] h-[1.867rem]" style={{ background: "var(--t-accent)" }}>
+            <Icon icon="lucide:check" width={13} className="text-white" />
+          </div>
+        )
+        : <ConnectionAvatar connection={c} size={28} />}
+      name={connectionDisplayName(c)}
+      sub={`${c.username}@${c.host}:${c.port}`}
+      isSelected={isSelected}
       onClick={onClick}
-      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors text-left"
-      style={{ background: isSelected ? "var(--t-bg-card-hover)" : "transparent" }}
-      onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "var(--t-bg-elevated)"; }}
-      onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
-    >
-      {avatar}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm truncate font-medium text-(--t-text-bright)">{name}</p>
-        <p className="text-xs truncate text-(--t-text-secondary)">{sub}</p>
-      </div>
-      {isSelected && <Icon icon="lucide:check" width={14} className="text-(--t-accent) shrink-0" />}
-    </button>
+    />
   );
 }

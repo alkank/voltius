@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import { buildMcpTools, listToolDescriptors, callTool, MCP_TEXT } from "./consumer";
@@ -8,8 +9,6 @@ import { buildDockerMcpTools } from "@/plugins/docker/mcpTools";
 import { buildProxmoxMcpTools } from "@/plugins/proxmox/mcpTools";
 import { buildMonitoringMcpTools } from "@/plugins/monitoring/mcpTools";
 import { buildProcessMcpTools } from "@/plugins/process-manager/mcpTools";
-import { register as registerSshConfig, manifest as sshConfigManifest } from "@/plugins/ssh-config";
-import type { PluginAPI } from "@/plugins/api";
 
 const api = () => ({
   connections: { list: vi.fn().mockResolvedValue([{ id: "c1", name: "Prod", host: "h1", team: true }]) },
@@ -36,7 +35,7 @@ const ALL_TOOLS = [
   "marketplace_search", "marketplace_source_add", "marketplace_source_list", "marketplace_source_remove",
   "member_invite", "member_list", "member_remove", "member_set_role",
   "object_copy", "object_move", "open_session",
-  "pane_detach", "pane_focus", "pane_list", "pane_split",
+  "pane_detach", "pane_focus", "pane_list", "pane_rename", "pane_split",
   "plugin_configure", "plugin_disable", "plugin_enable", "plugin_install", "plugin_list",
   "plugin_uninstall", "plugin_update",
   "port_forward_create", "port_forward_delete", "port_forward_list", "port_forward_start",
@@ -45,8 +44,8 @@ const ALL_TOOLS = [
   "send_keys", "session_move_to_pane",
   "setting_get", "setting_list", "setting_set", "share_session",
   "snippet_create", "snippet_delete", "snippet_list", "snippet_run", "snippet_update",
-  "stat_file", "subscription_status", "sync_status",
-  "team_list",
+  "ssh_config_sync", "stat_file", "subscription_status", "sync_status",
+  "tab_rename", "team_list",
   "transfer_cancel", "transfer_file", "transfer_list", "transfer_retry",
   "unshare_session",
   "vault_create", "vault_delete", "vault_key_status", "vault_list", "vault_rename",
@@ -74,35 +73,16 @@ describe("MCP consumer", () => {
     registerContributions("plugin-proxmox", buildProxmoxMcpTools(stub));
     registerContributions("plugin-monitoring", buildMonitoringMcpTools(stub));
     registerContributions("plugin-process-manager", buildProcessMcpTools(stub));
-    // ssh-config registers its MCP tool from inside register() rather than
-    // exporting a buildXMcpTools(api), so it needs the fuller stub its own
-    // register.test.ts uses instead of the minimal `stub` above.
-    const sshConfigApi = {
-      isActive: () => true,
-      fs: { exists: vi.fn(async () => false), readText: vi.fn(async () => ""), writeText: vi.fn(async () => {}), watch: vi.fn(() => () => {}) },
-      connections: { list: vi.fn(async () => []) },
-      keys: { list: vi.fn(async () => []) },
-      identities: { list: vi.fn(async () => []) },
-      storage: { get: vi.fn(async () => null), set: vi.fn(async () => {}), delete: vi.fn(async () => {}) },
-      events: { on: vi.fn(() => () => {}), emit: vi.fn() },
-      ui: { registerSettingsPage: vi.fn(() => () => {}) },
-      lifecycle: { waitForLoginSync: vi.fn(() => Promise.resolve()) },
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      mcp: { registerTools: (tools: Parameters<typeof registerContributions>[1]) => registerContributions(sshConfigManifest.id, tools) },
-    } as unknown as PluginAPI;
-    const cleanupSshConfig = registerSshConfig(sshConfigApi);
-    await new Promise((r) => setTimeout(r, 0));
     try {
       const contributed = buildMcpTools(stub, new Set()).filter((t) => t.name.includes("__"));
-      expect(contributed).toHaveLength(16);
+      expect(contributed).toHaveLength(15);
       for (const t of contributed) {
         expect(t.description.toLowerCase()).not.toContain("prompt");
         expect(t.description.toLowerCase()).not.toContain("agent");
         expect(t.description.toLowerCase()).not.toContain("workbench");
       }
     } finally {
-      if (typeof cleanupSshConfig === "function") cleanupSshConfig();
-      for (const id of ["plugin-docker", "plugin-proxmox", "plugin-monitoring", "plugin-process-manager", sshConfigManifest.id]) {
+      for (const id of ["plugin-docker", "plugin-proxmox", "plugin-monitoring", "plugin-process-manager"]) {
         clearContributions(id);
       }
     }
@@ -252,8 +232,9 @@ describe("MCP consumer", () => {
   });
 
   it("describes the pane verbs without naming an approval that MCP does not do", () => {
-    const paneTools = buildMcpTools(api(), new Set()).filter((t) => t.name.startsWith("pane_") || t.name === "session_move_to_pane");
-    expect(paneTools).toHaveLength(5);
+    const paneTools = buildMcpTools(api(), new Set())
+      .filter((t) => t.name.startsWith("pane_") || t.name === "session_move_to_pane" || t.name === "tab_rename");
+    expect(paneTools).toHaveLength(7);
     for (const t of paneTools) {
       expect(t.description.toLowerCase()).not.toContain("prompt");
       expect(t.description).not.toBe("");

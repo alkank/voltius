@@ -11,6 +11,7 @@
       "description": "Bundled into one archive and extracted on the other side — far fewer round trips than file-by-file.",
       "howItWorks": "How it works"
     },
+    "perFileBadge": { "reason": "File by file: this host can't stream tar" },
     "conflict": {
       "title": "File already exists",
       "conflictOf": "Conflict {{number}} of {{total}}",
@@ -36,6 +37,7 @@
         "fileName": "File name"
       },
       "emptyDirectory": "Empty directory",
+      "refreshFailed": "Couldn't refresh: {{reason}}",
       "selection": {
         "selected": "{{count}} selected",
         "clear": "Clear"
@@ -56,6 +58,7 @@
         "delete_other": "Delete {{count}} items",
         "copyPath_one": "Copy path",
         "copyPath_other": "Copy {{count}} paths",
+        "permissions": "Permissions…",
         "compress": "Compress to .tar.gz",
         "extractHere": "Extract here",
         "openInTerminal": "Open in terminal",
@@ -75,6 +78,29 @@
         "modified": "Modified",
         "permissions": "Perms"
       }
+    },
+    "permissions": {
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items",
+      "bit": "{{who}}: {{what}}",
+      "read": "Read",
+      "write": "Write",
+      "execute": "Execute",
+      "owner": "Owner",
+      "group": "Group",
+      "others": "Others",
+      "octal": "Octal mode",
+      "uid": "uid {{id}}",
+      "gid": "gid {{id}}",
+      "mixed": "mixed",
+      "noShell": "Changing the owner or a folder's contents needs a POSIX shell on the host.",
+      "recurse": "Recursive",
+      "scopeAll": "All",
+      "scopeFiles": "Files",
+      "scopeDirs": "Folders",
+      "apply": "Apply",
+      "applyItems_one": "Apply to {{count}}",
+      "applyItems_other": "Apply to {{count}}"
     },
     "side": {
       "chooseHost": "Choose host…",
@@ -105,26 +131,32 @@
       "compareHint": "Select one file on each side to compare",
       "selectFilesToUpload": "Select files to upload",
       "downloadToFolder": "Download to folder",
-      "connectionLost": "Connection lost"
+      "connectionLost": "Connection lost",
+      "moveSourceNotDeleted": "Copied, but could not remove the original of {{names}}: {{error}}"
     },
     "queue": {
       "title": "Transfers",
       "transferCount_one": "{{count}} transfer",
       "transferCount_other": "{{count}} transfers",
-      "activeSuffix_one": " · {{count}} active",
-      "activeSuffix_other": " · {{count}} active",
       "combinedThroughput": "Combined throughput",
       "cancelAll": "Cancel all transfers",
       "clearFinished": "Clear finished transfers",
       "cancelTransfer": "Cancel transfer",
       "retryTransfer": "Retry transfer",
+      "waiting": "Waiting for connection…",
+      "resumedAt": "Resumed at {{size}}",
+      "resumedTooltip": "Picked up where the interrupted transfer stopped",
+      "skipped_one": "Skipped {{count}} name this system can't store:",
+      "skipped_other": "Skipped {{count}} names this system can't store:",
       "mcpTooltip": "Started by {{client}}",
       "mcpTooltipUnknown": "Started by an MCP client",
       "status": {
         "done": "Done",
         "error": "Error",
         "cancelled": "Cancelled"
-      }
+      },
+      "transferCountActive_one": "{{transfers}} · {{count}} active",
+      "transferCountActive_other": "{{transfers}} · {{count}} active"
     },
     "editor": {
       "common": {
@@ -139,7 +171,9 @@
         "loading": "Loading diff…",
         "previousChange": "Previous change",
         "nextChange": "Next change",
-        "saveErrorLine": "{{label}}: {{msg}}"
+        "saveErrorLine": "{{label}}: {{msg}}",
+        "applyToRight": "Apply to right (→)",
+        "applyToLeft": "Apply to left (←)"
       },
       "tab": {
         "autoSave": "Auto-save",
@@ -150,15 +184,41 @@
           "binary": "Binary file — can't edit. Download it instead."
         }
       },
+      "image": {
+        "fit": "Fit",
+        "toggleFit": "Fit to the tab or show actual size (0 / 1)",
+        "zoomIn": "Zoom in (+)",
+        "zoomOut": "Zoom out (−)",
+        "copy": "Copy image",
+        "copied": "Image copied to the clipboard",
+        "copyFailed": "Couldn't copy the image: {{error}}",
+        "download": "Download",
+        "tooLarge": "This image is {{size}}, above the {{limit}} preview limit.",
+        "previewAnyway": "Preview anyway"
+      },
       "tabStrip": {
         "filesTab": "Files",
         "pendingNameFallback": "this file",
         "pendingNameDiffFallback": "this diff",
-        "diffTitlePrefix": "diff: {{name}}",
         "discardTitle": "Discard unsaved changes?",
         "discardMessage": "\"{{name}}\" has unsaved changes. Closing this tab will discard them.",
-        "discard": "Discard"
+        "discard": "Discard",
+        "diffTitle": "diff: {{name}}"
       }
+    },
+    "myDevices": {
+      "title": "My devices",
+      "fileAccessOff": "File access is off on this device",
+      "needsAccount": "File access between your devices needs a Voltius account.",
+      "offlineSeen": "Offline · seen {{ago}}",
+      "offline": "Offline",
+      "routeChip": "{{route}} · {{ms}} ms",
+      "readOnlyBadge": "Read-only",
+      "readOnlyShare": "{{name}} shares these folders read-only."
+    },
+    "connect": {
+      "deviceDialing": "Connecting…",
+      "deviceApproval": "Waiting for approval on {{name}}…"
     }
   }
 }

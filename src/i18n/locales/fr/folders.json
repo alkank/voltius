@@ -4,7 +4,6 @@
       "pin": "Épingler",
       "unpin": "Détacher",
       "openFolder": "Ouvrir le dossier",
-      "cloudSyncDisabled": "Synchronisation cloud désactivée",
       "unpinForMe": "Détacher pour moi",
       "showInMyView": "Afficher dans ma vue",
       "hideForMe": "Masquer pour moi",
@@ -12,19 +11,25 @@
       "unpinForTeam": "Détacher pour l'équipe",
       "pinForTeam": "Épingler pour l'équipe",
       "exportFolder": "Exporter le dossier",
-      "disableCloudSync": "Désactiver la synchronisation cloud",
-      "enableCloudSync": "Activer la synchronisation cloud",
       "deleteFolder": "Supprimer le dossier",
       "itemCount_one": "{{count}} élément",
+      "itemCount_many": "{{count}} éléments",
       "itemCount_other": "{{count}} éléments"
     },
     "editPanel": {
+      "title": "Modifier le dossier",
+      "general": "Général",
       "nameLabel": "Nom",
-      "cloudSyncLabel": "Synchronisation cloud",
-      "syncedToCloud": "Synchronisé avec le cloud",
-      "notSynced": "Non synchronisé",
-      "syncDisabledGlobally": "La synchronisation des dossiers est désactivée globalement dans Paramètres → Synchronisation cloud.",
-      "createdLabel": "Créé le"
-    }
+      "parentLabel": "Dossier parent"
+    },
+    "appearance": {
+      "title": "Apparence du dossier",
+      "change": "Changer l’icône et la couleur",
+      "color": "Couleur",
+      "icon": "Icône",
+      "clear": "Effacer"
+    },
+    "noPermissionCreate": "Vous n'avez pas la permission de créer des dossiers ici",
+    "empty": "Ce dossier est vide"
   }
 }

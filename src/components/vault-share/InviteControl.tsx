@@ -3,8 +3,11 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import type { TeamRole } from "@/stores/teamStore";
 import { useUserSearch } from "@/hooks/useUserSearch";
-import { assignableRoles, seatState } from "./vaultShareModel";
+import { isOwnerRole } from "./vaultShareModel";
+import { useInviteRoleOptions, useOwnerInviteConfirm } from "@/components/members/ownerInvite";
+import { seatsSummaryText, type SeatState } from "@/services/seatMath";
 import { ChoiceChip } from "./ChoiceChip";
+import { roleLabel } from "@/components/members/roleChips";
 import { inviteUserById, inviteByEmailAddress } from "@/services/vaultShare";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -13,16 +16,14 @@ interface Props {
   teamId: string;
   roles: TeamRole[];
   existingIds: Set<string>;
-  usedSeats: number | null;
-  /** The cap to show, from `displaySeatCap` — the enforced one when the server reports it. */
-  seatCap: number | null;
+  seats: SeatState;
   onInvited: () => void;
 }
 
-export function InviteControl({ teamId, roles, existingIds, usedSeats, seatCap, onInvited }: Props) {
+export function InviteControl({ teamId, roles, existingIds, seats, onInvited }: Props) {
   const { t } = useTranslation();
-  const options = assignableRoles(roles);
-  const seats = seatState(usedSeats, seatCap);
+  const { options, ownerLockedReason } = useInviteRoleOptions(teamId, roles);
+  const { guard: confirmOwnerInvite, modal: ownerInviteConfirm } = useOwnerInviteConfirm();
   const [roleId, setRoleId] = useState<string | null>(null);
   const search = useUserSearch(existingIds);
 
@@ -35,7 +36,9 @@ export function InviteControl({ teamId, roles, existingIds, usedSeats, seatCap, 
   const role = options.find((r) => r.id === roleId) ?? null;
   const isEmail = EMAIL_RE.test(search.query.trim());
 
-  const invite = async (userId: string, handle: string) => {
+  const grantsOwner = !!role && isOwnerRole(role);
+
+  const sendToUser = async (userId: string, handle: string) => {
     if (!role) return;
     try {
       await inviteUserById({ teamId, userId, handle, roleName: role.name, roleId: role.id });
@@ -46,7 +49,7 @@ export function InviteControl({ teamId, roles, existingIds, usedSeats, seatCap, 
     onInvited();
   };
 
-  const inviteEmail = async () => {
+  const sendToEmail = async () => {
     if (!role) return;
     try {
       await inviteByEmailAddress({ teamId, email: search.query.trim(), roleName: role.name });
@@ -57,8 +60,12 @@ export function InviteControl({ teamId, roles, existingIds, usedSeats, seatCap, 
     onInvited();
   };
 
+  const invite = (userId: string, handle: string) => confirmOwnerInvite(grantsOwner, handle, () => void sendToUser(userId, handle));
+  const inviteEmail = () => confirmOwnerInvite(grantsOwner, search.query.trim(), () => void sendToEmail());
+
   return (
     <div className="flex flex-col gap-4">
+      {ownerInviteConfirm}
       <div className="flex flex-col gap-1.5">
         <span className="text-[10px] uppercase tracking-wider text-(--t-text-secondary)">
           {t("members.invite.searchOrInviteLabel")}
@@ -74,22 +81,26 @@ export function InviteControl({ teamId, roles, existingIds, usedSeats, seatCap, 
           />
         </div>
 
-        {search.open && search.results.map((u) => (
-          <div key={u.user_id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-(--t-bg-card)">
-            <span className="text-xs flex-1 text-(--t-text-primary) break-all">{u.handle}</span>
-            <button
-              onClick={() => void invite(u.user_id, u.handle)}
-              className="px-3 py-1 rounded-lg text-[11px] font-medium"
-              style={{ background: "var(--t-accent)", color: "var(--t-on-accent, #fff)" }}
-            >
-              {t("members.invite.inviteAction")}
-            </button>
+        {search.open && search.results.length > 0 && (
+          <div ref={search.dropdownRef} className="flex flex-col gap-1.5">
+            {search.results.map((u) => (
+              <div key={u.user_id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-(--t-bg-card)">
+                <span className="text-xs flex-1 text-(--t-text-primary) break-all">{u.handle}</span>
+                <button
+                  onClick={() => invite(u.user_id, u.handle)}
+                  className="px-3 py-1 rounded-lg text-[11px] font-medium"
+                  style={{ background: "var(--t-accent)", color: "var(--t-on-accent, #fff)" }}
+                >
+                  {t("members.invite.inviteAction")}
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
 
         {isEmail && (
-          <button onClick={() => void inviteEmail()} className="px-3 py-1.5 rounded-lg text-[11px] border border-(--t-border) text-(--t-text-secondary) self-start">
-            {t("members.invite.sendInviteLabel")}
+          <button onClick={inviteEmail} className="px-3 py-1.5 rounded-lg text-[11px] border border-(--t-border) text-(--t-text-secondary) self-start">
+            {t("members.invite.sendInviteLabel")} <span className="font-medium">{search.query.trim()}</span>
           </button>
         )}
 
@@ -104,10 +115,11 @@ export function InviteControl({ teamId, roles, existingIds, usedSeats, seatCap, 
           {options.map((r) => (
             <ChoiceChip
               key={r.id}
-              label={r.name}
+              label={roleLabel(t, r.name)}
               capitalize
               selected={r.id === roleId}
               onClick={() => setRoleId(r.id)}
+              disabledReason={isOwnerRole(r) ? ownerLockedReason : undefined}
             />
           ))}
         </div>
@@ -115,9 +127,7 @@ export function InviteControl({ teamId, roles, existingIds, usedSeats, seatCap, 
       </div>
 
       <span className="text-[11px] text-(--t-text-secondary)">
-        {seats.kind === "known"
-          ? t("members.invite.seatsSummary", { used: seats.used, available: seats.available, total: seats.total })
-          : t("members.invite.seatsUnknown")}
+        {seatsSummaryText(t, seats)}
       </span>
     </div>
   );

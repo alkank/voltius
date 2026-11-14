@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cardGridProps } from "@/components/shared/cardGrid";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { SectionAddButton, SectionHeader, StatusPill } from "@/components/shared/SectionHeader";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Icon } from "@iconify/react";
 import { usePortForwardingStore } from "@/stores/portForwardingStore";
 import { useAllPortForwardingRules } from "@/hooks/useAllPortForwardingRules";
 import { useAllConnections } from "@/hooks/useAllConnections";
 import { useUIStore } from "@/stores/uiStore";
 import { usePermissions } from "@/hooks/usePermission";
 import { useAccessibleVaultIds, useScopedVaultId } from "@/hooks/useAccessibleVaultIds";
-import { useDefaultVaultId } from "@/hooks/useWritableVaultIds";
 import { useDragSelection } from "@/hooks/useDragSelection";
 import { useListKeyNav } from "@/hooks/useListKeyNav";
 import { usePageBulkActions } from "@/hooks/usePageBulkActions";
 import { useDragToFolder } from "@/hooks/useDragToFolder";
 import { folderDragHandlers } from "@/utils/folderDragHandlers";
 import { useFolderNavigation } from "@/hooks/useFolderNavigation";
+import { useNewFolder } from "@/hooks/useNewFolder";
 import { useFolderStore } from "@/stores/folderStore";
 import { useAllFolders } from "@/hooks/useAllFolders";
 import { useVaultCascade } from "@/hooks/useVaultCascade";
@@ -25,6 +27,7 @@ import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/
 import { DragSelectSurface } from "@/components/shared/DragSelectSurface";
 import { FolderCard } from "@/components/folders/FolderCard";
 import { FolderEditPanel } from "@/components/folders/FolderEditPanel";
+import { FolderEmptyState } from "@/components/folders/FolderEmptyState";
 import { useSyncedFormKey } from "@/hooks/useSyncedFormKey";
 import { useRuleTunnels } from "@/hooks/useRuleTunnels";
 import { vaultMenuItems } from "@/utils/vaultMenuItems";
@@ -41,22 +44,29 @@ import { PortForwardingToolbar } from "./PortForwardingToolbar";
 import { ActiveTunnelsSection } from "./ActiveTunnelsSection";
 import { RuleCard } from "./RuleCard";
 import { RuleForm } from "./RuleForm";
-import type { Folder, PortForwardingRule, PortForwardingRuleFormData } from "@/types";
+import type { Folder, PortForwardingRule, PortForwardingRuleFormData, TunnelType } from "@/types";
+import { tunnelTypeChoices } from "./tunnelTypeChoices";
 import type { LayoutMode, SortMode } from "@/components/shared/ToolbarViewControls";
-import { descendantFolders, itemsInFolderSubtree } from "@/utils/folderTree";
+import { descendantFolders, foldersOutsideSubtree, itemsInFolderSubtree, folderItemCounter } from "@/utils/folderTree";
+import { folderAwareKeys, selectFollowing } from "@/utils/cardInteraction";
 import { folderDeleteMessages } from "@/utils/folderDeleteMessages";
 import { useVaultOptions } from "@/hooks/useVaultOptions";
 import { useScopedFolders } from "@/hooks/useScopedFolders";
+import { useCloseWhenGone } from "@/hooks/useCloseWhenGone";
 import { FolderBreadcrumb } from "@/components/folders/FolderBreadcrumb";
 import { FolderEjectZone } from "@/components/folders/FolderEjectZone";
 import { cloneFolderTree, copyFolderSubtree } from "@/utils/folderCopy";
 import { moveFolderTreeToVault } from "@/utils/folderMove";
+import { copyingRulesOf } from "@/services/ruleSetIntent";
+import { compareStrings } from "@/utils/localeFormat";
+import { useSearchMatcher } from "@/utils/search";
+import { PORT_FORWARDING_ICON } from "@/lib/conceptIcons";
 
 function sortRules(rules: PortForwardingRule[], mode: SortMode): PortForwardingRule[] {
   return [...rules].sort((a, b) => {
     switch (mode) {
-      case "name-asc": return a.name.localeCompare(b.name);
-      case "name-desc": return b.name.localeCompare(a.name);
+      case "name-asc": return compareStrings(a.name, b.name);
+      case "name-desc": return compareStrings(b.name, a.name);
       case "oldest": return a.created_at.localeCompare(b.created_at);
       case "newest":
       default: return b.created_at.localeCompare(a.created_at);
@@ -86,13 +96,13 @@ export function PortForwardingPage() {
 
   const accessibleVaultIds = useAccessibleVaultIds();
   const scopedVaultId = useScopedVaultId();
-  const defaultVaultId = useDefaultVaultId();
   const can = usePermissions();
 
   const [search, setSearch] = useState("");
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const editingRule = editingRuleId ? (rules.find((r) => r.id === editingRuleId) ?? null) : null;
   const [showForm, setShowForm] = useState(false);
+  const [newRuleType, setNewRuleType] = useState<TunnelType>("local");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
@@ -110,9 +120,7 @@ export function PortForwardingPage() {
 
   useEffect(() => {
     if (pendingAction?.action === "create") {
-      ruleFormSessionKeyRef.current = `new-rule-${Date.now()}`;
-      setEditingRuleId(null);
-      setShowForm(true);
+      openNew();
       setPendingAction(null);
     } else if (pendingAction?.action === "edit") {
       const rule = rules.find((r) => r.id === pendingAction.id) ?? null;
@@ -129,6 +137,8 @@ export function PortForwardingPage() {
   const scopedFolders = useScopedFolders(folders, accessibleVaultIds, "port_forwarding");
   const scopedFolderIds = useMemo(() => new Set(scopedFolders.map((f) => f.id)), [scopedFolders]);
   const editingFolder = editingFolderId ? scopedFolders.find((f) => f.id === editingFolderId) ?? null : null;
+  useCloseWhenGone(editingRuleId, editingRule !== null, closeForm);
+  useCloseWhenGone(editingFolderId, editingFolder !== null, () => setEditingFolderId(null));
 
   const {
     folderPath,
@@ -139,34 +149,32 @@ export function PortForwardingPage() {
     navigateTo,
     navigateToRoot,
     onFolderDeleted,
-  } = useFolderNavigation(scopedFolders);
+  } = useFolderNavigation(scopedFolders, "port_forwarding");
+  const { folderBlocked, newFolder } = useNewFolder("port_forwarding", folderPath);
 
-  const q = useMemo(() => search.trim().toLowerCase(), [search]);
+  const q = search.trim();
+  const match = useSearchMatcher(q);
 
   const filtered = useMemo(() => {
     const accessible = rules.filter((r) => {
       const rvid = r.vault_id ?? "personal";
       if (accessibleVaultIds.length > 0 && !accessibleVaultIds.includes(rvid)) return false;
-      if (q && !r.name.toLowerCase().includes(q) && !r.description?.toLowerCase().includes(q) &&
-          !String(r.local_port).includes(q) && !String(r.remote_port).includes(q)) return false;
+      if (!match(r.name, r.description, r.local_port, r.remote_port)) return false;
       if (activeFolderId) return r.folder_id === activeFolderId;
       return scopedFolders.length === 0 || !r.folder_id || !scopedFolderIds.has(r.folder_id);
     });
     return sortRules(accessible, sortMode as SortMode);
-  }, [rules, accessibleVaultIds, q, sortMode, activeFolderId, scopedFolders, scopedFolderIds]);
+  }, [rules, accessibleVaultIds, match, sortMode, activeFolderId, scopedFolders, scopedFolderIds]);
 
   const filteredIds = useMemo(
     () => [...visibleFolders.map((f) => f.id), ...filtered.map((r) => r.id)],
     [visibleFolders, filtered],
   );
 
-  const folderCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const r of rules) if (r.folder_id) counts[r.folder_id] = (counts[r.folder_id] ?? 0) + 1;
-    return counts;
-  }, [rules]);
+  const folderCount = useMemo(() => folderItemCounter(rules, scopedFolders), [rules, scopedFolders]);
 
-  function openNew() {
+  function openNew(type: TunnelType = "local") {
+    setNewRuleType(type);
     ruleDirtyRef.current = false;
     ruleFormSessionKeyRef.current = `new-rule-${Date.now()}`;
     setEditingRuleId(null);
@@ -211,10 +219,10 @@ export function PortForwardingPage() {
 
   const handleCopyRuleToVault = (rule: PortForwardingRule, vaultId: string) => {
     const destHasName = rules.some((r) => (r.vault_id ?? "personal") === vaultId && r.name === rule.name);
-    void createRule(ruleToForm(rule, {
+    void createRule(copyingRulesOf(ruleToForm(rule, {
       name: destHasName ? `${rule.name} (copy)` : rule.name,
       vault_id: vaultId,
-    }));
+    }), rule.id));
   };
 
   // ── Vault move / copy for folders ─────────────────────────────────────────
@@ -269,7 +277,7 @@ export function PortForwardingPage() {
         for (const r of treeRules) {
           const newFolderId = r.folder_id ? (folderIdMap.get(r.folder_id) ?? newRootId) : newRootId;
           const destHasRule = rules.some((x) => (x.vault_id ?? "personal") === vaultId && x.name === r.name);
-          await createRule({ name: destHasRule ? `${r.name} (copy)` : r.name, local_port: r.local_port, remote_port: r.remote_port, remote_host: r.remote_host, tunnel_type: r.tunnel_type ?? "local", bind_host: r.bind_host ?? "127.0.0.1", target_host: r.target_host ?? "127.0.0.1", description: r.description, connection_ids: r.connection_ids, folder_id: newFolderId, vault_id: vaultId });
+          await createRule(copyingRulesOf({ name: destHasRule ? `${r.name} (copy)` : r.name, local_port: r.local_port, remote_port: r.remote_port, remote_host: r.remote_host, tunnel_type: r.tunnel_type ?? "local", bind_host: r.bind_host ?? "127.0.0.1", target_host: r.target_host ?? "127.0.0.1", description: r.description, connection_ids: r.connection_ids, folder_id: newFolderId, vault_id: vaultId }, r.id));
         }
       },
     });
@@ -286,12 +294,12 @@ export function PortForwardingPage() {
     rule: PortForwardingRule,
     folderId: string | null,
     opts: { vaultId?: string; keepName?: boolean } = {},
-  ) => createRule(ruleToForm(rule, {
+  ) => createRule(copyingRulesOf(ruleToForm(rule, {
     // default name suffix kept in English until all creation sites are localized together (see i18n issue #14)
     name: opts.keepName ? rule.name : `${rule.name} (copy)`,
     folder_id: folderId ?? undefined,
     vault_id: opts.vaultId ?? rule.vault_id,
-  }));
+  }), rule.id));
 
   /** Deep-clones a folder subtree under `parentFolderId`, into `vaultId` when given. */
   const copyFolderInto = async (
@@ -345,6 +353,10 @@ export function PortForwardingPage() {
     setSelection,
   } = useDragSelection(filteredIds);
 
+  const editRule = (id: string) => { const r = filtered.find((r) => r.id === id); if (r) openEdit(r); };
+  const editFolder = (folder: Folder) => { closeForm(); setEditingFolderId(folder.id); };
+  const panelOpen = showForm || editingFolderId !== null;
+
   const { focusedId, setFocusedId } = useListKeyNav({
     orderedIds: filteredIds,
     selectedIdSet,
@@ -352,16 +364,7 @@ export function PortForwardingPage() {
     setSelection,
     itemAreaRef,
     layoutMode: layoutMode as "grid" | "list",
-    onEnter: (id) => {
-      const folder = visibleFolders.find((f) => f.id === id);
-      if (folder) { navigateInto(folder); return; }
-      const r = filtered.find((r) => r.id === id);
-      if (r) openEdit(r);
-    },
-    onEdit: (id) => {
-      const r = filtered.find((r) => r.id === id);
-      if (r) openEdit(r);
-    },
+    ...folderAwareKeys(visibleFolders, { open: navigateInto, edit: editFolder }, { enter: editRule, edit: editRule }),
     onDuplicate: (id) => { void duplicateRule(id); },
     onEscape: () => {
       if (showForm || editingFolderId) { closeForm(); setEditingFolderId(null); }
@@ -432,7 +435,7 @@ export function PortForwardingPage() {
   // ── Drag-to-folder ────────────────────────────────────────────────────────
 
   const visibleFolderIds = useMemo(() => new Set(visibleFolders.map((f) => f.id)), [visibleFolders]);
-  const canEdit = (vaultId: string) => can("EDIT_CONNECTIONS", vaultId);
+  const canEdit = (vaultId: string, objectId?: string) => can("EDIT_CONNECTIONS", vaultId, objectId);
 
   const {
     isDragging,
@@ -480,7 +483,7 @@ export function PortForwardingPage() {
     const n = selectedRules.length;
     // Folders count too: a folder-only selection still needs cut/copy.
     if (n + selectedFolders.length < 2) return undefined;
-    const allCanEdit = selectedRules.every((r) => canEdit(r.vault_id ?? "personal"));
+    const allCanEdit = selectedRules.every((r) => canEdit(r.vault_id ?? "personal", r.id));
     const sharedVaults = vaultOptions.filter((v) =>
       selectedRules.some((r) => (r.vault_id ?? "personal") !== v.id),
     );
@@ -513,21 +516,26 @@ export function PortForwardingPage() {
     ];
   }, [selectedRules, selectedFolders, canEdit, vaultOptions, duplicateRule, handleMoveRuleToVault, handleCopyRuleToVault, t]);
 
+  const createFolder = () =>
+    void saveFolder(newFolder(t("portForwarding.toolbar.newFolder"))).then((f) => { closeForm(); setEditingFolderId(f.id); });
+
   return (
     <>
     <SidePanelLayout
       panelOpen={showForm || editingFolder !== null}
-      panelWidth={editingFolder !== null && !showForm ? 280 : 340}
+      panelWidth={editingFolder !== null && !showForm ? 320 : 340}
       panel={
         <>
           {editingFolder !== null && !showForm && (
             <FolderEditPanel
               folder={editingFolder}
-              onUpdate={(id, data) => void updateFolder(id, data)}
+              onUpdate={updateFolder}
               onDelete={(f) => setConfirmDeleteFolderId(f.id)}
               onClose={() => setEditingFolderId(null)}
+              onOpen={() => { navigateInto(editingFolder); setEditingFolderId(null); }}
+              onSelectSelf={() => selectSingle(editingFolder.id)}
+              parentOptions={foldersOutsideSubtree(scopedFolders, editingFolder.id)}
               vaults={vaultOptions.filter((v) => v.id !== (editingFolder.vault_id ?? "personal"))}
-              canEdit={canEdit(editingFolder.vault_id ?? "personal")}
               onMoveToVault={(vaultId) => handleMoveFolderToVault(editingFolder, vaultId)}
               onCopyToVault={(vaultId) => handleCopyFolderToVault(editingFolder, vaultId)}
               onExport={() => useUIStore.getState().openImportExport("export", { bulk: { portForwardingRules: rules.filter((r) => r.folder_id === editingFolder.id).map((r) => r.id) } })}
@@ -537,6 +545,7 @@ export function PortForwardingPage() {
             <RuleForm
               key={`${ruleFormSessionKeyRef.current}-${ruleFormVersion}`}
               rule={editingRule}
+              initialTunnelType={newRuleType}
               onSave={handleSave}
               onClose={closeForm}
               isDirtyRef={ruleDirtyRef}
@@ -554,7 +563,8 @@ export function PortForwardingPage() {
           sortMode={sortMode as SortMode}
           onSortModeChange={setSortMode}
           onNewRule={openNew}
-          onNewFolder={() => void saveFolder({ name: "New Folder" /* persisted English default; menu label is localized */, object_type: "port_forwarding", parent_folder_id: activeFolderId ?? undefined, vault_id: defaultVaultId }).then((f) => { closeForm(); setEditingFolderId(f.id); })}
+          onNewFolder={createFolder}
+          newFolderBlocked={folderBlocked}
           selectedCount={[...selectedIdSet].filter((id) => filteredRuleIdSet.has(id)).length}
           onDeleteSelected={[...selectedIdSet].some((id) => filteredRuleIdSet.has(id)) ? () => setConfirmDeleteIds([...selectedIdSet].filter((id) => filteredRuleIdSet.has(id))) : undefined}
         />
@@ -590,39 +600,31 @@ export function PortForwardingPage() {
             {/* ── Folders section ── */}
             {visibleFolders.length > 0 && (
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{t("portForwarding.page.folders")}</p>
-                  <button
-                    className="flex items-center gap-1 text-xs transition-colors px-2 py-1 rounded-lg text-(--t-text-dim)"
-                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--t-text-primary)"; e.currentTarget.style.background = "var(--t-bg-elevated)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--t-text-dim)"; e.currentTarget.style.background = "transparent"; }}
-                    onClick={() => void saveFolder({ name: "New Folder" /* persisted English default */, object_type: "port_forwarding", parent_folder_id: activeFolderId ?? undefined, vault_id: defaultVaultId }).then((f) => { closeForm(); setEditingFolderId(f.id); })}
-                  >
-                    <Icon icon="lucide:plus" width={12} />
-                    {t("portForwarding.page.new")}
-                  </button>
-                </div>
+                <SectionHeader
+                  label={t("portForwarding.page.folders")}
+                  count={visibleFolders.length}
+                  aside={<SectionAddButton label={t("portForwarding.page.new")} onClick={createFolder} disabledReason={folderBlocked} />}
+                />
                 <div
-                  className={layoutMode === "grid" ? "grid gap-4" : "flex flex-col gap-1"}
-                  style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" } : undefined}
+                  {...cardGridProps(layoutMode, "card")}
                 >
                   {visibleFolders.map((folder) => {
-                    const folderCanEdit = canEdit(folder.vault_id ?? "personal");
+                    const folderCanEdit = can("EDIT_FOLDERS", folder.vault_id ?? "personal", folder.id);
                     return (
                       <FolderCard
                         key={folder.id}
                         folder={folder}
-                        itemCount={folderCounts[folder.id] ?? 0}
+                        itemCount={folderCount(folder.id)}
                         layout={layoutMode as "grid" | "list"}
                         isSelected={editingFolderId === folder.id || selectedIdSet.has(folder.id)}
                         isFocused={focusedId === folder.id}
                         isDragOver={dragOverFolderId === folder.id}
                         dimmed={cutIds.has(folder.id)}
-                        onClick={() => navigateInto(folder)}
+                        onOpen={() => navigateInto(folder)}
                         onRename={(f, newName) => void updateFolder(f.id, { name: newName, object_type: f.object_type, parent_folder_id: f.parent_folder_id, vault_id: f.vault_id })}
                         onDelete={(f) => setConfirmDeleteFolderId(f.id)}
-                        onSelect={(id) => { if (!selectedIdSet.has(id)) selectSingle(id); }}
-                        onEdit={() => { closeForm(); setEditingFolderId(folder.id); }}
+                        onSelect={selectFollowing(handleItemSelect, panelOpen, () => editFolder(folder))}
+                        onEdit={() => editFolder(folder)}
                         onPointerDown={(e) => handleFolderDragStart(e, folder.id)}
                         {...(folderCanEdit ? folderDropProps(folder.id) : {})}
                         vaults={vaultOptions.filter((v) => v.id !== (folder.vault_id ?? "personal"))}
@@ -652,38 +654,27 @@ export function PortForwardingPage() {
 
             {/* ── Rules section ── */}
             {filtered.length === 0 && visibleFolders.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 gap-3 text-(--t-text-dim)">
-                <span className="text-sm">
-                  {q ? t("portForwarding.page.noRulesMatchSearch") : activeFolderId ? t("portForwarding.page.folderEmpty") : t("portForwarding.page.noRulesYet")}
-                </span>
-                {activeFolderId && !q && (
-                  <button
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-(--t-bg-elevated) text-(--t-accent) border border-(--t-border-hover)"
-                    onClick={openNew}
-                  >
-                    <Icon icon="lucide:plus" width={12} />
-                    {t("portForwarding.page.addRule")}
-                  </button>
-                )}
-              </div>
+              activeFolderId && !q ? (
+                <FolderEmptyState actions={[{ label: t("portForwarding.page.addRule"), onClick: () => openNew() }]} />
+              ) : (
+                <EmptyState
+                  size={q ? "section" : "page"}
+                  icon={q ? "lucide:search-x" : PORT_FORWARDING_ICON}
+                  title={q ? t("portForwarding.page.noRulesMatchSearch") : t("portForwarding.page.noRulesYet")}
+                  action={q ? undefined : { label: t("portForwarding.page.addRule"), onClick: () => openNew() }}
+                />
+              )
             ) : filtered.length > 0 && (
               <div>
-                {(visibleFolders.length > 0 || activeFolderId || filtered.length > 0) && (
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{t("common.entity.rules")}</p>
-                    <div className="flex items-center gap-2 text-[10px] text-(--t-text-muted)">
-                      <span className="px-1.5 py-0.5 rounded-full bg-(--t-bg-elevated)">{t("portForwarding.page.total", { count: filtered.length })}</span>
-                      <span className="px-1.5 py-0.5 rounded-full bg-(--t-status-connected)/10 text-(--t-status-connected)">{t("portForwarding.page.activeCount", { count: runningRuleCount.active })}</span>
-                      {runningRuleCount.error > 0 && <span className="px-1.5 py-0.5 rounded-full bg-(--t-status-error)/10 text-(--t-status-error)">{t("portForwarding.page.errorCount", { count: runningRuleCount.error })}</span>}
-                    </div>
-                  </div>
-                )}
-                <div
-                  className={layoutMode === "grid"
-                    ? "grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4"
-                    : "flex flex-col gap-1"
-                  }
-                >
+                <SectionHeader
+                  label={t("common.entity.rules")}
+                  count={filtered.length}
+                  aside={<>
+                    <StatusPill tone="connected">{t("portForwarding.page.activeCount", { count: runningRuleCount.active })}</StatusPill>
+                    {runningRuleCount.error > 0 && <StatusPill tone="error">{t("portForwarding.page.errorCount", { count: runningRuleCount.error })}</StatusPill>}
+                  </>}
+                />
+                <div {...cardGridProps(layoutMode, "wide")}>
                   {filtered.map((rule) => {
                     const { status, isActive, statusLabel, isBusy, webUrl } = statusFor(rule);
                     return (
@@ -699,9 +690,9 @@ export function PortForwardingPage() {
                         statusLabel={statusLabel}
                         isBusy={isBusy}
                         webUrl={webUrl}
-                        canEdit={canEdit(rule.vault_id)}
+                        canEdit={canEdit(rule.vault_id, rule.id)}
                         vaults={vaultOptions.filter((v) => v.id !== (rule.vault_id ?? "personal"))}
-                        onSelect={(id, e) => handleItemSelect(id, e)}
+                        onSelect={selectFollowing(handleItemSelect, panelOpen, () => openEdit(rule))}
                         onEdit={openEdit}
                         onDuplicate={(id) => void duplicateRule(id)}
                         onDelete={handleDeleteRule}
@@ -727,8 +718,8 @@ export function PortForwardingPage() {
           pos={bgMenuPos}
           onClose={closeBgMenu}
           items={[
-            { label: t("portForwarding.page.contextMenu.newRule"), icon: "lucide:network", onClick: openNew },
-            { label: t("portForwarding.toolbar.newFolder"), icon: "lucide:folder-plus", onClick: () => void saveFolder({ name: "New Folder" /* persisted English default */, object_type: "port_forwarding", parent_folder_id: activeFolderId ?? undefined, vault_id: defaultVaultId }).then((f) => { closeForm(); setEditingFolderId(f.id); }) },
+            ...tunnelTypeChoices(t).map((c) => ({ label: c.label, icon: c.icon, onClick: () => openNew(c.type) })),
+            { label: t("portForwarding.toolbar.newFolder"), icon: "lucide:folder-plus", onClick: createFolder, disabledReason: folderBlocked },
             ...(useVaultClipboardStore.getState().clipboard?.tab === "port-forwarding"
               ? [{ label: t("common.action.paste"), icon: "lucide:clipboard", shortcut: getShortcutHint("paste"), onClick: () => window.dispatchEvent(new CustomEvent("voltius:clipboard-paste")) } as const]
               : []),

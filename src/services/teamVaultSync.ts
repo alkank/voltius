@@ -18,15 +18,17 @@
  * into a deletion for the whole team.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import i18n from "@/i18n";
 import { wrapSessionKeyForUser, unwrapSessionKey, publishMyPublicKey } from "@/services/multiplayerService";
 import * as teamService from "@/services/teamService";
 import { getServerUrl } from "@/services/authTokens";
 import { fetchAuthRateLimited as fetchWithAuth } from "@/services/authFetch";
 import { useTeamVaultStateStore } from "@/stores/teamVaultStateStore";
-import { storeSecret, deleteSecret } from "@/services/vault";
-import { logFailure, logSettledFailures } from "@/lib/logger";
+import { purgeLocalSecrets } from "@/services/vault";
+import { teamSecretCache } from "@/services/teamSecretCache";
+import { logFailure } from "@/lib/logger";
+import { listedDataVersion, noteTeamDataSeen } from "@/services/teamVaultCatchUp";
 import type { Connection, Identity, SshKey, Folder, Snippet, PortForwardingRule } from "@/types";
 import type { TeamMember } from "@/services/teamService";
 import { listTeamObjects, type TeamObjectRecord } from "@/services/teamObjects";
@@ -35,9 +37,9 @@ import {
   TeamVaultRefreshQueue,
   type TeamVaultRefreshOptions,
 } from "@/services/teamVaultRefresh";
-import { classifyTeamObjectListError } from "@/services/teamVaultLoadErrors";
+import { classifyTeamObjectListError, isAccessRevoked } from "@/services/teamVaultLoadErrors";
 import {
-  base64ToBytes,
+  base64ToByteArray,
   bytesToBase64,
   parseTeamVaultBlobFiles,
 } from "@/services/teamVaultSyncCore";
@@ -75,7 +77,7 @@ const _teamKeyInFlight = new Map<string, Promise<number[]>>();
 // getTeamVaultKey on the per-row hydrate path, which made this far more
 // likely to actually happen (#229).
 const _teamKeyGeneration = new Map<string, number>();
-const _teamRefreshQueue = new TeamVaultRefreshQueue();
+const _teamRefreshQueue = new TeamVaultRefreshQueue<boolean>();
 // Teams where a key_mismatch self-heal rotation was already tried this
 // session — caps retries at one instead of one per refresh forever.
 const _keyMismatchHealAttempted = new Set<string>();
@@ -196,6 +198,7 @@ async function _fetchAndUnwrapVaultKeyUrl(
 
   if (res.status === 403) throw "forbidden";
   if (res.status === 402) throw "payment_required";
+  if (res.status === 426) throw "update_required";
   if (res.status === 404) throw "awaiting_key";
   if (!res.ok) throw "error";
 
@@ -320,11 +323,7 @@ export async function initTeamVaultKey(
     keys.push({ user_id: member.user_id, wrapped_key: wrapped });
   }
 
-  const res = await fetchWithAuth(`${serverUrl}/v1/teams/${teamId}/vault-key`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keys }),
-  });
+  const res = await putVaultKeys(serverUrl, teamId, keys, mintedFreshKey ? 1 : getCachedTeamKeyVersion(teamId));
   if (!res.ok) throw new Error(i18n.t("common.error.failedToUploadVaultKeys", { status: res.status }));
 
   _teamKeyCache.set(teamId, Array.from(rawKey));
@@ -344,25 +343,40 @@ export async function distributeKeyToNewMember(
 ): Promise<void> {
   if (!memberPublicKey) return;
 
-  let rawKey: number[];
-  try {
-    rawKey = await getTeamVaultKey(teamId);
-  } catch {
-    return;
-  }
-
-  const rawKeyBytes = new Uint8Array(rawKey);
-  const wrapped = await wrapSessionKeyForUser(rawKeyBytes, memberPublicKey);
-
   const serverUrl = await getServerUrl();
   if (!serverUrl) throw new Error(i18n.t("common.error.notConnectedToServer"));
 
-  const res = await fetchWithAuth(`${serverUrl}/v1/teams/${teamId}/vault-key`, {
+  for (let attempt = 0; ; attempt++) {
+    let rawKey: number[];
+    try {
+      rawKey = await getTeamVaultKey(teamId);
+    } catch {
+      return;
+    }
+    const version = getCachedTeamKeyVersion(teamId);
+    const wrapped = await wrapSessionKeyForUser(new Uint8Array(rawKey), memberPublicKey);
+    const res = await putVaultKeys(serverUrl, teamId, [{ user_id: memberUserId, wrapped_key: wrapped }], version);
+    // 409: another member rotated since this key was cached; wrap the new one instead.
+    if (res.status === 409 && attempt === 0) {
+      deleteTeamKey(teamId);
+      continue;
+    }
+    if (!res.ok) throw new Error(i18n.t("common.error.failedToDistributeVaultKey", { status: res.status }));
+    return;
+  }
+}
+
+function putVaultKeys(
+  serverUrl: string,
+  teamId: string,
+  keys: { user_id: string; wrapped_key: string }[],
+  keyVersion: number | undefined,
+): Promise<Response> {
+  return fetchWithAuth(`${serverUrl}/v1/teams/${teamId}/vault-key`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keys: [{ user_id: memberUserId, wrapped_key: wrapped }] }),
+    body: JSON.stringify({ keys, key_version: keyVersion }),
   });
-  if (!res.ok) throw new Error(i18n.t("common.error.failedToDistributeVaultKey", { status: res.status }));
 }
 
 /**
@@ -432,22 +446,24 @@ async function _healKeyMismatchOnce(teamId: string, err: unknown): Promise<boole
  * surfaced via the store status.
  */
 export async function fetchTeamData(teamId: string, options: TeamVaultRefreshOptions = {}): Promise<void> {
-  return _teamRefreshQueue.run(teamId, () => _fetchTeamData(teamId, options));
+  const listed = listedDataVersion(teamId);
+  if (await _teamRefreshQueue.run(teamId, options, (merged) => _fetchTeamData(teamId, merged))) noteTeamDataSeen(teamId, listed);
 }
 
-async function _fetchTeamData(teamId: string, options: TeamVaultRefreshOptions): Promise<void> {
+async function _fetchTeamData(teamId: string, options: TeamVaultRefreshOptions): Promise<boolean> {
   const stateStore = useTeamVaultStateStore.getState();
   const blockingLoad = shouldShowBlockingTeamVaultLoad(options);
   if (blockingLoad) stateStore.setStatus(teamId, "loading");
 
   const serverUrl = await getServerUrl();
   if (!serverUrl) {
-    if (options.background) return;
+    if (options.background) return false;
     await clearTeamStoresAndSecrets(teamId);
     stateStore.setStatus(teamId, "offline");
-    return;
+    return false;
   }
 
+  let objectListFailed = false;
   try {
     const objects = await listTeamObjects(teamId);
     if (objects.length > 0) {
@@ -457,7 +473,7 @@ async function _fetchTeamData(teamId: string, options: TeamVaultRefreshOptions):
       void import("@/services/teamObjectReencrypt")
         .then(({ runReencryptionPass }) => runReencryptionPass(teamId, objects))
         .catch(() => {});
-      const { backfillExistingTeamVaultSecrets, hydrateTeamVaultSecrets } = await import("@/services/teamVaultSecrets");
+      const { hydrateTeamVaultSecrets } = await import("@/services/teamVaultSecrets");
       // Credentials are what makes a host connectable, so a failure here is not
       // cosmetic: the vault renders fully populated and every host needing a
       // stored secret then fails at authentication. Record it instead of
@@ -472,21 +488,25 @@ async function _fetchTeamData(teamId: string, options: TeamVaultRefreshOptions):
           : false;
       }
       stateStore.setCredentialsUnavailable(teamId, !credentialsOk);
-      if (!options.background) await backfillExistingTeamVaultSecrets(teamId).catch(() => {});
+      await settleLoadedTeamSecrets(teamId, options);
       stateStore.setStatus(teamId, "loaded");
-      return;
+      return true;
     }
   } catch (err) {
-    if (options.background) return;
+    if (options.background) {
+      if (isAccessRevoked(err)) teamSecretCache.clearTeam(teamId);
+      return false;
+    }
     const action = classifyTeamObjectListError(err);
     if (action === "fallback") {
+      objectListFailed = true;
       // Fall through to legacy key/blob loading. Some clients may hit transient
       // object-route failures immediately after invitation while the legacy blob
       // route already has the vault data available.
     } else {
       await clearTeamStoresAndSecrets(teamId);
       stateStore.setStatus(teamId, action);
-      return;
+      return false;
     }
   }
 
@@ -494,10 +514,6 @@ async function _fetchTeamData(teamId: string, options: TeamVaultRefreshOptions):
   try {
     key = await getTeamVaultKey(teamId);
   } catch (err) {
-    if (options.background) return;
-    const validStatuses = ["offline", "forbidden", "payment_required", "awaiting_key", "key_mismatch", "error"] as const;
-    type Thrown = typeof validStatuses[number];
-    let status: Thrown | "loaded" = validStatuses.includes(err as Thrown) ? (err as Thrown) : "error";
     // A 403 here means one of two very different things: the caller was removed
     // from the team, or their role simply lacks VIEW_SECRETS (connect-only,
     // issue #187). The route cannot tell them apart, but the client can — a
@@ -505,45 +521,49 @@ async function _fetchTeamData(teamId: string, options: TeamVaultRefreshOptions):
     // the team is still listed is a role restriction, and such a member reads
     // this vault through the object routes only: the empty list they just got
     // IS their view of the vault, so show it rather than a false revocation.
-    if (status === "forbidden" && (await _isStillATeamMember(teamId))) {
-      status = "loaded";
+    const memberView = err === "forbidden" ? await _memberViewStatus(teamId) : null;
+    if (options.background && !memberView) {
+      if (isAccessRevoked(err)) teamSecretCache.clearTeam(teamId);
+      return false;
     }
+    const validStatuses = ["offline", "forbidden", "payment_required", "update_required", "awaiting_key", "key_mismatch", "error"] as const;
+    type Thrown = typeof validStatuses[number];
+    const status = memberView ?? (validStatuses.includes(err as Thrown) ? (err as Thrown) : "error");
     // Clear team store slices so stale data doesn't linger
     await clearTeamStoresAndSecrets(teamId);
     stateStore.setStatus(teamId, status);
-    return;
+    return status === "loaded";
   }
 
   let blobPayload: BlobPayload;
   try {
     const res = await fetchWithAuth(`${serverUrl}/v1/teams/${teamId}/sync-blob`, { method: "GET" });
-    if (res.status === 404) {
-      // No blob yet — owner hasn't pushed data. Show as empty vault.
-      if (options.background) return;
+    // After a successful object list, no readable blob means the empty list is the member's view.
+    if (res.status === 404 || (res.status === 403 && !objectListFailed)) {
       await clearTeamStoresAndSecrets(teamId);
-      stateStore.setStatus(teamId, "loaded");
-      return;
+      stateStore.setStatus(teamId, objectListFailed ? "error" : "loaded");
+      return !objectListFailed;
     }
     if (!res.ok) {
-      if (options.background) return;
+      if (options.background) return false;
       await clearTeamStoresAndSecrets(teamId);
       stateStore.setStatus(teamId, "error");
-      return;
+      return false;
     }
     const { blob: blobB64, key_version: blobVersion } = await res.json() as {
       blob: string; updated_at: string; key_version: number;
     };
-    const blobBytes = base64ToBytes(blobB64);
+    const blobBytes = base64ToByteArray(blobB64);
     const currentVersion = getCachedTeamKeyVersion(teamId);
     const blobKey = currentVersion !== undefined && blobVersion !== currentVersion
       ? await getTeamVaultKeyAtVersion(teamId, blobVersion)
       : key;
     blobPayload = await invoke<BlobPayload>("backup_decrypt", { encKey: blobKey, blob: blobBytes });
   } catch {
-    if (options.background) return;
+    if (options.background) return false;
     await clearTeamStoresAndSecrets(teamId);
     stateStore.setStatus(teamId, "error");
-    return;
+    return false;
   }
 
   const { useConnectionStore } = await import("@/stores/connectionStore");
@@ -563,11 +583,11 @@ async function _fetchTeamData(teamId: string, options: TeamVaultRefreshOptions):
   useSnippetFolderStore.getState().setTeamSnippetFolders(teamId, slices.snippetFolders as Folder[]);
   usePortForwardingStore.getState().setTeamRules(teamId, slices.portForwardingRules as PortForwardingRule[]);
 
-  for (const [k, v] of Object.entries(blobPayload.secrets ?? {})) {
-    await storeSecret(k, v).catch(() => {});
-  }
+  teamSecretCache.replaceTeam(teamId, new Map(Object.entries(blobPayload.secrets ?? {})));
+  await settleLoadedTeamSecrets(teamId, options);
 
   stateStore.setStatus(teamId, "loaded");
+  return true;
 }
 
 /**
@@ -596,7 +616,7 @@ export async function reencryptLegacyBlobIfStale(teamId: string, currentVersion:
   if (blobVersion >= currentVersion) return; // already current or ahead — nothing to do
 
   const oldKey = await getTeamVaultKeyAtVersion(teamId, blobVersion);
-  const blobPayload = await invoke<BlobPayload>("backup_decrypt", { encKey: oldKey, blob: base64ToBytes(blobB64) });
+  const blobPayload = await invoke<BlobPayload>("backup_decrypt", { encKey: oldKey, blob: base64ToByteArray(blobB64) });
   const reencrypted: number[] = await invoke("encrypt_payload", {
     encKey: currentKey,
     files: blobPayload.files,
@@ -611,19 +631,26 @@ export async function reencryptLegacyBlobIfStale(teamId: string, currentVersion:
 }
 
 /**
- * True when the client still lists `teamId` among the caller's teams. The
+ * Null when the client no longer lists `teamId` among the caller's teams. The
  * server drops revoked teams from that list and `onTeamRemoved` clears the
  * store, so this separates "your role can't do that" from "you were removed".
  */
-async function _isStillATeamMember(teamId: string): Promise<boolean> {
+async function _memberViewStatus(teamId: string): Promise<"loaded" | "plan_lapsed" | null> {
   const { useTeamStore } = await import("@/stores/teamStore");
-  return useTeamStore.getState().teams.some((t) => t.id === teamId);
+  const { planLapsedFor } = await import("@/services/permissions");
+  const store = useTeamStore.getState();
+  const team = store.teams.find((t) => t.id === teamId);
+  if (!team) return null;
+  if (!store.rolesByTeam[teamId] && !(await store.loadRoles(teamId).then(() => true, () => false))) return "loaded";
+  return planLapsedFor(team, useTeamStore.getState().rolesByTeam[teamId] ?? []) ? "plan_lapsed" : "loaded";
 }
 
 export async function _hydrateTeamObjectStores(teamId: string, objects: TeamObjectRecord[]): Promise<void> {
   const active = objects.filter((o) => !o.deleted_at);
 
-  const { decodeObjectMetadata } = await import("@/services/teamObjectEnvelope");
+  const { decodeTeamObject, noteTeamRows, acceptsPlaintextRows } = await import("@/services/teamObjectRows");
+  noteTeamRows(teamId, active);
+  const allowPlaintext = acceptsPlaintextRows(teamId);
 
   // Rows written before #229 carry plaintext metadata and decode to themselves.
   // A row that will not decrypt is dropped rather than spread: a half-object
@@ -631,7 +658,7 @@ export async function _hydrateTeamObjectStores(teamId: string, objects: TeamObje
   // be written straight back on the next save.
   const decoded = await Promise.all(
     active.map(async (o) => {
-      const metadata = await decodeObjectMetadata(teamId, o.metadata).catch((e) => {
+      const metadata = await decodeTeamObject(teamId, o, allowPlaintext).catch((e) => {
         logFailure(`teamVaultSync: decode object team=${teamId} object=${o.object_id}`)(e);
         return null;
       });
@@ -640,6 +667,14 @@ export async function _hydrateTeamObjectStores(teamId: string, objects: TeamObje
   );
 
   const usable = decoded.filter((o): o is TeamObjectRecord & { metadata: object } => o !== null);
+
+  const { buildAccessEntries } = await import("@/services/teamObjectAccess");
+  const { useTeamObjectAccessStore } = await import("@/stores/teamObjectAccessStore");
+  const access = buildAccessEntries(objects, new Map(usable.map((o) => [o.object_id, o.metadata])));
+  if (access.supported === false) useTeamObjectAccessStore.getState().clearTeam(teamId);
+  else useTeamObjectAccessStore.getState().replaceTeam(
+    teamId, access.entries, access.supported ?? useTeamObjectAccessStore.getState().supportedByTeam[teamId] ?? false,
+  );
 
   const byType = <T>(type: TeamObjectRecord["object_type"]): T[] =>
     usable
@@ -667,49 +702,99 @@ export async function _hydrateTeamObjectStores(teamId: string, objects: TeamObje
 }
 
 
-/**
- * Deletes `keys` from the keychain, returning the ones that did not go away.
- *
- * `Promise.allSettled` on its own made a partial wipe indistinguishable from a
- * clean one: a rejected delete leaves the plaintext secret on disk and nothing
- * recorded that it did (issue #233).
- */
-async function deleteSecrets(keys: string[]): Promise<string[]> {
-  const results = await Promise.allSettled(keys.map((k) => deleteSecret(k)));
-  logSettledFailures(results, (i) => `keychain wipe of ${keys[i]}`);
-  const failed = results.flatMap((r, i) => (r.status === "rejected" ? [keys[i]] : []));
+async function purgeLocalCopies(keys: string[]): Promise<string[]> {
+  try {
+    await purgeLocalSecrets(keys);
+    return [];
+  } catch (e) {
+    logFailure(`local secret purge of ${keys.length} keys`)(e);
+    return keys;
+  }
+}
+
+async function teamOwnedSecretKeys(teamId: string): Promise<string[]> {
+  const { teamObjectSecretKeys } = await import("@/services/teamSecretOwnership");
+  return teamObjectSecretKeys(teamId);
+}
+
+async function purgeTeamObjectSecrets(
+  teamId: string,
+  skip: Set<string> = new Set(),
+  ownedKeys?: string[],
+): Promise<string[]> {
+  const keys = (ownedKeys ?? await teamOwnedSecretKeys(teamId)).filter((k) => !skip.has(k));
+  const failed = await purgeLocalCopies(keys);
+  if (failed.length > 0) {
+    const { usePendingSecretWipeStore } = await import("@/stores/pendingSecretWipeStore");
+    usePendingSecretWipeStore.getState().enqueue(teamId, failed);
+  }
   return failed;
 }
 
-/**
- * Retries keychain deletions left over from a failed offboarding wipe.
- *
- * Called once per login. A team the user belongs to again is dropped without
- * deleting anything: those entries have since been re-hydrated for a live
- * vault, and the queue only ever meant "these should not be on this device".
- */
-export async function drainPendingSecretWipes(): Promise<void> {
-  const { usePendingSecretWipeStore } = await import("@/stores/pendingSecretWipeStore");
-  const { useTeamStore } = await import("@/stores/teamStore");
-  const store = usePendingSecretWipeStore.getState();
-  const currentTeamIds = new Set(useTeamStore.getState().teams.map((t) => t.id));
+/** Retries a failed personal→team upload before the sweep purges its only surviving local copy. */
+async function retryPendingTeamSecretUploads(teamId: string, ownedKeys: Set<string>): Promise<Set<string>> {
+  const { usePendingTeamSecretUploadStore } = await import("@/stores/pendingTeamSecretUploadStore");
+  const { getLocalSecret } = await import("@/services/vault");
+  const store = usePendingTeamSecretUploadStore.getState();
+  const pending = store.keysByTeamId[teamId] ?? [];
+  const stillPending: string[] = [];
 
-  for (const [teamId, keys] of Object.entries(store.keysByTeamId)) {
-    if (currentTeamIds.has(teamId)) {
-      store.resolve(teamId, keys);
+  for (const key of pending) {
+    if (!ownedKeys.has(key)) continue; // object left the team; resolved below, local copy untouched
+    let value: string | null;
+    try {
+      value = await getLocalSecret(key);
+    } catch (e) {
+      logFailure(`local read for pending team secret upload ${key}`)(e);
+      stillPending.push(key);
       continue;
     }
-    const failed = new Set(await deleteSecrets(keys));
-    store.resolve(teamId, keys.filter((k) => !failed.has(k)));
+    if (!value) continue;
+    try {
+      const { writeSecretAt } = await import("@/services/secretRouting");
+      await writeSecretAt(teamId, key, value);
+    } catch (e) {
+      logFailure(`retry team secret upload ${key}`)(e);
+      stillPending.push(key);
+    }
+  }
+
+  store.resolve(teamId, pending.filter((k) => !stillPending.includes(k)));
+  return new Set(stillPending);
+}
+
+export async function sweepLocalTeamSecrets(teamId: string): Promise<void> {
+  const ownedKeys = await teamOwnedSecretKeys(teamId);
+  const stillPending = await retryPendingTeamSecretUploads(teamId, new Set(ownedKeys));
+  await purgeTeamObjectSecrets(teamId, stillPending, ownedKeys);
+}
+
+async function settleLoadedTeamSecrets(teamId: string, options: TeamVaultRefreshOptions): Promise<void> {
+  if (!options.background) await sweepLocalTeamSecrets(teamId);
+  const { retryUnsentTeamSecrets } = await import("@/services/secretRouting");
+  await retryUnsentTeamSecrets(teamId);
+}
+
+/** Retries failed local-store purges, keeping queued any key now owned locally or still waiting to upload. */
+export async function drainPendingSecretWipes(): Promise<void> {
+  const { usePendingSecretWipeStore } = await import("@/stores/pendingSecretWipeStore");
+  const { usePendingTeamSecretUploadStore } = await import("@/stores/pendingTeamSecretUploadStore");
+  const { hasLocalOwner } = await import("@/services/teamSecretOwnership");
+  const store = usePendingSecretWipeStore.getState();
+  const awaitingUpload = new Set(Object.values(usePendingTeamSecretUploadStore.getState().keysByTeamId).flat());
+
+  for (const [teamId, keys] of Object.entries(store.keysByTeamId)) {
+    const purgeable = keys.filter((k) => !awaitingUpload.has(k) && !hasLocalOwner(k));
+    const failed = new Set(await purgeLocalCopies(purgeable));
+    store.resolve(teamId, purgeable.filter((k) => !failed.has(k)));
   }
 }
 
 /**
- * Empties the team's store slices and wipes its secrets from the keychain.
- * Returns the keychain keys that survived the wipe — a caller offboarding the
- * user from the team must treat a non-empty result as secrets still on disk.
+ * Empties the team's store slices and purges its secrets from the local store,
+ * except keys still waiting to upload. Returns the keys that survived the purge.
  */
-export async function clearTeamStoresAndSecrets(teamId: string): Promise<string[]> {
+async function teamObjectStores() {
   const { useConnectionStore } = await import("@/stores/connectionStore");
   const { useIdentityStore } = await import("@/stores/identityStore");
   const { useKeyStore } = await import("@/stores/keyStore");
@@ -717,28 +802,41 @@ export async function clearTeamStoresAndSecrets(teamId: string): Promise<string[
   const { useSnippetStore } = await import("@/stores/snippetStore");
   const { useSnippetFolderStore } = await import("@/stores/snippetFolderStore");
   const { usePortForwardingStore } = await import("@/stores/portForwardingStore");
+  return { useConnectionStore, useIdentityStore, useKeyStore, useFolderStore, useSnippetStore, useSnippetFolderStore, usePortForwardingStore };
+}
 
-  // Wipe secrets from disk before clearing in-memory state so we still have the IDs.
-  // A local object holding the same id owns those same keychain entries, so
-  // wiping them would destroy credentials the user still has every right to:
-  // make-private adopts a team's objects locally under their original ids
-  // (#249). No genuine removal reaches this filter — a member losing access has
-  // no local copy of the team's objects.
-  const localIds = new Set<string>([
-    ...useConnectionStore.getState().connections.map((c) => c.id),
-    ...useKeyStore.getState().keys.map((k) => k.id),
-    ...useIdentityStore.getState().identities.map((i) => i.id),
-  ]);
-  const teamOnly = <T extends { id: string }>(items: T[]) => items.filter((i) => !localIds.has(i.id));
+/** Teams this device still holds a vault key or objects for. */
+export async function teamIdsWithLocalData(): Promise<Set<string>> {
+  const s = await teamObjectStores();
+  const maps: Record<string, unknown[]>[] = [
+    s.useConnectionStore.getState().teamConnections,
+    s.useIdentityStore.getState().teamIdentities,
+    s.useKeyStore.getState().teamKeys,
+    s.useFolderStore.getState().teamFolders,
+    s.useSnippetStore.getState().teamSnippets,
+    s.useSnippetFolderStore.getState().teamSnippetFolders,
+    s.usePortForwardingStore.getState().teamRules,
+  ];
+  const ids = new Set(_teamKeyCache.keys());
+  for (const map of maps) {
+    for (const [teamId, items] of Object.entries(map)) if (items.length > 0) ids.add(teamId);
+  }
+  return ids;
+}
 
-  const conns = teamOnly(useConnectionStore.getState().teamConnections[teamId] ?? []);
-  const keys = teamOnly(useKeyStore.getState().teamKeys[teamId] ?? []);
-  const identities = teamOnly(useIdentityStore.getState().teamIdentities[teamId] ?? []);
-  const failedKeys = await deleteSecrets([
-    ...conns.flatMap((c) => [`key:${c.id}`, `password:${c.id}`, `passphrase:${c.id}`]),
-    ...keys.flatMap((k) => [`key:${k.id}:private`, `key:${k.id}:public`, `key:${k.id}:passphrase`]),
-    ...identities.map((i) => `identity:${i.id}:password`),
-  ]);
+export async function clearTeamStoresAndSecrets(teamId: string): Promise<string[]> {
+  const {
+    useConnectionStore, useIdentityStore, useKeyStore, useFolderStore,
+    useSnippetStore, useSnippetFolderStore, usePortForwardingStore,
+  } = await teamObjectStores();
+
+  const { usePendingTeamSecretUploadStore } = await import("@/stores/pendingTeamSecretUploadStore");
+  const pendingUploads = new Set(usePendingTeamSecretUploadStore.getState().keysByTeamId[teamId] ?? []);
+  // Purge before clearing the stores: the key names come from the objects still in them.
+  const failedKeys = await purgeTeamObjectSecrets(teamId, pendingUploads);
+  teamSecretCache.clearTeam(teamId);
+  const { useTeamObjectAccessStore } = await import("@/stores/teamObjectAccessStore");
+  useTeamObjectAccessStore.getState().clearTeam(teamId);
 
   useConnectionStore.getState().setTeamConnections(teamId, []);
   useIdentityStore.getState().setTeamIdentities(teamId, []);

@@ -2,8 +2,7 @@ use crate::commands::vault_object::{
     bump, find_mut, finish_update, impl_vault_object, initial_clocks, merge_fields,
     requested_vault, retarget_vault, subtree_ids, tombstone, vault_object_commands,
 };
-use crate::local::session::LocalSessionManager;
-use crate::ssh::session::SessionManager;
+use crate::error::AppError;
 use crate::storage::config::{
     load_snippet_folders, load_snippets, save_snippet_folders, save_snippets, Snippet,
     SnippetFolder, SnippetFolderFormData, SnippetFormData,
@@ -76,7 +75,7 @@ fn build_snippet(
 }
 
 #[tauri::command]
-pub fn snippet_update(id: String, data: SnippetFormData) -> Result<Snippet, String> {
+pub fn snippet_update(id: String, data: SnippetFormData) -> Result<Snippet, AppError> {
     let mut snippets = load_snippets()?;
     let snippet = find_mut(&mut snippets, &id)?;
     let now = Utc::now().to_rfc3339();
@@ -106,27 +105,6 @@ pub fn snippet_update(id: String, data: SnippetFormData) -> Result<Snippet, Stri
     let updated = snippet.clone();
     save_snippets(&snippets)?;
     Ok(updated)
-}
-
-/// Inject text into the active terminal session.
-/// Handles both SSH and local sessions. Appends \n when execute=true.
-/// Multiplayer injection must be gated by the caller (frontend checks controller status).
-#[tauri::command]
-pub async fn snippet_inject(
-    session_id: String,
-    session_type: String,
-    text: String,
-    execute: bool,
-    ssh_state: tauri::State<'_, SessionManager>,
-    local_state: tauri::State<'_, LocalSessionManager>,
-) -> Result<(), String> {
-    let payload = if execute { format!("{text}\n") } else { text };
-    let bytes = payload.into_bytes();
-    match session_type.as_str() {
-        "ssh" => ssh_state.send_data(&session_id, &bytes).await,
-        "local" => local_state.send_data(&session_id, bytes).await,
-        _ => Err(format!("Unknown session type: {session_type}")),
-    }
 }
 
 // ─── Snippet folder CRUD ──────────────────────────────────────────────────────
@@ -183,10 +161,10 @@ pub fn snippet_folder_update(
 /// Soft-delete a snippet folder, everything nested under it, and every snippet
 /// filed in that subtree.
 #[tauri::command]
-pub fn snippet_folder_delete(id: String) -> Result<(), String> {
+pub fn snippet_folder_delete(id: String) -> Result<(), AppError> {
     let mut folders = load_snippet_folders()?;
     if !folders.iter().any(|f| f.id == id) {
-        return Err(format!("SnippetFolder {} not found", id));
+        return Err(format!("SnippetFolder {} not found", id).into());
     }
     let now = Utc::now().to_rfc3339();
     let doomed = subtree_ids(&folders, &id, |f| f.parent_id.as_deref());
@@ -222,7 +200,7 @@ pub fn snippet_folder_delete(id: String) -> Result<(), String> {
     for f in folders.iter_mut().filter(|f| doomed.contains(&f.id)) {
         tombstone(f, &now);
     }
-    save_snippet_folders(&folders)
+    Ok(save_snippet_folders(&folders)?)
 }
 
 #[cfg(test)]

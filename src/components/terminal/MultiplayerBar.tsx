@@ -1,10 +1,13 @@
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
-import { useSessionStore } from "@/stores/sessionStore";
+import { holdsControl } from "@/utils/multiplayerControl";
 import { AvatarOverflow } from "@/components/shared/AvatarStack";
 import { PresenceAvatar } from "@/components/shared/PresenceAvatar";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { avatarLabel, usePeerResolver } from "@/services/peerName";
+import { closeSessionTabs } from "@/services/closeSession";
+import { useDismissBlockedReason } from "@/hooks/useSessionLocked";
 
 const MAX_VISIBLE_PARTICIPANTS = 5;
 
@@ -13,20 +16,20 @@ interface MultiplayerBarProps {
 }
 
 export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
+  const peer = usePeerResolver();
   const { t } = useTranslation();
   const mpState = useTeamSessionStore((s) => s.connections[localSessionId]);
   const requestControl = useTeamSessionStore((s) => s.requestControl);
   const grantControl = useTeamSessionStore((s) => s.grantControl);
   const revokeControl = useTeamSessionStore((s) => s.revokeControl);
   const stopSharing = useTeamSessionStore((s) => s.stopSharing);
-  const leaveSession = useTeamSessionStore((s) => s.leaveSession);
-  const removeSession = useSessionStore((s) => s.removeSession);
+  const leaveBlockedReason = useDismissBlockedReason(localSessionId);
 
   if (!mpState) return null;
 
   const isHost = mpState.role === "host";
   const myUserId = mpState.myUserId;
-  const iControlHolder = myUserId !== "" && mpState.controlHolder === myUserId;
+  const iControlHolder = holdsControl(mpState);
   const hasPendingRequest = mpState.controlRequester !== null && mpState.controlRequester !== myUserId;
 
   const handleStopOrLeave = async () => {
@@ -34,8 +37,7 @@ export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
       await stopSharing(localSessionId);
       // keep the terminal tab — only sharing state is cleared
     } else {
-      leaveSession(localSessionId);
-      removeSession(localSessionId);
+      closeSessionTabs([localSessionId]);
     }
   };
 
@@ -53,14 +55,20 @@ export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
           <>
             <StatusDot tone="error" />
             <span className="text-xs font-semibold" style={{ color: "var(--t-status-error)" }}>
-              {t("terminal.multiplayerBar.ended")}
+              {mpState.keyWait === "failed" ? t("terminal.multiplayerBar.keyFailed") : t("terminal.multiplayerBar.ended")}
             </span>
           </>
         ) : (
           <>
             <StatusDot tone="accent" motion="pulse" />
             <span className="text-xs font-semibold" style={{ color: "var(--t-accent)" }}>
-              {isHost ? t("terminal.multiplayerBar.sharing") : t("terminal.multiplayerBar.watching")}
+              {isHost
+                ? t("terminal.multiplayerBar.sharing")
+                : mpState.keyWait === "waiting"
+                  ? t("terminal.multiplayerBar.waitingForKey")
+                  : iControlHolder
+                    ? t("terminal.multiplayerBar.youHaveControl")
+                    : t("terminal.multiplayerBar.watching")}
             </span>
           </>
         )}
@@ -68,14 +76,17 @@ export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
 
       {/* Participants */}
       <div className="flex items-center gap-1.5 flex-1">
-        {mpState.participants.slice(0, MAX_VISIBLE_PARTICIPANTS).map((p) => (
-          <PresenceAvatar
-            key={p.user_id}
-            handle={p.handle}
-            size={24}
-            hasControl={p.user_id === mpState.controlHolder}
-          />
-        ))}
+        {mpState.participants.slice(0, MAX_VISIBLE_PARTICIPANTS).map((p) => {
+          const who = peer(p.user_id, { fallbackHandle: p.handle });
+          return (
+            <PresenceAvatar
+              key={p.user_id}
+              handle={avatarLabel(who)}
+              size={24}
+              hasControl={p.user_id === mpState.controlHolder}
+            />
+          );
+        })}
         <AvatarOverflow
           count={mpState.participants.length - MAX_VISIBLE_PARTICIPANTS}
           size={24}
@@ -112,20 +123,6 @@ export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
         </span>
       )}
 
-      {!mpState.ended && iControlHolder && !isHost && (
-        <span
-          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs"
-          style={{
-            background: "color-mix(in srgb, var(--t-accent) 12%, transparent)",
-            color: "var(--t-accent)",
-            border: "1px solid color-mix(in srgb, var(--t-accent) 30%, transparent)",
-          }}
-        >
-          <Icon icon="lucide:pencil" width={12} />
-          {t("terminal.multiplayerBar.youHaveControl")}
-        </span>
-      )}
-
       {/* Host: pending control request */}
       {!mpState.ended && isHost && hasPendingRequest && (
         <div className="flex items-center gap-1.5">
@@ -134,7 +131,7 @@ export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
           </span>
           <button
             className="px-2 py-0.5 rounded-sm text-xs font-medium transition-colors"
-            style={{ background: "var(--t-accent)", color: "white" }}
+            style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
             onClick={() => grantControl(localSessionId, mpState.controlRequester!)}
           >
             {t("terminal.multiplayerBar.grant")}
@@ -169,11 +166,12 @@ export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
 
       {/* Stop / Leave */}
       <button
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ml-1"
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors ml-1 disabled:opacity-40 disabled:pointer-events-none"
         style={{
           color: "var(--t-text-dim)",
         }}
         onClick={() => void handleStopOrLeave()}
+        disabled={!isHost && !!leaveBlockedReason}
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLButtonElement).style.color = "var(--t-status-error)";
           (e.currentTarget as HTMLButtonElement).style.background = "color-mix(in srgb, var(--t-status-error) 10%, transparent)";
@@ -182,7 +180,7 @@ export function MultiplayerBar({ localSessionId }: MultiplayerBarProps) {
           (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-dim)";
           (e.currentTarget as HTMLButtonElement).style.background = "transparent";
         }}
-        title={isHost ? t("terminal.multiplayerBar.stopSharingTitle") : t("terminal.multiplayerBar.leaveSessionTitle")}
+        title={isHost ? t("terminal.multiplayerBar.stopSharingTitle") : leaveBlockedReason ?? t("terminal.multiplayerBar.leaveSessionTitle")}
       >
         <Icon icon={isHost ? "lucide:circle-stop" : "lucide:log-out"} width={13} />
         {isHost ? t("terminal.multiplayerBar.stop") : t("terminal.multiplayerBar.leave")}

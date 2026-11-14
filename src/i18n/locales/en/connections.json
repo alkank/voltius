@@ -25,8 +25,10 @@
       "manageInKeychain": "Manage in Keychain",
       "hostsChaining": "Hosts Chaining",
       "environmentVariables": "Environment Variables",
-      "preCommandPlaceholder": "Pre Command",
-      "postCommandPlaceholder": "Post Command",
+      "preCommandPlaceholder": "Session pre-command",
+      "postCommandPlaceholder": "Session post-command",
+      "sessionCommands": "Session commands",
+      "sessionCommandsHint": "Run in the session after it opens, and when the tab closes.",
       "hostCommand": {
         "useSnippet": "Use a snippet",
         "useInline": "Use inline command",
@@ -47,10 +49,14 @@
       "sectionCredentials": "Credentials",
       "sectionIdentity": "Identity",
       "sectionNotes": "Notes",
-      "notesPlaceholder": "Reminders, maintenance windows, team context… (synced with the host)",
       "protocol": "Protocol",
       "protocolSsh": "SSH / SFTP",
       "protocolFtp": "FTP",
+      "protocolWebdav": "WebDAV",
+      "webdavUrl": "Server URL",
+      "webdavUrlPlaceholder": "https://cloud.example.com/remote.php/dav/files/me/",
+      "webdavUrlInvalid": "Enter an http:// or https:// address, without a username, password, ? or #",
+      "webdavPlaintextWarning": "Not encrypted — your password is sent in the clear. Use https:// if the server supports it.",
       "hostIp": "Host / IP",
       "hostPlaceholder": "192.168.1.1",
       "legacyAlgorithms": "Legacy Algorithms",
@@ -69,7 +75,34 @@
       "keychainIdentity": "Keychain Identity",
       "passphrase": "Passphrase",
       "optional": "(optional)",
-      "keyPassphrasePlaceholder": "Key passphrase"
+      "keyPassphrasePlaceholder": "Key passphrase",
+      "proxy": {
+        "label": "Proxy",
+        "inherit": "Inherit ({{label}})",
+        "modes": {
+          "direct": "Direct",
+          "system": "System",
+          "socks5": "SOCKS5",
+          "http": "HTTP",
+          "https": "HTTPS"
+        },
+        "host": "Proxy host",
+        "port": "Proxy port",
+        "hostMissing": "Proxy is set to {{kind}} but has no host",
+        "portInvalid": "Port must be between 1 and 65535",
+        "username": "Proxy username",
+        "password": "Proxy password",
+        "passwordSaved": "••• saved"
+      },
+      "connectAsHost": "Host credential",
+      "sharedWithTeam": "shared with the team",
+      "youConnectAs": "You connect as",
+      "change": "Change",
+      "connectAsYours": "{{username}} · yours, only you",
+      "connectAsTeam": "{{username}} · team identity",
+      "connectAsAsk": "You'll be asked when you connect",
+      "connectAsUnavailable": "Your chosen identity isn't available",
+      "connectNeedsHost": "Enter a host to connect"
     },
     "distroIconPicker": {
       "title": "Icon",
@@ -144,7 +177,9 @@
       "title": "Identity",
       "noIdentityInline": "No identity — inline credentials",
       "badgeKey": "key",
-      "badgePwd": "pwd"
+      "badgePwd": "pwd",
+      "sharedGroup": "{{vault}} vault · shared",
+      "ownGroup": "Your identities · only you"
     },
     "jumpHostsPanel": {
       "dragToReorderAriaLabel": "Drag to reorder",
@@ -166,6 +201,40 @@
       "sectionSerialPort": "Serial Port",
       "customBaudButton": "Custom",
       "presetBaudButton": "Preset"
+    },
+    "vaultIdentity": {
+      "title": "Your identity for {{vault}}",
+      "subtitle": "Only you. Teammates never see it.",
+      "useOn": "Use on {{vault}} hosts with no shared credential",
+      "none": "No default",
+      "noneHint": "Hosts without a credential ask you, as today",
+      "footnote": "Hosts with a shared credential keep it. Override one host with Connect as."
+    },
+    "knock": {
+      "title": "Port Knocking",
+      "enable": "Knock before connecting",
+      "hint": "Sent from this device, through this host's proxy, before every SSH, SFTP and port-forward connection.",
+      "viaBastion": "This host connects through {{name}}, so Voltius knocks {{name}} using that host's own knock settings.",
+      "sequence": "Sequence",
+      "reorderHint": "Hold and drag to reorder · Sent in this order",
+      "port": "Port",
+      "dragToReorder": "Drag to reorder",
+      "remove": "Remove port",
+      "addPort": "Add port",
+      "timing": "Timing",
+      "delay": "Delay between knocks",
+      "settle": "Wait after last knock",
+      "window": "Firewall window",
+      "windowHint": "How long the firewall keeps SSH open after a knock. The reachability dot only probes inside this window, so the host card never knocks on its own. Leave empty if unknown.",
+      "issue": {
+        "empty": "Add at least one port.",
+        "port": "Ports must be between 1 and 65535.",
+        "udp-proxy": "UDP knocks can't go through this host's proxy. Use TCP steps or a direct connection.",
+        "udp-system": "UDP knocks fail if the system proxy is in use."
+      },
+      "serverTooOld": "This Voltius server is too old to store knock sequences for team vault hosts. Ask its administrator to update the server to use port knocking here.",
+      "sequenceUnavailable": "The knock sequence for this host isn't available on this device.",
+      "sequenceInvalid": "This host's knock sequence is invalid. Fix it in the host's Port Knocking settings."
     }
   }
 }

@@ -2,33 +2,46 @@ use crate::port_forward::ForwardError;
 use russh::ChannelMsg;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 /// Number of consecutive ports a tunnel tries before giving up.
 pub const PORT_ATTEMPTS: u16 = 5;
 
-/// Bind a loopback listener on `local_port`, walking forward while the port is
+/// Bind a listener on `bind_host:local_port`, walking forward while the port is
 /// taken. Returns the listener and the port it actually got.
-pub async fn bind_with_fallback(local_port: u16) -> Result<(TcpListener, u16), ForwardError> {
+pub async fn bind_with_fallback(
+    bind_host: &str,
+    local_port: u16,
+) -> Result<(TcpListener, u16), ForwardError> {
+    let unavailable = || ForwardError::BindAddressUnavailable(bind_host.trim().to_string());
+    let mut addr = super::bind::resolve(bind_host, local_port)
+        .await
+        .map_err(|_| unavailable())?;
     for offset in 0..PORT_ATTEMPTS {
         let try_port = local_port.saturating_add(offset);
-        if let Ok(listener) = crate::port_forward::bind::bind_loopback(try_port).await {
-            return Ok((listener, try_port));
+        addr.set_port(try_port);
+        match super::bind::bind_local(addr).await {
+            Ok(listener) => return Ok((listener, try_port)),
+            // No other port fixes an address this machine does not have.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrNotAvailable => return Err(unavailable()),
+            Err(_) => {}
         }
     }
     Err(ForwardError::PortInUse(local_port, PORT_ATTEMPTS as u8))
 }
 
-/// Pump an accepted TCP connection through an open SSH channel until either side
-/// closes or `cancel` fires, counting every byte in both directions.
-pub async fn pump(
+/// Pump a local stream (TCP connection, ssh-agent socket) through an open SSH
+/// channel until either side closes or `cancel` fires, counting every byte.
+pub async fn pump<S>(
     ch: russh::Channel<russh::client::Msg>,
-    tcp: TcpStream,
+    tcp: S,
     cancel: CancellationToken,
     bytes: Arc<AtomicU64>,
-) {
+) where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
     let (mut ch_read, ch_write) = ch.split();
     let ch_write = Arc::new(ch_write);
     let mut ch_writer = ch_write.make_writer();
@@ -95,7 +108,10 @@ pub async fn pump(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::port_forward::bind::LOOPBACK;
     use crate::port_forward::test_ssh::{self, Behavior, GREETING, SAW_EOF};
+    use std::sync::atomic::AtomicU16;
+    use tokio::net::TcpStream;
     use tokio::time::{timeout, Duration};
 
     const STEP: Duration = Duration::from_secs(5);
@@ -144,50 +160,67 @@ mod tests {
         assert_eq!(answer, SAW_EOF);
     }
 
+    /// First of `n` consecutive free ports below every OS's ephemeral range. The
+    /// ports after a `bind(0)` result belong to tests running alongside (macOS
+    /// hands them out sequentially), and `bind_with_fallback` connect-probes each
+    /// one — stealing the single connection their one-shot listeners accept.
+    fn free_window(n: u16) -> u16 {
+        static NEXT: AtomicU16 = AtomicU16::new(0);
+        loop {
+            let base = 10_000
+                + (std::process::id() % 10_000) as u16
+                + NEXT.fetch_add(n, Ordering::Relaxed);
+            if (base..base + n).all(|p| std::net::TcpListener::bind(("127.0.0.1", p)).is_ok()) {
+                return base;
+            }
+        }
+    }
+
+    async fn hold(port: u16) {
+        let l = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+        tokio::spawn(async move { while l.accept().await.is_ok() {} });
+    }
+
     #[tokio::test]
     async fn falls_back_to_the_next_free_port() {
-        let taken = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = taken.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            loop {
-                if taken.accept().await.is_err() {
-                    break;
-                }
-            }
-        });
+        let port = free_window(PORT_ATTEMPTS);
+        hold(port).await;
 
-        let (_listener, bound) = bind_with_fallback(port).await.unwrap();
-        assert!(bound > port, "expected a later port, got {bound}");
-        assert!(bound < port + PORT_ATTEMPTS);
+        let (_listener, bound) = bind_with_fallback(LOOPBACK, port).await.unwrap();
+        assert_eq!(bound, port + 1);
     }
 
     #[tokio::test]
     async fn reports_the_requested_port_when_every_attempt_is_taken() {
-        // Port 0 asks the OS for an ephemeral port, so every attempt in the
-        // window binds; use a port range held by listeners instead.
-        let mut held = Vec::new();
-        let first = {
-            let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            probe.local_addr().unwrap().port()
-        };
-        for offset in 0..PORT_ATTEMPTS {
-            if let Ok(l) = TcpListener::bind(("127.0.0.1", first + offset)).await {
-                tokio::spawn(async move {
-                    loop {
-                        if l.accept().await.is_err() {
-                            break;
-                        }
-                    }
-                });
-            }
-            held.push(first + offset);
+        let first = free_window(PORT_ATTEMPTS);
+        for port in first..first + PORT_ATTEMPTS {
+            hold(port).await;
         }
-        match bind_with_fallback(first).await {
+        match bind_with_fallback(LOOPBACK, first).await {
             Err(ForwardError::PortInUse(requested, attempts)) => {
                 assert_eq!(requested, first);
                 assert_eq!(attempts, PORT_ATTEMPTS as u8);
             }
             other => panic!("expected PortInUse, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_address_this_machine_lacks_fails_without_walking_ports() {
+        // TEST-NET-1: never assigned to an interface.
+        match bind_with_fallback("192.0.2.1", free_window(1)).await {
+            Err(ForwardError::BindAddressUnavailable(address)) => assert_eq!(address, "192.0.2.1"),
+            other => panic!("expected BindAddressUnavailable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_name_that_does_not_resolve_is_an_unavailable_address() {
+        match bind_with_fallback("no-such-host.invalid", free_window(1)).await {
+            Err(ForwardError::BindAddressUnavailable(address)) => {
+                assert_eq!(address, "no-such-host.invalid")
+            }
+            other => panic!("expected BindAddressUnavailable, got {other:?}"),
         }
     }
 }

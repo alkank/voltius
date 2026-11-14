@@ -1,22 +1,16 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { GLASS_BG, GLASS_BG_HOVER, GLASS_SHADOW, GLASS_SHADOW_HOVER } from "@/components/shared/BaseCard";
-import { CardActionButton } from "@/components/shared/CardActionButton";
+import { CardActionButton, CardMenuButton, CardMenuContext, CardPinButton } from "@/components/shared/CardActionButton";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/shared/ContextMenu";
-import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
-import { vaultMenuItems } from "@/utils/vaultMenuItems";
-import { getShortcutHint } from "@/stores/shortcutStore";
 import { clipboardMenuItems } from "@/utils/clipboardMenuItems";
-import { useFolderStore } from "@/stores/folderStore";
-import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
-import { useTeamStore } from "@/stores/teamStore";
-import {
-  useEffectivePinned,
-  useEffectivePinSource,
-  nextPersonalPinValue,
-} from "@/hooks/useEffectivePinned";
+import { buildFolderMenuItems } from "@/utils/folderMenuItems";
+import { isPlainClick } from "@/utils/cardInteraction";
+import { useInlineRename } from "@/hooks/useInlineRename";
+import { folderIcon } from "./folderAppearance";
+import { useFolderPin } from "./useFolderPin";
+import { useFolderSync } from "./useFolderSync";
 import type { Folder, VaultOption } from "@/types";
 
 interface FolderCardProps {
@@ -28,7 +22,7 @@ interface FolderCardProps {
   isDragOver?: boolean;
   /** Faded while the folder sits on the clipboard as a pending cut. */
   dimmed?: boolean;
-  onClick: () => void;
+  onOpen: () => void;
   onRename: (folder: Folder, newName: string) => void;
   onDelete: (folder: Folder) => void;
   onSelect?: (id: string, e: React.MouseEvent<HTMLDivElement>) => void;
@@ -52,7 +46,7 @@ export function FolderCard({
   isFocused,
   isDragOver,
   dimmed,
-  onClick,
+  onOpen,
   onRename,
   onDelete,
   onSelect,
@@ -71,50 +65,20 @@ export function FolderCard({
   const isList = layout === "list";
   const avatarSize = isList ? 28 : 48;
   const iconSize = isList ? 14 : 22;
-  const [renaming, setRenaming] = useState(false);
-  const [renameValue, setRenameValue] = useState(folder.name);
-  const { pos: ctxPos, open: openCtx, close: closeCtx } = useContextMenu();
-  const isSynced = useSyncPrefsStore((s) => s.isObjectSynced(folder.id, "folder"));
-  const toggleSync = useSyncPrefsStore((s) => s.toggleExcluded);
-  const isSnippetFolder = folder.object_type === "snippet_folder";
-  const folderType: "folder" | "snippet_folder" = isSnippetFolder ? "snippet_folder" : "folder";
-  const pinFolder = useFolderStore((s) => s.pinFolder);
-  const pinFolderForTeam = useFolderStore((s) => s.pinFolderForTeam);
-  const pinSnippetFolder = useSnippetFolderStore((s) => s.pinSnippetFolder);
-  const pinSnippetFolderForTeam = useSnippetFolderStore((s) => s.pinSnippetFolderForTeam);
-  const effPinned = useEffectivePinned(folder, folderType);
-  const pinSource = useEffectivePinSource(folder, folderType);
-  const isTeamVault = useTeamStore((s) => s.teams.some((t) => t.id === folder.vault_id));
-  const pinPersonal = (pinned: boolean | null) => {
-    if (isSnippetFolder) pinSnippetFolder(folder.id, pinned).catch(() => {});
-    else pinFolder(folder.id, pinned).catch(() => {});
-  };
-  const pinTeam = (pinned: boolean) => {
-    if (isSnippetFolder) pinSnippetFolderForTeam(folder.id, pinned).catch(() => {});
-    else pinFolderForTeam(folder.id, pinned).catch(() => {});
-  };
-  const handlePinClick = () => {
-    if (!isTeamVault) {
-      pinPersonal(!effPinned);
-    } else {
-      pinPersonal(nextPersonalPinValue(pinSource));
-    }
-  };
-  const pinIcon = pinSource === "team-hidden" ? "lucide:pin-off" : "lucide:pin";
-  const pinColor =
-    pinSource === "personal" || pinSource === "team+personal"
-      ? "var(--t-accent)"
-      : pinSource === "team"
-      ? "var(--t-text-secondary)"
-      : "var(--t-text-dim)";
-  const pinAlwaysVisible = pinSource !== "none" && pinSource !== "team-hidden";
+  const { pos: ctxPos, open: openCtx, openAt: openCtxAt, close: closeCtx } = useContextMenu();
+  const sync = useFolderSync(folder);
+  const { pinColor, pinAlwaysVisible, togglePin, pinItem, pinTeamItem } = useFolderPin(folder, canEdit);
   const activeMenuItems = isSelected && bulkContextMenuItems?.length ? bulkContextMenuItems : undefined;
 
-  const handleRenameCommit = () => {
-    const trimmed = renameValue.trim();
-    if (trimmed && trimmed !== folder.name) onRename(folder, trimmed);
-    setRenaming(false);
-  };
+  const rename = useInlineRename(folder.id, !!canEdit, folder.name, (name) => onRename(folder, name));
+  const nameClass = isList
+    ? "text-sm font-medium-bold truncate w-52 shrink-0 text-(--t-text-bright)"
+    : "text-base font-medium-bold truncate leading-tight text-(--t-text-bright)";
+  const name = (
+    <p className={nameClass}>
+      {rename.editor ?? folder.name}
+    </p>
+  );
 
   const dragBorder = isDragOver
     ? "2px dashed var(--t-accent)"
@@ -155,8 +119,13 @@ export function FolderCard({
             ? { backdropFilter: "blur(12px) saturate(1.5)", WebkitBackdropFilter: "blur(12px) saturate(1.5)" }
             : {}),
         }}
-        onClick={(e) => { e.stopPropagation(); if (!renaming) onClick(); }}
-        onContextMenu={(e) => { e.stopPropagation(); e.preventDefault(); onSelect?.(folder.id, e); openCtx(e); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (rename.editor) return;
+          if (isPlainClick(e)) onOpen();
+          else onSelect?.(folder.id, e);
+        }}
+        onContextMenu={(e) => { e.stopPropagation(); e.preventDefault(); if (!isSelected) onSelect?.(folder.id, e); openCtx(e); }}
         onPointerDown={onPointerDown}
         onMouseEnter={(e) => {
           if (isDragOver) return;
@@ -171,7 +140,8 @@ export function FolderCard({
       >
         {/* Folder avatar */}
         <AvatarTile
-          icon={isDragOver ? "lucide:folder-open" : "lucide:folder"}
+          icon={isDragOver ? "lucide:folder-open" : folderIcon(folder)}
+          base={folder.color}
           iconSize={iconSize}
           className="rounded-lg text-white"
           style={{
@@ -185,50 +155,14 @@ export function FolderCard({
 
         {isList ? (
           <>
-            {renaming ? (
-              <input
-                autoFocus
-                className="font-medium text-sm bg-transparent outline-hidden flex-1 min-w-0 text-(--t-text-bright)"
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onBlur={handleRenameCommit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleRenameCommit();
-                  if (e.key === "Escape") { setRenaming(false); setRenameValue(folder.name); }
-                  e.stopPropagation();
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <p className="text-sm font-medium-bold truncate w-52 shrink-0 text-(--t-text-bright)">
-                {folder.name}
-              </p>
-            )}
+            {name}
             <p className="text-xs truncate flex-1 text-(--t-text-secondary)">
               {t("folders.card.itemCount", { count: itemCount })}
             </p>
           </>
         ) : (
           <div className="flex-1 min-w-0">
-            {renaming ? (
-              <input
-                autoFocus
-                className="text-base font-medium-bold bg-transparent outline-hidden w-full text-(--t-text-bright)"
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onBlur={handleRenameCommit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleRenameCommit();
-                  if (e.key === "Escape") { setRenaming(false); setRenameValue(folder.name); }
-                  e.stopPropagation();
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <p className="text-base font-medium-bold truncate leading-tight text-(--t-text-bright)">
-                {folder.name}
-              </p>
-            )}
+            {name}
             <p className="text-xs mt-0.5 truncate text-(--t-text-secondary)">
               {t("folders.card.itemCount", { count: itemCount })}
             </p>
@@ -236,21 +170,17 @@ export function FolderCard({
         )}
 
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={(e) => { e.stopPropagation(); handlePinClick(); }}
-            className={`shrink-0 flex items-center transition-colors ${pinAlwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100 hover:text-(--t-text-bright)"}`}
-            style={{ color: pinColor }}
-            title={effPinned ? t("folders.card.unpin") : t("folders.card.pin")}
-          >
-            <Icon icon={pinIcon} width={16} />
-          </button>
-          {!isSynced && (
-            <span title={t("folders.card.cloudSyncDisabled")} className="text-(--t-text-dim) flex items-center">
+          {pinAlwaysVisible && <CardPinButton color={pinColor} title={t("folders.card.unpin")} onClick={togglePin} width={16} />}
+          {!sync.isSynced && (
+            <span title={t("common.objectSync.notSynced")} className="text-(--t-text-dim) flex items-center">
               <Icon icon="lucide:cloud-off" width={18} />
             </span>
           )}
-          {canEdit && <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} onClick={() => onEdit?.()} />}
-          {canEdit && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} onClick={() => onDelete(folder)} danger />}
+          {isList && canEdit && <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} onClick={() => onEdit?.()} />}
+          {isList && canEdit && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} onClick={() => onDelete(folder)} danger />}
+          <CardMenuContext.Provider value={(e) => { if (!isSelected) onSelect?.(folder.id, e as React.MouseEvent<HTMLDivElement>); openCtxAt(e.currentTarget.getBoundingClientRect()); }}>
+            <CardMenuButton />
+          </CardMenuContext.Provider>
         </div>
       </div>
 
@@ -258,44 +188,25 @@ export function FolderCard({
         <ContextMenu
           pos={ctxPos}
           onClose={closeCtx}
-          items={[
-            ...(activeMenuItems ?? [
-            { label: t("folders.card.openFolder"), icon: "lucide:folder-open", onClick: onClick, shortcut: "↩" },
-            ...(canEdit ? [
-              { label: t("common.action.rename"), icon: "lucide:pencil", onClick: () => { setRenameValue(folder.name); setRenaming(true); } },
-              { label: t("common.action.edit"), icon: "lucide:settings-2", onClick: () => onEdit?.() },
-            ] : []),
-            {
-              label: isTeamVault
-                ? (pinSource === "personal" || pinSource === "team+personal")
-                  ? t("folders.card.unpinForMe")
-                  : pinSource === "team-hidden"
-                  ? t("folders.card.showInMyView")
-                  : pinSource === "team"
-                  ? t("folders.card.hideForMe")
-                  : t("folders.card.pinForMe")
-                : effPinned ? t("folders.card.unpin") : t("folders.card.pin"),
-              icon: (pinSource === "personal" || pinSource === "team+personal" || (!isTeamVault && effPinned))
-                ? "lucide:pin-off"
-                : "lucide:pin",
-              onClick: handlePinClick,
-              divider: true as const,
-            },
-            ...(canEdit && isTeamVault ? [{
-              label: folder.pinned ? t("folders.card.unpinForTeam") : t("folders.card.pinForTeam"),
-              icon: "lucide:users",
-              onClick: () => pinTeam(!folder.pinned),
-            }] : []),
-            { label: t("folders.card.exportFolder"), icon: "lucide:upload", onClick: () => onExport?.() },
-            ...(onShare ? [{ label: t("snippets.community.shareTitle"), icon: "lucide:globe", onClick: onShare }] : []),
-            ...vaultMenuItems(vaults, canEdit, onMoveToVault, onCopyToVault, t),
-            ...clipboardMenuItems(t),
-            ...(canEdit ? [
-              { label: isSynced ? t("folders.card.disableCloudSync") : t("folders.card.enableCloudSync"), icon: isSynced ? "lucide:cloud-off" : "lucide:cloud", onClick: () => toggleSync(folder.id), divider: true as const },
-              { label: t("folders.card.deleteFolder"), icon: "lucide:trash-2", onClick: () => onDelete(folder), danger: true as const, shortcut: getShortcutHint("delete") },
-            ] : []),
-            ]),
-          ]}
+          items={activeMenuItems ?? buildFolderMenuItems({
+            t,
+            onOpen,
+            editItems: canEdit ? [
+              ...rename.menuItems,
+              { label: t("common.action.edit"), icon: "lucide:pencil", onClick: () => onEdit?.() },
+            ] : [],
+            pinItem,
+            pinTeamItem,
+            onExport,
+            onShare,
+            vaults,
+            canEdit,
+            onMoveToVault,
+            onCopyToVault,
+            clipboard: clipboardMenuItems(t),
+            ...sync,
+            onDelete: () => onDelete(folder),
+          })}
         />
       )}
     </>

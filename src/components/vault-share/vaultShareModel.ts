@@ -1,9 +1,13 @@
 import type { TeamRole } from "@/stores/teamStore";
 
-/** Roles an owner may hand out: everything except owner, in the server's order. */
-export function assignableRoles(roles: TeamRole[]): TeamRole[] {
+export function isOwnerRole(role: Pick<TeamRole, "is_builtin" | "name">): boolean {
+  return role.is_builtin && role.name === "owner";
+}
+
+/** Roles that may be handed out, in the server's order. Owner only through invitations: links and enrolment tokens are shared. */
+export function assignableRoles(roles: TeamRole[], { withOwner = false } = {}): TeamRole[] {
   return roles
-    .filter((r) => !(r.is_builtin && r.name === "owner"))
+    .filter((r) => withOwner || !isOwnerRole(r))
     .sort((a, b) => a.position - b.position);
 }
 
@@ -17,21 +21,11 @@ export function leastPrivilegedRole(roles: TeamRole[]): TeamRole | null {
   return sorted.length > 0 ? sorted[sorted.length - 1] : null;
 }
 
-export type SeatState =
-  | { kind: "known"; used: number; total: number; available: number; atLimit: boolean }
-  | { kind: "unknown" };
-
-/**
- * A failed subscription load used to render as "? available · ? total".
- * Unknown is its own state so the UI can say so in words.
- */
-export function seatState(
-  used: number | null | undefined,
-  total: number | null | undefined,
-): SeatState {
-  if (typeof used !== "number" || typeof total !== "number") return { kind: "unknown" };
-  const available = Math.max(0, total - used);
-  return { kind: "known", used, total, available, atLimit: available <= 0 };
+/** The one builtin role an older server reads from an invitation; newer ones read every id in `role_ids`. */
+export function invitationRoleName(roles: TeamRole[], roleIds: string[]): string {
+  const builtins = roles.filter((r) => r.is_builtin);
+  const chosen = roleIds.map((id) => builtins.find((r) => r.id === id)).find((r) => !!r);
+  return (chosen ?? leastPrivilegedRole(builtins))?.name ?? "connect-only";
 }
 
 const MANAGING_ROLES = new Set(["owner", "manager"]);

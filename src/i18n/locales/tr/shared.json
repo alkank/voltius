@@ -1,13 +1,34 @@
 {
   "shared": {
+    "signOutConfirm": {
+      "title": "Oturum kapatılıp bu cihazdaki veriler silinsin mi?",
+      "noServerCopy": "Bu hesabın sunucuları, anahtarları ve kod parçacıkları yalnızca bu cihazda saklanır. Oturumu kapatırsanız bunlar silinir ve kurtarılamaz.",
+      "unsynced": "Eşitleme duraklatılmış veya sunucuya ulaşılamamış; bu cihazdaki son değişiklikler sunucuya kaydedilmemiş olabilir. Oturumu kapatırsanız bu cihazdaki kopya silinir.",
+      "confirm": "Sil ve oturumu kapat"
+    },
+    "deleteAccount": {
+      "action": "Hesabı sil",
+      "actionSub": "Voltius bulut hesabınızı ve verilerini kalıcı olarak siler",
+      "title": "Voltius hesabınız silinsin mi?",
+      "message": "Bu işlem bulut hesabınızı, şifreli kasanızı ve tüm bulut senkronizasyon verilerinizi Voltius sunucusundan kalıcı olarak siler. Üyesi olduğunuz tüm ekiplerden de ayrılırsınız. Bu işlem geri alınamaz.",
+      "deviceNote": "Ardından bu cihazda oturum kapatılır ve ana bilgisayarlarınızın, anahtarlarınızın ve snippet'lerinizin yerel kopyası, oturumu kapatırken olduğu gibi silinir. Diğer cihazlarınızdaki kopyalar uzaktan silinmez.",
+      "subscriptionNote": "Aboneliğiniz hesabınızla birlikte iptal edilir: yenilenmez ve sizden tekrar ücret alınmaz.",
+      "typeToConfirm": "Onaylamak için {{target}} yazın",
+      "confirm": "Hesabı sil",
+      "deleting": "Siliniyor…",
+      "deletedTitle": "Hesap silindi",
+      "deleted": "Voltius hesabınız silindi.",
+      "failed": "Hesabınız silinemedi (hata {{status}}). Daha sonra tekrar deneyin veya destekle iletişime geçin.",
+      "ownsTeamWithMembers": "Hâlâ başka üyeleri olan bir ekibin tek sahibisiniz ({{teams}}). Başka bir üyeyi sahip yapın, üyeleri çıkarın veya ekibi silin, sonra tekrar deneyin.",
+      "subscriptionCancelFailed": "Aboneliğiniz iptal edilemediği için hesabınız silinmedi. Birkaç dakika sonra tekrar deneyin veya destekle iletişime geçin."
+    },
     "errorBanner": {
       "dismiss": "kapat"
     },
     "trialExpiredModal": {
       "title": "Pro denemeniz sona erdi",
       "subtitle": "Şu üç özellik bugün itibarıyla çalışmayı durduruyor:",
-      "freeNote": "Yerel kasa, denetim günlükleri ve GitHub Gist eşitlemesi her zaman ücretsiz kalır.",
-      "teamsPrompt": "Başkalarıyla mı çalışıyorsunuz? Teams, paylaşılan kasalar ve kullanıcı lisansları ekler.",
+      "teamsPrompt": "Başkalarıyla mı çalışıyorsunuz? Teams'i {{days}} gün ücretsiz deneyin (kart gerekir).",
       "upgradeButton": "Pro'ya yükselt",
       "laterButton": "Belki daha sonra"
     },
@@ -63,7 +84,8 @@
       "memberBadge": "üye"
     },
     "pickers": {
-      "thisComputer": "Bu bilgisayar"
+      "thisComputer": "Bu bilgisayar",
+      "recent": "Son kullanılanlar"
     },
     "sessionPicker": {
       "insertTitle": "Şuraya ekle...",
@@ -86,7 +108,8 @@
       "localMachineName": "Yerel bilgisayar",
       "wslSub": "WSL",
       "noHostsConfigured": "Yapılandırılmış sunucu yok",
-      "noHostsMatch": "Eşleşen sunucu yok"
+      "noHostsMatch": "Eşleşen sunucu yok",
+      "allVaults": "Tüm kasalar"
     },
     "sort": {
       "nameAsc": "A → Z",
@@ -110,9 +133,6 @@
     "vaultUnavailable": {
       "note": "Kasa okunamadığı için kayıtlı gizli bilgiler burada gösterilmiyor. Kayıtlı değeri korumak için alanı boş bırakın; yeni bir değer yazarsanız kayıtlı değerin yerini alır."
     },
-    "storedSecrets": {
-      "forbidden": "Bu kasadaki rolünüz kayıtlı gizli bilgileri göremediği için bu alanlar boş bırakıldı. Bağlanmaya devam edebilirsiniz — kayıtlı kimlik bilgisi size gösterilmeden kullanılır."
-    },
     "teamCredentials": {
       "unavailable": "Bu ekip kasasının kayıtlı kimlik bilgileri yüklenemedi; bu nedenle kayıtlı parola, anahtar veya parola ifadesi gerektiren sunuculara bağlanılamayacak. Bir kasa yöneticisinden, rolünüze kasadaki gizli bilgilere erişim izni vermesini isteyin."
     },
@@ -130,6 +150,51 @@
     },
     "tunnelStatus": {
       "noRemoteListener": "Uzak portu dinleyen bir hizmet yok"
-    }
+    },
+    "permissions": {
+      "everyone": "@herkes",
+      "moveWarning": {
+        "title": "İzinler değişecek",
+        "body": "Buraya taşımak bu klasörün izinlerini uygular:",
+        "bodyUnknown": "Buraya taşımak bu klasörün izinlerini uygular.",
+        "line": "{{subject}} · {{permission}}: {{before}} → {{after}}",
+        "confirm": "Taşı",
+        "cancelled": "Taşıma iptal edildi"
+      },
+      "section": {
+        "title": "İzinler",
+        "titleKey": "Bu anahtarı kimler kullanabilir",
+        "titleIdentity": "Bu kimliği kimler kullanabilir",
+        "adminNote": "Sahipler ve yöneticiler her anahtarı her zaman kullanabilir.",
+        "syncedWith": "{{folder}} ile eşitlendi",
+        "syncedTeam": "Ekibin izinlerini kullanır",
+        "notSynced": "Eşitlenmedi",
+        "syncNow": "Şimdi eşitle",
+        "ownPermissions": "Kendi izinleri",
+        "useTeams": "Ekibinkileri kullan",
+        "addSubject": "Rol veya üye ekle",
+        "searchSubjects": "Rol ve üye ara…",
+        "noSubjectsLeft": "Tüm roller ve üyeler zaten listede",
+        "use": "Kullan",
+        "requiresConnect": "{{connect}} gerekir",
+        "roleCount_one": "{{count}} rol",
+        "roleCount_other": "{{count}} rol",
+        "loadFailed": "İzinler yüklenemedi"
+      }
+    },
+    "businessLock": {
+      "title": "Business planı özelliği",
+      "upgrade": "Business'a yükselt",
+      "ownerOnly": "Yalnızca ekip sahibi yükseltebilir.",
+      "removeRules": "Kuralları kaldır",
+      "confirmClear": "Kaldırmak için tekrar tıklayın",
+      "rolesBody": "Özel roller ekibin Business planını gerektirir.",
+      "memberLapsed": "Business planının süresi doldu: {{name}} için verilen izinler kapalı; kısıtlamalar geçerli olmaya devam ediyor.",
+      "objectLapsed": "Business planının süresi doldu: izin kuralları kapalı; engelleme kuralları geçerli olmaya devam ediyor.",
+      "memberLine": "Üye bazlı izinler Business planını gerektirir.",
+      "objectLine": "Nesne bazlı izinler Business planını gerektirir.",
+      "removeOverrides": "Geçersiz kılmaları kaldır"
+    },
+    "availableWith": "{{plan}} ile kullanılabilir"
   }
 }

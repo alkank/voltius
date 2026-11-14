@@ -9,9 +9,10 @@ const h = vi.hoisted(() => ({
   getSwitchTargets: vi.fn(async (): Promise<SavedAccount[]> => []),
   saveCurrentAccount: vi.fn(async () => {}),
   switchToAccount: vi.fn(async () => {}),
-  signOutToAddAccount: vi.fn(async () => {}),
   removeSavedAccount: vi.fn(async () => {}),
   keychain: {} as Record<string, string | null>,
+  lockApp: vi.fn(async () => {}),
+  requestSignOut: vi.fn(),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -30,11 +31,14 @@ vi.mock("@/services/account", () => ({
   lockVaultSession: vi.fn(async () => {}),
   logout: vi.fn(async () => {}),
 }));
+vi.mock("@/services/appLock", () => ({ lockApp: h.lockApp }));
+vi.mock("@/hooks/useSignOutConfirm", () => ({
+  useSignOutConfirm: () => ({ requestSignOut: h.requestSignOut, signOutConfirm: null }),
+}));
 vi.mock("@/services/savedAccounts", () => ({
   getSwitchTargets: h.getSwitchTargets,
   saveCurrentAccount: h.saveCurrentAccount,
   switchToAccount: h.switchToAccount,
-  signOutToAddAccount: h.signOutToAddAccount,
   removeSavedAccount: h.removeSavedAccount,
 }));
 
@@ -97,14 +101,37 @@ test("a saved account other than the current one is offered as a switch target",
   expect(h.switchToAccount).toHaveBeenCalledWith(OTHER);
 });
 
-test("removing a saved account does not switch into it", async () => {
+test("removing a saved account asks first, and does not switch into it", async () => {
   h.getSwitchTargets.mockResolvedValue([OTHER]);
   await openMenu();
 
   await userEvent.click(await screen.findByTitle("layout.sidebarAccount.removeSavedAccount"));
-  expect(h.removeSavedAccount).toHaveBeenCalledWith(OTHER.account_id);
+  await screen.findByText("layout.sidebarAccount.removeTitle");
+  expect(h.removeSavedAccount).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByText("layout.sidebarAccount.removeConfirm"));
+  await waitFor(() => expect(h.removeSavedAccount).toHaveBeenCalledWith(OTHER.account_id));
   expect(h.switchToAccount).not.toHaveBeenCalled();
-  await waitFor(() => expect(screen.queryByText(OTHER.email!)).toBeNull());
+  expect(screen.queryByText("layout.sidebarAccount.removeTitle")).toBeNull();
+});
+
+test("backing out of a removal keeps the saved account", async () => {
+  h.getSwitchTargets.mockResolvedValue([OTHER]);
+  await openMenu();
+
+  await userEvent.click(await screen.findByTitle("layout.sidebarAccount.removeSavedAccount"));
+  await userEvent.click(await screen.findByText("common.action.cancel"));
+
+  expect(h.removeSavedAccount).not.toHaveBeenCalled();
+  expect(screen.queryByText("layout.sidebarAccount.removeTitle")).toBeNull();
+});
+
+test("Disconnect goes through the sign-out confirmation", async () => {
+  await openMenu();
+
+  await userEvent.click(screen.getByText("common.action.disconnect"));
+
+  expect(h.requestSignOut).toHaveBeenCalledTimes(1);
 });
 
 test("no switch row nests a button inside a button", async () => {
@@ -154,6 +181,27 @@ test("the lock row reports the current auto-lock setting", async () => {
   useSecurityStore.getState().setSessionTimeoutMinutes(null);
 });
 
+test("the lock row says Immediately in words, not as a duration", async () => {
+  useSecurityStore.getState().setSessionTimeoutMinutes(0);
+  await openMenu();
+  expect(await screen.findByText("layout.sidebarAccount.autoLockImmediately")).toBeTruthy();
+  useSecurityStore.getState().setSessionTimeoutMinutes(null);
+});
+
+test("a no-password account with system auth is offered the lock", async () => {
+  h.accountMode = "local-nopassword";
+  useSecurityStore.getState().setSystemAuthUnlock(true);
+  await openMenu();
+  expect(await screen.findByText("layout.sidebarAccount.lockVault")).toBeTruthy();
+  useSecurityStore.getState().setSystemAuthUnlock(false);
+});
+
+test("the lock row locks through lockApp", async () => {
+  await openMenu();
+  await userEvent.click(await screen.findByText("layout.sidebarAccount.lockVault"));
+  expect(h.lockApp).toHaveBeenCalled();
+});
+
 test("the auto-lock row opens the account settings section", async () => {
   useUIStore.setState({ settingsOpen: false, settingsSection: "appearance" });
   await openMenu();
@@ -163,10 +211,13 @@ test("the auto-lock row opens the account settings section", async () => {
   expect(useUIStore.getState().settingsSection).toBe("account");
 });
 
-test("a cloud account can add another one without signing out", async () => {
+test("adding another account opens the sign-in modal and leaves the session alone", async () => {
+  useUIStore.setState({ cloudAuthOpen: false });
   await openMenu();
   await userEvent.click(await screen.findByText("layout.sidebarAccount.addAccount"));
-  expect(h.signOutToAddAccount).toHaveBeenCalled();
+
+  expect(useUIStore.getState()).toMatchObject({ cloudAuthOpen: true, cloudAuthPurpose: "add" });
+  expect(h.switchToAccount).not.toHaveBeenCalled();
 });
 
 test("a local account is not offered the add-account route", async () => {
@@ -223,19 +274,4 @@ test("the header still reads Cloud account on the official instance", async () =
   await openMenu();
 
   await screen.findByText("layout.sidebarAccount.modeCloud");
-});
-
-test("adding another account stops when the current one could not be saved", async () => {
-  h.signOutToAddAccount.mockRejectedValueOnce(new Error("Saved accounts could not be read"));
-  await openMenu();
-
-  await userEvent.click(await screen.findByText("layout.sidebarAccount.addAccount"));
-
-  await waitFor(() =>
-    expect(
-      useNotificationStore.getState().toasts.some((toast) =>
-        toast.message.startsWith("layout.sidebarAccount.saveFailed"),
-      ),
-    ).toBe(true),
-  );
 });

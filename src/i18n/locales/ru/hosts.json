@@ -8,10 +8,11 @@
       "importExport": "Импорт/Экспорт",
       "import": "Импорт…",
       "export": "Экспорт…",
-      "fromImporter": "Из {{label}}",
+      "importFrom": "Импорт из",
       "newHost": "Новый хост",
       "newSerialHost": "Новый последовательный хост",
-      "newFolder": "Новая папка"
+      "newFolder": "Новая папка",
+      "systemShell": "Оболочка по умолчанию в системе"
     },
     "card": {
       "pin": "Закрепить",
@@ -31,9 +32,6 @@
       "copyHostnameIp": "Копировать имя хоста/IP",
       "copiedHost": "Скопировано: {{host}}",
       "executeSnippet": "Выполнить сниппет",
-      "cloudSyncDisabled": "Облачная синхронизация отключена",
-      "enableCloudSync": "Включить облачную синхронизацию",
-      "disableCloudSync": "Отключить облачную синхронизацию",
       "enableReachability": "Включить проверку доступности",
       "disableReachability": "Отключить проверку доступности",
       "connectTitle": "Подключиться (или двойной клик)",
@@ -42,21 +40,25 @@
       "inUseByOverflow_one": "Используется пользователем {{name}} + ещё {{count}} человек",
       "inUseByOverflow_few": "Используется пользователем {{name}} + ещё {{count}} человека",
       "inUseByOverflow_many": "Используется пользователем {{name}} + ещё {{count}} человек",
-      "inUseByOverflow_other": "Используется пользователем {{name}} + ещё {{count}} человек"
+      "inUseByOverflow_other": "Используется пользователем {{name}} + ещё {{count}} человек",
+      "filesSuffix": "файлы",
+      "knockProtected": "Защищён стуком. Проверяется только после стука Voltius.",
+      "knockWindowOpen": "Окно после стука открыто",
+      "knockProtectedShort": "защищён стуком"
     },
     "page": {
       "all": "Все",
       "folders": "Папки",
       "new": "Новые",
       "pinned": "Закреплённые",
-      "folderEmpty": "Эта папка пуста",
-      "addHost": "Добавить хост",
       "noSearchResults": "Нет хостов, соответствующих \"{{search}}\"",
       "ejectMoveTo": "Переместить в {{name}}",
       "ejectRemoveFromFolder": "Убрать из папки",
       "emptyState": {
         "title": "Пока нет хостов",
-        "subtitle": "Добавьте свой первый SSH-хост, чтобы начать"
+        "subtitle": "Добавьте сервер, чтобы подключаться к нему одним щелчком.",
+        "import": "Импортировать хосты",
+        "quickConnect": "Подключиться без сохранения"
       },
       "draft": {
         "unsaved": "Не сохранено"
@@ -86,8 +88,6 @@
         "copyItemsTo_few": "Копировать {{count}} элемента в",
         "copyItemsTo_many": "Копировать {{count}} элементов в",
         "copyItemsTo_other": "Копировать {{count}} элементов в",
-        "enableCloudSync": "Включить облачную синхронизацию ({{count}})",
-        "disableCloudSync": "Отключить облачную синхронизацию ({{count}})",
         "enableReachability": "Включить проверку доступности ({{count}})",
         "disableReachability": "Отключить проверку доступности ({{count}})",
         "exportHosts_one": "Экспортировать {{count}} хост",
@@ -124,21 +124,21 @@
     },
     "remoteSessions": {
       "title": "Активно на других устройствах",
-      "justNow": "только что",
-      "minutesAgo": "{{count}} мин. назад",
-      "hoursAgo": "{{count}} ч. назад",
-      "daysAgo": "{{count}} дн. назад",
       "kill": "Завершить сессию",
+      "join": "Подключиться к сессии",
       "killing": "Завершение сессии…",
       "undo": "Отменить",
       "killFailed": "Не удалось завершить удалённо — откройте сессию, чтобы закрыть её",
-      "dismiss": "Закрыть"
+      "dismiss": "Закрыть",
+      "deviceActive": "{{device}} · активна {{age}}",
+      "unknownDevice": "Неизвестное устройство"
     },
     "teamSessions": {
       "title": "Командные сессии",
       "joinByCode": "Присоединиться по коду",
-      "emptyHint": "Здесь появляются терминалы, которыми делятся ваши коллеги. Есть код приглашения? Вставьте его в поиск, чтобы присоединиться.",
+      "emptyHint": "Здесь появляются терминалы, которыми делятся ваши коллеги. Есть ссылка или код приглашения? Нажмите «Присоединиться по коду».",
       "live": "АКТИВНО",
+      "sharedBy": "Делится {{name}}",
       "pasteInviteCode": "Вставьте ссылку или код приглашения, чтобы присоединиться к приватной сессии:",
       "inviteCodePlaceholder": "voltius://join?… или sessionId:token",
       "join": "Присоединиться",
@@ -171,6 +171,22 @@
       "failed": "Не удалось выполнить команду для {{host}}: {{error}}",
       "missingSnippet": "Сниппет команды не найден для {{host}}",
       "postPromptTimedOut": "Завершающая команда для {{host}} была пропущена: нет ответа в течение 60 с"
+    },
+    "connectAs": {
+      "title": "Подключиться как",
+      "yours": "ваша",
+      "hostDefault": "по умолчанию хоста",
+      "vaultDefault": "Моя личность для {{vault}}…",
+      "clearPick": "Сбросить мой выбор"
+    },
+    "managed": {
+      "badge": "ssh config",
+      "tooltip": "Управляется ~/.ssh/config · псевдоним {{alias}}",
+      "bannerTitle": "Управляется ~/.ssh/config",
+      "bannerBodyBefore": "Псевдоним ",
+      "bannerBodyAfter": ". Заблокированные поля следуют файлу.",
+      "detach": "Отвязать",
+      "detachMenu": "Отвязать от ~/.ssh/config"
     }
   }
 }

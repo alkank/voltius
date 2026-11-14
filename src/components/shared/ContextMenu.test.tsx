@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { test, expect, afterEach } from "vitest";
+import { test, expect, afterEach, vi } from "vitest";
+import { act } from "react";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { ContextMenu, useContextMenu } from "./ContextMenu";
+import { ContextMenu, fitWithin, isInMenuPortal, submenuLeft, useContextMenu } from "./ContextMenu";
 
 // vitest.config.ts sets no `globals: true`, so testing-library's automatic
 // cleanup never registers; unmount explicitly between tests.
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const clicked: string[] = [];
 
@@ -57,4 +62,134 @@ test("a press outside closes the menu, and one inside still runs the entry", () 
   fireEvent.click(entry);
   expect(clicked).toEqual(["a"]);
   expect(screen.queryByText("item-a")).toBeNull();
+});
+
+test.each([
+  ["a menu that fits keeps its position", 100, 190, 100],
+  ["a menu near the left edge stays put", 2, 190, 2],
+  ["a menu past the right edge moves back inside", 1180, 190, 1082],
+  ["a menu wider than the window pins to the margin", 1180, 1400, 8],
+])("%s", (_label, start, size, expected) => {
+  expect(fitWithin(start, size, 1280)).toBe(expected);
+});
+
+test("a root menu opened near the right edge renders inside the window", () => {
+  const width = window.innerWidth;
+  window.innerWidth = 1280;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 190, height: 120 } as DOMRect);
+  try {
+    render(<ContextMenu items={[{ label: "Change", onClick: () => {} }]} pos={{ x: 1180, y: 40 }} onClose={() => {}} />);
+    const menu = screen.getByText("Change").closest("[data-menu-portal]") as HTMLElement;
+    expect(menu.style.left).toBe("1082px");
+  } finally {
+    vi.restoreAllMocks();
+    window.innerWidth = width;
+  }
+});
+
+test.each([
+  ["a menu opened low in the window is shifted up instead of squeezed", "down", 560, 292],
+  ["an upward menu ends at the pointer when there is room above", "up", 560, 260],
+  ["an upward menu opened high in the window is pushed down instead of squeezed", "up", 120, 8],
+] as const)("%s", (_label, direction, y, expected) => {
+  const height = window.innerHeight;
+  window.innerHeight = 600;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 190, height: 300 } as DOMRect);
+  try {
+    render(<ContextMenu items={[{ label: "Edit", onClick: () => {} }]} pos={{ x: 40, y }} onClose={() => {}} direction={direction} />);
+    const menu = screen.getByText("Edit").closest("[data-menu-portal]") as HTMLElement;
+    expect(menu.style.top).toBe(`${expected}px`);
+    expect(menu.style.maxHeight).toBe("584px");
+  } finally {
+    window.innerHeight = height;
+  }
+});
+
+test("labels and hints never wrap, so the measured width is the final width", () => {
+  render(<ContextMenu items={[{ label: "A long label", hint: "a hint", onClick: () => {} }]} pos={{ x: 0, y: 0 }} onClose={() => {}} />);
+  expect(screen.getByText("A long label").className).toContain("whitespace-nowrap");
+  expect(screen.getByText("a hint").className).toContain("whitespace-nowrap");
+});
+
+test("a root menu is re-clamped when it grows after the first measurement", () => {
+  const width = window.innerWidth;
+  window.innerWidth = 1280;
+  let menuWidth = 208;
+  const observers: Array<() => void> = [];
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(cb: () => void) { observers.push(cb); }
+    observe() {}
+    disconnect() {}
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({ width: menuWidth, height: 120 }) as DOMRect);
+  try {
+    render(<ContextMenu items={[{ label: "Change", onClick: () => {} }]} pos={{ x: 1100, y: 40 }} onClose={() => {}} />);
+    const menu = screen.getByText("Change").closest("[data-menu-portal]") as HTMLElement;
+    expect(menu.style.left).toBe("1064px");
+    menuWidth = 224;
+    act(() => observers.forEach((cb) => cb()));
+    expect(menu.style.left).toBe("1048px");
+  } finally {
+    window.innerWidth = width;
+  }
+});
+
+test("a click opens a submenu without hovering, for touch and keyboard", () => {
+  const onClick = vi.fn();
+  render(<ContextMenu items={[{ label: "Parent", children: [{ label: "Child", onClick }] }]} pos={{ x: 0, y: 10 }} onClose={() => {}} />);
+  fireEvent.click(screen.getByText("Parent"));
+  fireEvent.click(screen.getByText("Child"));
+  expect(onClick).toHaveBeenCalled();
+});
+
+test("a submenu opened low in the window is shifted up to stay inside it", () => {
+  const height = window.innerHeight;
+  window.innerHeight = 600;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return (this.hasAttribute("data-menu-portal") ? { width: 200, height: 300 } : { left: 0, right: 200, top: 560, bottom: 590, width: 200, height: 30 }) as DOMRect;
+  });
+  try {
+    render(<ContextMenu items={[{ label: "Parent", children: [{ label: "Child", onClick: () => {} }] }]} pos={{ x: 0, y: 10 }} onClose={() => {}} />);
+    fireEvent.mouseEnter(screen.getByText("Parent").closest("button") as HTMLElement);
+    const sub = screen.getByText("Child").closest("[data-menu-portal]") as HTMLElement;
+    expect(sub.style.top).toBe("292px");
+  } finally {
+    window.innerHeight = height;
+  }
+});
+
+test("submenuLeft opens right when there is room and flips left of the row otherwise", () => {
+  const row = { left: 1000, right: 1200, top: 0 };
+  expect(submenuLeft(row, 200, 1440)).toBe(1204);
+  expect(submenuLeft(row, 228, 1440)).toBe(1204);
+  expect(submenuLeft(row, 260, 1440)).toBe(1000 - 4 - 260);
+  expect(submenuLeft({ left: 100, right: 300, top: 0 }, 400, 600)).toBe(8);
+});
+
+test("a flipped submenu wider than its old fixed estimate does not cover its parent row", () => {
+  const width = window.innerWidth;
+  window.innerWidth = 1440;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return (this.hasAttribute("data-menu-portal")
+      ? { left: 1150, right: 1400, top: 10, bottom: 130, width: 240, height: 120 }
+      : { left: 1156, right: 1394, top: 300, bottom: 330, width: 238, height: 30 }) as DOMRect;
+  });
+  try {
+    render(<ContextMenu items={[{ label: "Parent", children: [{ label: "My identity for Acme Ops…", onClick: () => {} }] }]} pos={{ x: 1150, y: 10 }} onClose={() => {}} />);
+    fireEvent.mouseEnter(screen.getByText("Parent").closest("button") as HTMLElement);
+    const sub = screen.getByText("My identity for Acme Ops…").closest("[data-menu-portal]") as HTMLElement;
+    expect(sub.style.left).toBe(`${1150 - 4 - 240}px`);
+  } finally {
+    window.innerWidth = width;
+  }
+});
+
+test("isInMenuPortal accepts any event target", () => {
+  const portal = document.createElement("div");
+  portal.setAttribute("data-menu-portal", "");
+  const row = portal.appendChild(document.createElement("button"));
+  expect(isInMenuPortal(row)).toBe(true);
+  expect(isInMenuPortal(document.createElement("div"))).toBe(false);
+  expect(isInMenuPortal(window)).toBe(false);
+  expect(isInMenuPortal(null)).toBe(false);
 });

@@ -4,12 +4,9 @@
       "title": "通知",
       "clearHistory": "清除历史",
       "noNotifications": "没有通知",
-      "relativeTime": {
-        "justNow": "刚刚",
-        "minutesAgo": "{{count}} 分钟前",
-        "hoursAgo": "{{count}} 小时前",
-        "daysAgo": "{{count}} 天前"
-      }
+      "emptyHint": "已全部处理",
+      "newSection": "新通知",
+      "earlierSection": "更早"
     },
     "emailVerification": {
       "banner": {
@@ -19,7 +16,9 @@
         "resending": "正在发送...",
         "verified": "我已验证",
         "checking": "正在检查...",
-        "dismissAriaLabel": "关闭邮箱验证横幅"
+        "dismissAriaLabel": "关闭邮箱验证横幅",
+        "undeliverable": "无法向 {{email}} 投递邮件。请检查该地址，如有错误请更改。",
+        "changeEmail": "更改邮箱"
       },
       "modal": {
         "title": "请先验证您的邮箱",
@@ -35,7 +34,8 @@
         "verifiedPending": "尚未验证。请打开邮件中的链接后重试。",
         "verifiedOther": "已验证 {{email}} 的邮箱。",
         "verifiedSwitch": "切换",
-        "verifiedUnknown": "邮箱已验证。请登录以继续。"
+        "verifiedUnknown": "邮箱已验证。请登录以继续。",
+        "undeliverable": "发往该地址的邮件被退回，无法发送链接。请在 设置 → 账户 中更改邮箱。"
       }
     },
     "progressToast": {
@@ -82,7 +82,39 @@
       "secretsNotWiped": {
         "message": "部分 {{team}} 凭据无法从此设备删除。在清除成功之前，它们在此仍可读取。",
         "retry": "立即删除"
+      },
+      "sshConfigMigrated": {
+        "message": "你的 ~/.ssh/config 主机不再自动同步。它们现在归你所有：你的修改会被保留。",
+        "turnOnSync": "开启持续同步",
+        "dismiss": "好的"
+      },
+      "enroll": {
+        "invite": "您的组织在 Voltius 上使用 {{team}}",
+        "signIn": "登录",
+        "pending": {
+          "approval": "正在等待 {{team}} 的管理员批准您的请求",
+          "email_unverified": "验证邮箱以加入 {{team}}",
+          "seat_limit": "{{team}} 没有空余席位。已通知管理员。"
+        },
+        "declined": "{{team}} 拒绝了您的请求",
+        "askAgain": "再次申请",
+        "joined": "您已加入 {{team}}"
       }
+    },
+    "sshConfigOffer": {
+      "message_other": "在 ~/.ssh/config 中找到 {{count}} 个主机。要导入 Voltius 吗？导入后可以自由编辑。",
+      "import": "导入…",
+      "skip": "不导入"
+    },
+    "sshConfigSync": {
+      "unreadable": "无法读取 ~/.ssh/config。受管理的主机保持不变。",
+      "failed": "~/.ssh/config 同步失败。请查看日志。",
+      "vaultGone": "为 ~/.ssh/config 主机选择的保险库已不存在。请在“设置 › 主机”中另选一个。",
+      "detachedToTeam_other": "{{count}} 个移至团队保险库的主机不再跟随 ~/.ssh/config。",
+      "reviewHere": "你的账户已开启 ~/.ssh/config 同步。在此计算机上开始同步前，请先检查这台计算机的主机和密钥。",
+      "review": "检查…",
+      "detachedUnsynced_other": "{{count}} 个被排除在同步之外的主机不再跟随 ~/.ssh/config，你的其他计算机不再等待它们。",
+      "detachedProxied_other": "{{count}} 个主机的 ~/.ssh/config 条目现在使用 ProxyCommand，不再跟随该文件。"
     }
   }
 }

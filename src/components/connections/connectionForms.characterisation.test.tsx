@@ -21,6 +21,7 @@ function conn(over: Partial<Connection> = {}): Connection {
 
 const h = vi.hoisted(() => ({
   folders: [] as unknown[],
+  teamFolders: {} as Record<string, unknown[]>,
   saveFolder: vi.fn(async (input: unknown) => ({ id: "f-new", ...(input as object) })),
   loadFolders: vi.fn(async () => {}),
   pinConnection: vi.fn(async (_id: string, _pinned: boolean) => {}),
@@ -33,6 +34,12 @@ const h = vi.hoisted(() => ({
   defaultVaultId: "personal",
 }));
 
+// A team connection the caller holds no role in, so the forms open it read-only.
+function lockedConn(over: Partial<Connection> = {}): Connection {
+  h.teams = [{ id: "team-1" }];
+  return conn({ vault_id: "team-1", ...over });
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (k: string) => k }),
   initReactI18next: { type: "3rdParty", init: () => {} },
@@ -42,10 +49,10 @@ vi.mock("@iconify/react", () => ({ Icon: () => null }));
 vi.mock("@/stores/folderStore", () => ({
   useFolderStore: Object.assign(
     (sel?: (s: unknown) => unknown) => {
-      const state = { folders: h.folders, loadFolders: h.loadFolders, saveFolder: h.saveFolder };
+      const state = { folders: h.folders, teamFolders: h.teamFolders, loadFolders: h.loadFolders, saveFolder: h.saveFolder };
       return sel ? sel(state) : state;
     },
-    { getState: () => ({ folders: h.folders, loadFolders: h.loadFolders, saveFolder: h.saveFolder }) },
+    { getState: () => ({ folders: h.folders, teamFolders: h.teamFolders, loadFolders: h.loadFolders, saveFolder: h.saveFolder }) },
   ),
 }));
 vi.mock("@/stores/connectionStore", () => ({
@@ -53,6 +60,7 @@ vi.mock("@/stores/connectionStore", () => ({
     const state = { pinConnection: h.pinConnection, setDistro: h.setDistro };
     return sel ? sel(state) : state;
   },
+  findAnyConnection: () => undefined,
 }));
 vi.mock("@/stores/teamStore", () => ({
   // The forms resolve VIEW_SECRETS through `usePermissions`, which reads the
@@ -86,13 +94,20 @@ vi.mock("@/stores/uiStore", () => ({
     const state = { setActiveNav: vi.fn() };
     return sel ? sel(state) : state;
   },
+  findAnyConnection: () => undefined,
 }));
-vi.mock("@/stores/toggleSettingsStore", () => ({ useToggle: () => [false, vi.fn()] }));
+vi.mock("@/stores/toggleSettingsStore", () => ({ useToggle: () => [false, vi.fn()], toggleKey: (id: string) => `appSettings.toggles.${id}` }));
 vi.mock("@/stores/connectivitySettingsStore", () => ({
+  DETACHED_TTL_HOURS: [1, 6, 12, 24, 72, 168],
+  GLOBAL_PROXY_MODES: ["none", "system", "socks5", "http", "https"],
   useGlobalKeepalivePreset: () => ["balanced", vi.fn()],
+  useGlobalProxy: () => [{ mode: "none" }, vi.fn()],
+  HOST_PROXY_MODES: ["direct", "system", "socks5", "http", "https"],
 }));
 vi.mock("@/stores/hostCommandVarsStore", () => ({ clearRememberedVars: vi.fn() }));
 vi.mock("@/hooks/useUIContributions", () => ({ useUIContributions: () => [] }));
+vi.mock("@/hooks/useConnectAsMenuItem", () => ({ useConnectAsMenuItem: () => undefined }));
+vi.mock("@/hooks/useCredentialPlan", () => ({ useCredentialPlan: () => ({ plan: { kind: "host" } }), NO_CONNECTION: {} }));
 vi.mock("@/hooks/useEffectivePinned", () => ({
   useEffectivePinned: () => h.effectivePinned,
   useEffectivePinSource: () => h.pinSource,
@@ -103,7 +118,7 @@ vi.mock("@/hooks/useWritableVaultIds", () => ({
   resolveVaultIdForSave: (v: string) => v,
 }));
 vi.mock("@/services/vault", () => ({ getSecret: vi.fn(async () => null) }));
-vi.mock("@/services/ssh", () => ({ sshExecCommand: vi.fn(async () => "ID=debian") }));
+vi.mock("@/services/ssh", () => ({ sshDetectDistroDirect: vi.fn(async () => "debian") }));
 vi.mock("@/services/serial", () => ({ serialListPorts: () => h.serialListPorts() }));
 vi.mock("@/services/auditContextResolver", () => ({ auditContextForVaultId: () => ({}) }));
 vi.mock("@/services/auditReporter", () => ({ reportAuditClientEvent: vi.fn() }));
@@ -171,14 +186,25 @@ vi.mock("./HostCommandField", () => ({
     </div>
   ),
 }));
+vi.mock("@/components/notes/NotesEditor", () => ({
+  NotesEditor: ({ value, onChange, readOnly }: { value: string; onChange: (v: string) => void; readOnly?: boolean }) => (
+    <textarea data-notes value={value} readOnly={readOnly} onChange={(e) => onChange(e.target.value)} />
+  ),
+}));
 vi.mock("./DistroIconPicker", () => ({ DistroIconPicker: () => null }));
 vi.mock("./IdentitySelector", () => ({ default: () => null }));
 vi.mock("./KeySelector", () => ({ default: () => null }));
 vi.mock("./JumpHostsPanel", () => ({ default: () => null }));
 vi.mock("./EnvVarsPanel", () => ({ default: () => null }));
 
+import { useSshConfigStore } from "@/stores/sshConfigStore";
+import { usePolicyStore } from "@/stores/policyStore";
+import { fingerprint } from "@/services/sshConfig/hostFields";
 const { default: ConnectionForm } = await import("./ConnectionForm");
+const { useTeamObjectAccessStore } = await import("@/stores/teamObjectAccessStore");
+const { PERM_BITS } = await import("@/services/permissions");
 const { default: SerialConnectionForm } = await import("./SerialConnectionForm");
+const { RuleSetMoveCancelled } = await import("@/services/teamObjectPersistence");
 type FormHandle = { flush: () => void; isDirty: () => boolean };
 
 globalThis.ResizeObserver ??= class {
@@ -193,12 +219,20 @@ beforeEach(() => {
     { id: "f1", name: "One", object_type: "connection", vault_id: "personal" },
     { id: "s1", name: "Snip", object_type: "snippet", vault_id: "personal" },
   ];
+  h.teamFolders = {
+    "team-1": [
+      { id: "t1", name: "Prod", object_type: "connection", vault_id: "team-1" },
+      { id: "t2", name: "Staging", object_type: "connection", vault_id: "team-1" },
+    ],
+  };
   h.teams = [];
   h.effectivePinned = false;
   h.defaultVaultId = "personal";
   vi.clearAllMocks();
 });
 afterEach(() => {
+  useSshConfigStore.setState({ state: {} });
+  usePolicyStore.setState({ machine: { policy: {}, defaults: {} }, server: { policy: {}, defaults: {} } });
   cleanup();
   vi.useRealTimers();
 });
@@ -207,7 +241,7 @@ function renderSsh(props: Partial<Parameters<typeof ConnectionForm>[0]> = {}) {
   const onSubmit = vi.fn();
   const ref = createRef<FormHandle>();
   render(
-    <ConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} canEdit {...props} />,
+    <ConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} {...props} />,
   );
   return { onSubmit, ref };
 }
@@ -215,7 +249,7 @@ function renderSerial(props: Partial<Parameters<typeof SerialConnectionForm>[0]>
   const onSubmit = vi.fn();
   const ref = createRef<FormHandle>();
   render(
-    <SerialConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} canEdit {...props} />,
+    <SerialConnectionForm ref={ref} onSubmit={onSubmit} onClose={vi.fn()} {...props} />,
   );
   return { onSubmit, ref };
 }
@@ -241,6 +275,48 @@ test.each([
   });
   expect(h.saveFolder).toHaveBeenCalledWith({ name: "made", object_type: "connection", vault_id: "personal" });
   expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("f-new");
+});
+
+test.each([
+  ["ssh", renderSsh],
+  ["serial", renderSerial],
+])("%s form lists the team vault's folders and keeps the object's team folder", (_kind, mount) => {
+  h.teams = [{ id: "team-1" }];
+  mount({ initial: conn({ vault_id: "team-1", folder_id: "t2" }) });
+  const selector = document.querySelector("[data-folder-selector]");
+  expect(selector?.getAttribute("data-count")).toBe("2");
+  expect(selector?.getAttribute("data-value")).toBe("t2");
+});
+
+test.each([
+  ["ssh", renderSsh],
+  ["serial", renderSerial],
+])("%s form opened inside a team folder starts in that folder and its vault (#776)", (_kind, mount) => {
+  h.teams = [{ id: "team-1" }];
+  mount({ placement: { folderId: "t1", vaultId: "team-1" } });
+  expect(document.querySelector("[data-vault-picker]")?.getAttribute("data-value")).toBe("team-1");
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("t1");
+});
+
+test.each([
+  ["ssh", renderSsh],
+  ["serial", renderSerial],
+])("%s form placement never overrides an existing object's folder", (_kind, mount) => {
+  mount({ initial: conn({ folder_id: "f1" }), placement: { folderId: "t1", vaultId: "team-1" } });
+  expect(document.querySelector("[data-vault-picker]")?.getAttribute("data-value")).toBe("personal");
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("f1");
+});
+
+test.each([
+  ["ssh", renderSsh],
+  ["serial", renderSerial],
+])("%s form clears the folder when the vault changes", (_kind, mount) => {
+  h.teams = [{ id: "team-1" }];
+  mount({ initial: conn({ folder_id: "f1" }) });
+  fireEvent.click(document.querySelector("[data-vault-picker]")!);
+  const selector = document.querySelector("[data-folder-selector]");
+  expect(selector?.getAttribute("data-value")).toBe("");
+  expect(selector?.getAttribute("data-count")).toBe("2");
 });
 
 // ── shared header: vault picker + pin ───────────────────────────────────────
@@ -299,6 +375,72 @@ test("ssh form hides the advanced block until toggled and submits its host comma
   });
 });
 
+test("ssh form submits its proxy override and only a typed proxy password", async () => {
+  const { onSubmit, ref } = renderSsh({ initial: conn({ proxy: { mode: "socks5", host: "p.example", port: 1080 } }) });
+  fireEvent.change(screen.getByLabelText("connections.form.proxy.port"), { target: { value: "1081" } });
+  await act(async () => {
+    ref.current!.flush();
+  });
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ proxy: { mode: "socks5", host: "p.example", port: 1081 } });
+  expect(onSubmit.mock.calls[0][1].proxy_password).toBeNull();
+  fireEvent.change(screen.getByLabelText("connections.form.proxy.password"), { target: { value: "pw" } });
+  await act(async () => {
+    ref.current!.flush();
+  });
+  expect(onSubmit.mock.calls[1][1].proxy_password).toBe("pw");
+});
+
+test.each([
+  [undefined, false],
+  [{ mode: "direct" as const }, false],
+  [{ mode: "system" as const }, false],
+  [{ mode: "socks5" as const, host: "p" }, true],
+  [{ mode: "http" as const, host: "p" }, true],
+])("ssh form reads the saved proxy password only for a custom proxy (%j)", async (proxy, reads) => {
+  const { getSecret } = await import("@/services/vault");
+  renderSsh({ initial: conn({ proxy }) });
+  await act(async () => { await Promise.resolve(); });
+  expect((getSecret as ReturnType<typeof vi.fn>).mock.calls.some(([k]) => k === "proxy_password:c1")).toBe(reads);
+});
+
+test("ssh form locks the proxy fields without edit permission", async () => {
+  renderSsh({ initial: lockedConn({ proxy: { mode: "http", host: "p.example", port: 8080 } }) });
+  await act(async () => { await Promise.resolve(); });
+  expect((screen.getByLabelText("connections.form.proxy.host") as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "connections.form.proxy.label" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+test("ssh form locks only the fields ~/.ssh/config owns on a managed host", async () => {
+  useSshConfigStore.setState({ state: { managed: { c1: { alias: "web", at: 1, devices: {} } } } });
+  renderSsh({ initial: conn({ name: "Web", host: "h.example", username: "root" }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByDisplayValue("h.example").matches(":disabled")).toBe(true);
+  expect(screen.getByDisplayValue("22").matches(":disabled")).toBe(true);
+  expect(screen.getByDisplayValue("Web").matches(":disabled")).toBe(false);
+  expect(screen.getByDisplayValue("root").matches(":disabled")).toBe(false);
+});
+
+test("a managed host whose key ~/.ssh/config owns offers no private key to paste", async () => {
+  const hash = fingerprint({ alias: "web", hostname: "h.example", port: 22, identityFile: "~/.ssh/id" });
+  useSshConfigStore.setState({ state: { managed: { c1: { alias: "web", at: 1, devices: { d1: { present: true, hash, at: 1 } } } } } });
+  renderSsh({ initial: conn({ auth_type: "password" }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.queryByPlaceholderText(/BEGIN OPENSSH PRIVATE KEY/)).toBeNull();
+  useSshConfigStore.setState({ state: { managed: { c1: { alias: "web", at: 1, devices: {} } } } });
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.queryByPlaceholderText(/BEGIN OPENSSH PRIVATE KEY/)).not.toBeNull();
+});
+
+test("a vault change drops the key ~/.ssh/config owns, for the sync to resolve in the new vault", async () => {
+  const hash = fingerprint({ alias: "web", hostname: "h.example", port: 22, identityFile: "~/.ssh/id" });
+  useSshConfigStore.setState({ state: { managed: { c1: { alias: "web", at: 1, devices: { d1: { present: true, hash, at: 1 } } } } } });
+  const { onSubmit, ref } = renderSsh({ initial: conn({ auth_type: "key", key_id: "k1" }) });
+  await act(async () => { await Promise.resolve(); });
+  fireEvent.click(document.querySelector("[data-vault-picker]")!);
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.lastCall![0].key_id).toBeFalsy();
+});
+
 test("serial form submits its host commands with the serial defaults", async () => {
   const { onSubmit, ref } = renderSerial();
   fireEvent.click(document.querySelector('[data-host-command-text="pre"]')!);
@@ -350,16 +492,50 @@ test("the ask-vars checkbox appears only once a snippet is picked, on both forms
 
 test("the serial form lists the discovered ports and keeps existing notes on save", async () => {
   const { onSubmit, ref } = renderSerial({ initial: conn({ connection_type: "serial", serial_port: "/dev/ttyS0", notes: "keep me" }) as Connection });
-  await act(async () => {
-    await Promise.resolve();
-  });
-  fireEvent.change(screen.getByPlaceholderText("connections.serialForm.namePlaceholder"), {
-    target: { value: "renamed" },
-  });
-  await act(async () => {
-    ref.current!.flush();
-  });
+  await act(async () => { await Promise.resolve(); });
+  fireEvent.change(screen.getByPlaceholderText("connections.serialForm.namePlaceholder"), { target: { value: "renamed" } });
+  await act(async () => { ref.current!.flush(); });
   expect(onSubmit.mock.calls[0][0]).toMatchObject({ notes: "keep me", name: "renamed" });
+});
+
+test.each([
+  ["ssh", () => renderSsh({ initial: conn() })],
+  ["serial", () => renderSerial({ initial: conn({ connection_type: "serial", serial_port: "/dev/ttyS0" }) as Connection })],
+])("%s form edits notes and saves blank notes as undefined", async (_kind, mount) => {
+  const { onSubmit, ref } = mount();
+  await act(async () => { await Promise.resolve(); });
+  const notes = document.querySelector("[data-notes]") as HTMLTextAreaElement;
+  fireEvent.change(notes, { target: { value: "## Runbook\n- [ ] check disk" } });
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[onSubmit.mock.calls.length - 1][0]).toMatchObject({ notes: "## Runbook\n- [ ] check disk" });
+  fireEvent.change(notes, { target: { value: "   " } });
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[onSubmit.mock.calls.length - 1][0].notes).toBeUndefined();
+});
+
+test.each([
+  ["ssh", () => renderSsh({ initial: conn(), onSubmit: vi.fn(async () => { throw new RuleSetMoveCancelled(); }) })],
+  ["serial", () => renderSerial({ initial: conn({ connection_type: "serial", serial_port: "/dev/ttyS0" }) as Connection, onSubmit: vi.fn(async () => { throw new RuleSetMoveCancelled(); }) })],
+])("%s form puts the saved folder back when the move is cancelled", async (_kind, mount) => {
+  const { ref } = mount();
+  await act(async () => { await Promise.resolve(); });
+  fireEvent.click(document.querySelector("[data-folder-pick]")!);
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("f1");
+  await act(async () => { ref.current!.flush(); });
+  expect(document.querySelector("[data-folder-selector]")?.getAttribute("data-value")).toBe("");
+});
+
+test.each([
+  ["ssh", (canEdit: boolean) => renderSsh({ initial: (canEdit ? conn : lockedConn)() })],
+  ["serial", (canEdit: boolean) => renderSerial({ initial: (canEdit ? conn : lockedConn)({ connection_type: "serial", serial_port: "/dev/ttyS0" }) })],
+])("%s form renders notes read-only without edit permission", async (_kind, mount) => {
+  mount(true);
+  await act(async () => { await Promise.resolve(); });
+  expect((document.querySelector("[data-notes]") as HTMLTextAreaElement).readOnly).toBe(false);
+  cleanup();
+  mount(false);
+  await act(async () => { await Promise.resolve(); });
+  expect((document.querySelector("[data-notes]") as HTMLTextAreaElement).readOnly).toBe(true);
 });
 
 test("a dirty edit marks the form dirty on both forms", () => {
@@ -384,4 +560,259 @@ test("the ssh username field opts out of OS capitalisation and autocorrect", () 
   expect(username.getAttribute("autocapitalize")).toBe("off");
   expect(username.getAttribute("autocorrect")).toBe("off");
   expect(username.getAttribute("spellcheck")).toBe("false");
+});
+
+function grantOnC1(permissions: number) {
+  useTeamObjectAccessStore.getState().replaceTeam("team-1", {
+    c1: { type: "connection", ruleSetId: "s1", myPermissions: permissions, parentId: null, deleted: false },
+  }, true);
+}
+
+test("ssh form locks its fields and drops unsaved input when edit access is revoked", async () => {
+  h.teams = [{ id: "team-1" }];
+  grantOnC1(PERM_BITS.VIEW | PERM_BITS.VIEW_SECRETS | PERM_BITS.EDIT_CONNECTIONS);
+  const { onSubmit } = renderSsh({ initial: conn({ vault_id: "team-1" }) });
+  const hostInput = () => screen.getByPlaceholderText("connections.form.hostPlaceholder") as HTMLInputElement;
+  expect(hostInput().matches(":disabled")).toBe(false);
+  fireEvent.change(hostInput(), { target: { value: "typed.example" } });
+
+  act(() => grantOnC1(PERM_BITS.VIEW | PERM_BITS.VIEW_SECRETS));
+
+  expect(hostInput().matches(":disabled")).toBe(true);
+  expect(hostInput().value).toBe("h.example");
+  await act(async () => { vi.advanceTimersByTime(5000); });
+  expect(onSubmit).not.toHaveBeenCalled();
+  useTeamObjectAccessStore.getState().clearAll();
+});
+
+test("ssh form hides its secret fields without View secrets, with no banner", async () => {
+  h.teams = [{ id: "team-1" }];
+  grantOnC1(PERM_BITS.VIEW | PERM_BITS.EDIT_CONNECTIONS);
+  renderSsh({ initial: conn({ vault_id: "team-1" }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.queryByText("connections.common.password")).toBeNull();
+  expect(screen.queryByPlaceholderText("-----BEGIN OPENSSH PRIVATE KEY-----\n...")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+
+  act(() => grantOnC1(PERM_BITS.VIEW | PERM_BITS.EDIT_CONNECTIONS | PERM_BITS.VIEW_SECRETS));
+  expect(screen.getByText("connections.common.password")).toBeTruthy();
+  useTeamObjectAccessStore.getState().clearAll();
+});
+
+async function withStoredKnock(run: () => Promise<void>) {
+  const { getSecret } = await import("@/services/vault");
+  (getSecret as ReturnType<typeof vi.fn>).mockImplementation(async (k: string) => (k === "knock_sequence:c1" ? "666/tcp" : null));
+  try { await run(); } finally { (getSecret as ReturnType<typeof vi.fn>).mockImplementation(async () => null); }
+}
+
+test("ssh form loads the saved sequence and submits an edited one with the knock settings", () => withStoredKnock(async () => {
+  const { onSubmit, ref } = renderSsh({ initial: conn({ port_knock: { enabled: true, window_secs: 60 } }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByDisplayValue("666")).toBeTruthy();
+  fireEvent.change(screen.getByPlaceholderText("connections.form.hostPlaceholder"), { target: { value: "srv" } });
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ port_knock: { enabled: true, window_secs: 60 } });
+  expect(onSubmit.mock.calls[0][1].knock_sequence).toBeNull();
+  fireEvent.change(screen.getByDisplayValue("666"), { target: { value: "667" } });
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[1][1].knock_sequence).toBe("667/tcp");
+}));
+
+test.each([
+  ["a blank row while enabled", true, () => fireEvent.click(screen.getByText("connections.knock.addPort")), null],
+  ["an out-of-range port while enabled", true, () => fireEvent.change(screen.getByDisplayValue("666"), { target: { value: "99999" } }), null],
+  ["removing every row while enabled", true, () => fireEvent.click(screen.getByLabelText("connections.knock.remove")), null],
+  ["removing every row while disabled", false, () => fireEvent.click(screen.getByLabelText("connections.knock.remove")), ""],
+] as const)("%s saves the expected knock_sequence", (_name, enabled, edit, want) => withStoredKnock(async () => {
+  const { onSubmit, ref } = renderSsh({ initial: conn({ port_knock: { enabled } }) });
+  await act(async () => { await Promise.resolve(); });
+  edit();
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[0][1].knock_sequence).toBe(want);
+}));
+
+test("an ftp host never reads the knock sequence", async () => {
+  const { getSecret } = await import("@/services/vault");
+  renderSsh({ initial: conn({ connection_type: "ftp", port: 21 }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(getSecret).not.toHaveBeenCalledWith("knock_sequence:c1");
+});
+
+test("a host without knocking submits no knock settings", async () => {
+  const { onSubmit, ref } = renderSsh();
+  fireEvent.change(screen.getByPlaceholderText("connections.form.hostPlaceholder"), { target: { value: "srv" } });
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[0][0].port_knock).toBeUndefined();
+  expect(onSubmit.mock.calls[0][1].knock_sequence).toBeNull();
+});
+
+test("without View secrets the knock ports stay hidden and a save leaves the sequence untouched", () => withStoredKnock(async () => {
+  h.teams = [{ id: "team-1" }];
+  grantOnC1(PERM_BITS.VIEW | PERM_BITS.EDIT_CONNECTIONS);
+  const { getSecret } = await import("@/services/vault");
+  const { onSubmit, ref } = renderSsh({ initial: conn({ vault_id: "team-1", port_knock: { enabled: true } }) });
+  await act(async () => { await Promise.resolve(); });
+  expect(getSecret).not.toHaveBeenCalledWith("knock_sequence:c1");
+  expect(screen.queryByDisplayValue("666")).toBeNull();
+  expect(screen.queryByText("connections.knock.addPort")).toBeNull();
+  fireEvent.change(screen.getByPlaceholderText("connections.form.hostPlaceholder"), { target: { value: "srv" } });
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ port_knock: { enabled: true } });
+  expect(onSubmit.mock.calls[0][1].knock_sequence).toBeNull();
+  useTeamObjectAccessStore.getState().clearAll();
+}));
+
+test("a team host on a server too old for knock sequences withholds the sequence and switches knocking back off", async () => {
+  const { noteRefusedSecretType, resetServerCapabilities } = await import("@/services/serverCapabilities");
+  h.teams = [{ id: "team-1" }];
+  grantOnC1(PERM_BITS.VIEW | PERM_BITS.VIEW_SECRETS | PERM_BITS.EDIT_CONNECTIONS);
+  const { onSubmit, ref } = renderSsh({ initial: conn({ vault_id: "team-1", port_knock: { enabled: true } }) });
+  await act(async () => { await Promise.resolve(); });
+  fireEvent.click(screen.getByText("connections.knock.addPort"));
+  fireEvent.change(screen.getByPlaceholderText("connections.knock.port"), { target: { value: "666" } });
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[0][0]).toMatchObject({ port_knock: { enabled: true } });
+  expect(onSubmit.mock.calls[0][1].knock_sequence).toBe("666/tcp");
+
+  act(() => { noteRefusedSecretType("connection_knock_sequence"); });
+
+  expect(screen.getByText("connections.knock.serverTooOld")).toBeTruthy();
+  expect(screen.queryByDisplayValue("666")).toBeNull();
+  await act(async () => { ref.current!.flush(); });
+  expect(onSubmit.mock.calls[1][0]).toMatchObject({ port_knock: { enabled: false } });
+  expect(onSubmit.mock.calls[1][1].knock_sequence).toBeNull();
+  resetServerCapabilities();
+  useTeamObjectAccessStore.getState().clearAll();
+});
+
+test("a personal host keeps its knock ports whatever the server supports", async () => {
+  const { noteRefusedSecretType, resetServerCapabilities } = await import("@/services/serverCapabilities");
+  act(() => { noteRefusedSecretType("connection_knock_sequence"); });
+  renderSsh({ initial: conn({ port_knock: { enabled: true } }) });
+  expect(screen.getByText("connections.knock.addPort")).toBeTruthy();
+  expect(screen.queryByText("connections.knock.serverTooOld")).toBeNull();
+  resetServerCapabilities();
+});
+
+test("a new ssh host keeps its secret fields in a vault whose secrets the caller cannot view", () => {
+  h.teams = [{ id: "team-1" }];
+  h.defaultVaultId = "team-1";
+  renderSsh();
+  expect(screen.getByText("connections.common.password")).toBeTruthy();
+});
+
+test("webdav form submits the URL with the host and port it derives", async () => {
+  const { onSubmit, ref } = renderSsh({
+    initial: conn({ connection_type: "webdav", webdav_url: "https://dav.example/files/", host: "dav.example", port: 443 }),
+  });
+  fireEvent.change(screen.getByPlaceholderText("connections.form.webdavUrlPlaceholder"), {
+    target: { value: "http://nas.local:5005/dav" },
+  });
+  await act(async () => {
+    ref.current!.flush();
+  });
+  expect(onSubmit.mock.calls[onSubmit.mock.calls.length - 1][0]).toMatchObject({
+    connection_type: "webdav",
+    webdav_url: "http://nas.local:5005/dav/",
+    host: "nas.local",
+    port: 5005,
+    auth_type: "password",
+  });
+  expect(document.querySelector("[data-webdav-plaintext]")).toBeTruthy();
+  expect(screen.queryByText("connections.form.keychainIdentity")).toBeNull();
+  expect(screen.queryByPlaceholderText("connections.form.hostPlaceholder")).toBeNull();
+});
+
+test("webdav form refuses to save an unusable URL", async () => {
+  const { onSubmit, ref } = renderSsh({
+    initial: conn({ connection_type: "webdav", webdav_url: "https://dav.example/files/" }),
+  });
+  fireEvent.change(screen.getByPlaceholderText("connections.form.webdavUrlPlaceholder"), {
+    target: { value: "ftp://nas.local/" },
+  });
+  await act(async () => {
+    ref.current!.flush();
+  });
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(document.querySelector("[data-webdav-url-error]")).toBeTruthy();
+});
+
+const usernameField = () => screen.getByText("connections.common.username").parentElement!.querySelector("input")!;
+const pickProtocol = (current: string, next: string) => {
+  fireEvent.click(screen.getAllByText(`connections.form.${current}`)[0]);
+  const options = screen.getAllByText(`connections.form.${next}`);
+  fireEvent.click(options[options.length - 1]);
+};
+
+test("leaving webdav resets the port its URL derived", async () => {
+  const { onSubmit, ref } = renderSsh({
+    initial: conn({ connection_type: "webdav", webdav_url: "https://dav.example/files/", host: "dav.example", port: 443 }),
+  });
+  pickProtocol("protocolWebdav", "protocolSsh");
+  await act(async () => {
+    ref.current!.flush();
+  });
+  expect(onSubmit.mock.calls[onSubmit.mock.calls.length - 1][0]).toMatchObject({ host: "dav.example", port: 22 });
+});
+
+test("a new file-only host starts with no username", () => {
+  renderSsh({ initial: { connection_type: "ftp" } as Connection });
+  expect(usernameField().value).toBe("");
+});
+
+test("switching protocol swaps an untouched default username", () => {
+  renderSsh();
+  expect(usernameField().value).toBe("root");
+  pickProtocol("protocolSsh", "protocolWebdav");
+  expect(usernameField().value).toBe("");
+  pickProtocol("protocolWebdav", "protocolSsh");
+  expect(usernameField().value).toBe("root");
+});
+
+test("switching protocol keeps a typed username", () => {
+  renderSsh();
+  fireEvent.change(usernameField(), { target: { value: "alice" } });
+  pickProtocol("protocolSsh", "protocolFtp");
+  expect(usernameField().value).toBe("alice");
+});
+
+test.each([
+  ["ssh", renderSsh],
+  ["serial", renderSerial],
+])("%s form labels the pre/post commands as session commands", (_kind, mount) => {
+  mount();
+  expect(screen.getByText("connections.common.sessionCommands")).toBeTruthy();
+  expect(screen.getByText("connections.common.sessionCommandsHint")).toBeTruthy();
+});
+
+const keepaliveRow = () => screen.getByText("connections.form.keepalive").closest("[data-form-setting-row]") as HTMLElement;
+
+test("host editor keepalive disables options outside the range", () => {
+  usePolicyStore.setState({ machine: { policy: { "appSettings.keepalivePreset": { $range: { allowed: ["fast", "balanced"] } } }, defaults: {} } });
+  renderSsh({ initial: conn({ keepalive_preset: "fast" }) });
+  expect(keepaliveRow().parentElement!.textContent).toContain("common.policy.rangeAllowed");
+  fireEvent.click(keepaliveRow().querySelector("[data-form-select]")!);
+  const option = (label: string) => screen.getAllByText(label).slice(-1)[0].closest("button")!;
+  expect(option("settings.hosts.keepalivePresets.balanced.label").disabled).toBe(false);
+  expect(option("settings.hosts.keepalivePresets.off.label").disabled).toBe(true);
+  expect(option("connections.form.inheritKeepalive").disabled).toBe(false);
+});
+
+test("host editor keepalive and proxy show the managed state under a lock", () => {
+  usePolicyStore.setState({
+    machine: { policy: { "appSettings.keepalivePreset": "fast", "appSettings.proxy": { mode: "socks5", host: "corp", port: 3128 } }, defaults: {} },
+  });
+  renderSsh({ initial: conn({ keepalive_preset: "off" }) });
+  expect(keepaliveRow().querySelector("[data-form-select]")!.matches(":disabled")).toBe(true);
+  expect(keepaliveRow().parentElement!.textContent).toContain("common.policy.managed");
+  expect(screen.getByLabelText("connections.form.proxy.label").matches(":disabled")).toBe(true);
+  expect(screen.getByLabelText("connections.form.proxy.host").matches(":disabled")).toBe(true);
+  expect(screen.getByLabelText("connections.form.proxy.username").matches(":disabled")).toBe(true);
+  expect(screen.getByLabelText("connections.form.proxy.password").matches(":disabled")).toBe(true);
+});
+
+test("host editor keepalive shows inherit when the stored preset is outside the range", () => {
+  usePolicyStore.setState({ machine: { policy: { "appSettings.keepalivePreset": { $range: { allowed: ["fast", "balanced"] } } }, defaults: {} } });
+  renderSsh({ initial: conn({ keepalive_preset: "off" }) });
+  expect(keepaliveRow().querySelector("[data-form-select]")!.textContent).toBe("connections.form.inheritKeepalive");
 });

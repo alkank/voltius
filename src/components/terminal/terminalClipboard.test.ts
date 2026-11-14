@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { Terminal } from "@xterm/xterm";
+import { Terminal } from "@xterm/xterm";
 
 const writeClipboard = vi.hoisted(() => vi.fn(async () => {}));
 const readClipboard = vi.hoisted(() => vi.fn(async () => ""));
@@ -10,7 +11,19 @@ vi.mock("@/stores/toggleSettingsStore", () => ({
   getToggle: (id: string) => toggles.values[id] ?? true,
 }));
 
-import { attachTerminalClipboard } from "./terminalClipboard";
+const copyFailed = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/logger", () => ({ logFailure: () => copyFailed }));
+const platform = vi.hoisted(() => ({ os: "linux" }));
+vi.mock("@/utils/platform", () => ({ isMobilePlatform: (p: string | null) => p === "android" || p === "ios", getPlatformSync: () => platform.os }));
+
+import { attachTerminalClipboard, type TerminalClipboardHandle } from "./terminalClipboard";
+import { fakeBuffer } from "./__fixtures__/fakeBuffer";
+import { TMUX_COLS, sideBySide } from "./__fixtures__/tmuxScreens";
+
+const MOVE = 32;
+const DOWN = 1;
+const LEFT_BUTTON = 0;
+const NO_BUTTON = 3;
 
 interface Harness {
   term: Terminal;
@@ -20,21 +33,38 @@ interface Harness {
   cleared: () => number;
   appEvents: string[];
   selection: { text: string };
+  clip: TerminalClipboardHandle;
+  report: (action: number, ctrl?: boolean) => void;
+  reports: { action: number; ctrl?: boolean }[];
+  highlighted: () => { line: number; x: number; width: number }[];
+  nativeEnabled: () => boolean;
 }
 
-function harness(mouseTracking: "none" | "drag" = "drag"): Harness {
+function harness(
+  mouseTracking: "none" | "drag" = "drag",
+  buffer: "normal" | "alternate" = "alternate",
+  screenRows?: string[],
+): Harness {
   const container = document.createElement("div");
   const screen = document.createElement("div");
+  screen.className = "xterm-screen";
+  screen.getBoundingClientRect = () => new DOMRect(0, 0, 200, 100);
   container.appendChild(screen);
   document.body.appendChild(container);
 
   const appEvents: string[] = [];
+  const reports: { action: number; ctrl?: boolean }[] = [];
   const selection = { text: "" };
   const _selectionService = {
     _enabled: false,
     cleared: 0,
     disable() { this.cleared++; this._enabled = false; selection.text = ""; },
     enable() { this._enabled = true; },
+  };
+  // Mirrors xterm: user input clears the selection, and every mouse report is
+  // sent as user input.
+  const coreService = {
+    triggerDataEvent(_data: string, wasUserInput = false) { if (wasUserInput) selection.text = ""; },
   };
   // Mirrors xterm: a protocol change enables/disables selection, and disabling
   // it clears whatever was selected.
@@ -46,29 +76,57 @@ function harness(mouseTracking: "none" | "drag" = "drag"): Harness {
       if (name === "NONE") _selectionService.enable();
       else _selectionService.disable();
     },
+    triggerMouseEvent(e: { action: number; ctrl?: boolean }) {
+      reports.push(e);
+      coreService.triggerDataEvent("report", true);
+      return true;
+    },
   };
 
   // Stand-in for xterm's own reporting listener: it forwards to the app only
   // while a mouse protocol is active, exactly like CoreBrowserTerminal.
+  const drag = (e: MouseEvent) => { if (e.buttons) appEvents.push("mousemove"); };
   screen.addEventListener("mousedown", () => {
-    if (coreMouseService.activeProtocol !== "NONE") appEvents.push("mousedown");
+    if (coreMouseService.activeProtocol === "NONE") return;
+    appEvents.push("mousedown");
+    document.addEventListener("mousemove", drag);
   });
   document.addEventListener("mouseup", () => {
+    document.removeEventListener("mousemove", drag);
     if (coreMouseService.activeProtocol !== "NONE") appEvents.push("mouseup");
   });
 
+  const noop = () => ({ dispose() {} });
+  const decorations: { marker: { line: number; isDisposed: boolean }; x: number; width: number }[] = [];
   const term = {
+    element: container,
+    cols: screenRows ? TMUX_COLS : 80,
+    rows: screenRows?.length ?? 24,
+    options: { theme: {} },
+    buffer: {
+      active: Object.assign(fakeBuffer(screenRows ?? [], TMUX_COLS), { type: buffer }),
+      onBufferChange: noop,
+    },
+    onKey: noop,
+    onResize: noop,
+    registerMarker: (line: number) => ({ line, isDisposed: false, dispose() { this.isDisposed = true; } }),
+    registerDecoration: (d: (typeof decorations)[number]) => { decorations.push(d); return undefined; },
     modes: { mouseTrackingMode: mouseTracking },
     getSelection: () => selection.text,
+    clearSelection: () => { selection.text = ""; },
     onSelectionChange: () => ({ dispose() {} }),
     paste: () => {},
     loadAddon: () => {},
-    _core: { coreMouseService, _selectionService },
+    _core: { coreService, coreMouseService, _selectionService },
   } as unknown as Terminal;
 
-  attachTerminalClipboard(term, container);
+  const clip = attachTerminalClipboard(term, container);
   return {
-    term, container, screen, appEvents, selection,
+    term, container, screen, appEvents, selection, clip,
+    report: (action, ctrl) => { coreMouseService.triggerMouseEvent({ action, ctrl }); },
+    reports,
+    highlighted: () => decorations.filter((d) => !d.marker.isDisposed).map((d) => ({ line: d.marker.line, x: d.x, width: d.width })),
+    nativeEnabled: () => _selectionService._enabled,
     protocol: () => coreMouseService.activeProtocol,
     cleared: () => _selectionService.cleared,
   };
@@ -80,15 +138,30 @@ function press(target: HTMLElement, init: MouseEventInit = {}) {
   }));
 }
 
+function move(init: MouseEventInit = {}) {
+  document.dispatchEvent(new MouseEvent("mousemove", {
+    bubbles: true, cancelable: true, buttons: 1, clientX: 10, clientY: 10, ...init,
+  }));
+}
+
 function release(init: MouseEventInit = {}) {
-  window.dispatchEvent(new MouseEvent("mouseup", {
+  document.dispatchEvent(new MouseEvent("mouseup", {
     bubbles: true, cancelable: true, button: 0, clientX: 10, clientY: 10, ...init,
   }));
 }
 
+function copyShortcut(h: Harness) {
+  h.clip.handleKeyEvent(new KeyboardEvent("keydown", { key: "C", ctrlKey: true, shiftKey: true }));
+}
+
+const badge = () => document.body.querySelector("div[style*='position: fixed']");
+
 beforeEach(() => {
   toggles.values = {};
-  writeClipboard.mockClear();
+  writeClipboard.mockReset();
+  readClipboard.mockReset();
+  readClipboard.mockImplementation(async () => "");
+  copyFailed.mockReset();
   document.body.innerHTML = "";
 });
 
@@ -118,6 +191,15 @@ describe("drag-selects-text over an app holding the mouse", () => {
     expect(h.appEvents).toEqual(["mousedown"]);
   });
 
+  it("reports a Ctrl drag to the app as a plain drag, which tmux binds", () => {
+    const h = harness();
+    press(h.screen, { ctrlKey: true });
+    h.report(MOVE, true);
+    release({ ctrlKey: true });
+    h.report(DOWN, true);
+    expect(h.reports.map((r) => r.ctrl)).toEqual([false, true]);
+  });
+
   it("does nothing when the toggle is off", () => {
     toggles.values = { "drag-selects-text": false };
     const h = harness();
@@ -142,14 +224,233 @@ describe("drag-selects-text over an app holding the mouse", () => {
     expect(h.cleared()).toBe(0);
   });
 
-  it("copies the drag selection when select-to-copy is on", async () => {
-    vi.useFakeTimers();
+  it("copies the drag selection and shows the badge when select-to-copy is on", async () => {
     const h = harness();
     press(h.screen);
     h.selection.text = "copied";
     release({ clientX: 90, clientY: 10 });
-    await vi.advanceTimersByTimeAsync(30);
     expect(writeClipboard).toHaveBeenCalledWith("copied");
-    vi.useRealTimers();
+    await Promise.resolve();
+    expect(badge()).not.toBeNull();
+  });
+
+  it("shows no badge when the clipboard write fails", async () => {
+    writeClipboard.mockRejectedValueOnce(new Error("denied"));
+    const h = harness();
+    press(h.screen);
+    h.selection.text = "copied";
+    release({ clientX: 90, clientY: 10 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(badge()).toBeNull();
+    expect(copyFailed).toHaveBeenCalled();
+  });
+
+  it("keeps the selection through the app's motion reports until a press", () => {
+    toggles.values = { "select-to-copy": false };
+    const h = harness();
+    press(h.screen);
+    h.selection.text = "kept";
+    release({ clientX: 90, clientY: 10 });
+    expect(writeClipboard).not.toHaveBeenCalled();
+    h.report(MOVE);
+    expect(h.selection.text).toBe("kept");
+    copyShortcut(h);
+    expect(writeClipboard).toHaveBeenCalledWith("kept");
+    h.report(DOWN);
+    expect(h.selection.text).toBe("");
+  });
+
+  it("restores xterm's reporting on dispose", () => {
+    const h = harness();
+    h.clip.dispose();
+    h.selection.text = "kept";
+    h.report(MOVE);
+    expect(h.selection.text).toBe("");
+  });
+
+  it.each([
+    ["top", -5],
+    ["bottom", 130],
+  ])("hands a drag past the %s edge of the alternate screen to the app", (_edge, clientY) => {
+    const h = harness();
+    press(h.screen);
+    move({ clientY: 60 });
+    expect(h.protocol()).toBe("NONE");
+    h.selection.text = "partial";
+    move({ clientY });
+    expect(h.protocol()).toBe("VT200");
+    expect(h.selection.text).toBe("");
+    expect(h.appEvents).toEqual(["mousedown", "mousemove"]);
+    release({ clientY });
+    expect(h.appEvents).toEqual(["mousedown", "mousemove", "mouseup"]);
+  });
+
+  it("keeps a drag past the edge local on the normal screen", () => {
+    const h = harness("drag", "normal");
+    press(h.screen);
+    move({ clientY: -5 });
+    expect(h.protocol()).toBe("NONE");
+    expect(h.appEvents).toEqual([]);
+  });
+});
+
+describe("selection inside a split tmux window", () => {
+  // The harness screen is 200x100 px over 60x14 cells.
+  const at = (col: number, row: number): MouseEventInit => ({
+    clientX: ((col + 0.5) * 200) / TMUX_COLS,
+    clientY: ((row + 0.5) * 100) / sideBySide.length,
+  });
+
+  it("keeps a drag that wanders into the next pane inside the pane it started in", async () => {
+    const h = harness("drag", "alternate", sideBySide);
+    press(h.screen, at(5, 2));
+    move(at(45, 4));
+    release(at(45, 4));
+    expect(h.highlighted()).toEqual([
+      { line: 2, x: 5, width: 25 },
+      { line: 3, x: 0, width: 30 },
+      { line: 4, x: 0, width: 30 },
+    ]);
+    expect(h.appEvents).toEqual([]);
+    expect(h.protocol()).toBe("VT200");
+    expect(h.nativeEnabled()).toBe(false);
+    await vi.waitFor(() => expect(writeClipboard).toHaveBeenCalledWith("2\nleft 3\nleft 4"));
+  });
+
+  it("works the same when tmux leaves the mouse to the terminal", () => {
+    const h = harness("none", "alternate", sideBySide);
+    press(h.screen, at(31, 1));
+    move(at(55, 2));
+    release(at(55, 2));
+    expect(h.clip.selectionText()).toBe("right 1\nright 2");
+    expect(h.nativeEnabled()).toBe(true);
+  });
+
+  it("selects the pane's row on a triple click", () => {
+    const h = harness("drag", "alternate", sideBySide);
+    press(h.screen, { ...at(3, 6), detail: 3 });
+    release(at(3, 6));
+    expect(h.clip.selectionText()).toBe("left 6");
+  });
+
+  it("copies the pane selection with Ctrl+Shift+C and clears it on the next press", () => {
+    toggles.values = { "select-to-copy": false };
+    const h = harness("drag", "alternate", sideBySide);
+    press(h.screen, at(31, 0));
+    move(at(37, 0));
+    release(at(37, 0));
+    copyShortcut(h);
+    expect(writeClipboard).toHaveBeenCalledWith("right 0");
+    press(h.screen, at(31, 5));
+    expect(h.highlighted()).toEqual([]);
+  });
+
+  it("hands a click to tmux so it can focus the pane", () => {
+    const h = harness("drag", "alternate", sideBySide);
+    press(h.screen, at(40, 3));
+    release(at(40, 3));
+    expect(h.appEvents).toEqual(["mousedown", "mouseup"]);
+    expect(h.clip.selectionText()).toBe("");
+  });
+
+  it("leaves the whole-screen selection to Shift+drag", () => {
+    const h = harness("drag", "alternate", sideBySide);
+    press(h.screen, { ...at(5, 2), shiftKey: true });
+    move(at(45, 4));
+    expect(h.highlighted()).toEqual([]);
+  });
+});
+
+describe("against the real xterm", () => {
+  it("does not count mouse motion reports as user input", async () => {
+    const term = new Terminal({ allowProposedApi: true });
+    const clip = attachTerminalClipboard(term, document.createElement("div"));
+    await new Promise<void>((resolve) => term.write("\x1b[?1003h\x1b[?1006h", resolve));
+    const core = (term as unknown as {
+      _core: {
+        coreService: { onUserInput(listener: () => void): void };
+        coreMouseService: { triggerMouseEvent(e: object): boolean };
+      };
+    })._core;
+    const userInput = vi.fn();
+    core.coreService.onUserInput(userInput);
+    const sent: string[] = [];
+    term.onData((d) => sent.push(d));
+    const report = (col: number, button: number, action: number) =>
+      core.coreMouseService.triggerMouseEvent({ col, row: 0, x: 0, y: 0, button, action, ctrl: false, alt: false, shift: false });
+
+    report(1, NO_BUTTON, MOVE);
+    expect(sent).toHaveLength(1);
+    expect(userInput).not.toHaveBeenCalled();
+    report(1, LEFT_BUTTON, DOWN);
+    expect(userInput).toHaveBeenCalledTimes(1);
+
+    clip.dispose();
+    report(2, NO_BUTTON, MOVE);
+    expect(userInput).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("paste", () => {
+  function pasteHarness(clipboard: string | Error, selection = "") {
+    if (clipboard instanceof Error) readClipboard.mockRejectedValueOnce(clipboard);
+    else readClipboard.mockResolvedValueOnce(clipboard);
+    const pasted: string[] = [];
+    const pasteImage = vi.fn(async () => {});
+    const noop = () => ({ dispose() {} });
+    const term = {
+      onSelectionChange: noop,
+      onKey: noop,
+      onResize: noop,
+      buffer: { onBufferChange: noop },
+      paste: (text: string) => pasted.push(text),
+      getSelection: () => selection,
+    } as unknown as Terminal;
+    const clip = attachTerminalClipboard(term, document.createElement("div"), { pasteImage });
+    return { clip, pasted, pasteImage };
+  }
+  const ctrlV = () => new KeyboardEvent("keydown", { key: "v", ctrlKey: true });
+
+  it("pastes clipboard text", async () => {
+    const h = pasteHarness("ls -la");
+    expect(h.clip.handleKeyEvent(ctrlV())).toBe(false);
+    await vi.waitFor(() => expect(h.pasted).toEqual(["ls -la"]));
+    expect(h.pasteImage).not.toHaveBeenCalled();
+  });
+
+  it("hands a clipboard without text to pasteImage", async () => {
+    const h = pasteHarness("");
+    h.clip.handleKeyEvent(new KeyboardEvent("keydown", { key: "V", ctrlKey: true, shiftKey: true }));
+    await vi.waitFor(() => expect(h.pasteImage).toHaveBeenCalledOnce());
+    expect(h.pasted).toEqual([]);
+  });
+
+  it("leaves Ctrl+C and Ctrl+V to the shell on macOS", () => {
+    platform.os = "macos";
+    const mac = pasteHarness("ls", "selected");
+    expect(mac.clip.handleKeyEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true }))).toBeNull();
+    expect(mac.clip.handleKeyEvent(ctrlV())).toBeNull();
+    expect(mac.pasted).toEqual([]);
+    expect(mac.clip.handleKeyEvent(new KeyboardEvent("keydown", { key: "c", metaKey: true }))).toBe(false);
+    expect(writeClipboard).toHaveBeenCalledWith("selected");
+    platform.os = "linux";
+  });
+
+  it("pastes with Cmd+V on macOS only", async () => {
+    const cmdV = () => new KeyboardEvent("keydown", { key: "v", metaKey: true });
+    const linux = pasteHarness("ls");
+    expect(linux.clip.handleKeyEvent(cmdV())).toBeNull();
+    platform.os = "macos";
+    const mac = pasteHarness("ls");
+    expect(mac.clip.handleKeyEvent(cmdV())).toBe(false);
+    await vi.waitFor(() => expect(mac.pasted).toEqual(["ls"]));
+    platform.os = "linux";
+  });
+
+  it("treats an unreadable clipboard as one without text", async () => {
+    const h = pasteHarness(new Error("denied"));
+    h.clip.handleKeyEvent(ctrlV());
+    await vi.waitFor(() => expect(h.pasteImage).toHaveBeenCalledOnce());
   });
 });

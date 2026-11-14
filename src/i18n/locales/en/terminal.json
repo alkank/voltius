@@ -7,21 +7,28 @@
       "noActiveSession": "No active session"
     },
     "historyPanel": {
-      "relativeTime": {
-        "justNow": "just now",
-        "secondsAgo": "{{count}}s ago",
-        "minutesAgo": "{{count}}m ago",
-        "hoursAgo": "{{count}}h ago",
-        "daysAgo": "{{count}}d ago"
-      },
+      "historyOff": "Command history is off.\nTurn it on in Settings › Terminal.",
       "removeFromHistory": "Remove from history",
       "searchPlaceholder": "Search history…",
-      "showCurrentOnly": "Showing current connection only",
       "showAllConnections": "Show all connections",
       "clearAllTitle": "Clear all history",
       "noCommandsMatch": "No commands match",
       "noHistoryForConnection": "No history for this connection yet",
-      "noHistoryYet": "No command history yet.\nCommands you type will appear here."
+      "noHistoryYet": "No command history yet.\nCommands you type will appear here.",
+      "favorites": "Favorites",
+      "recent": "Recent",
+      "addFavorite": "Add to favorites",
+      "addFavoriteTeam": "Add to favorites. Favorites are saved to your account and synced, and stay even if you leave the team.",
+      "removeFavorite": "Remove from favorites",
+      "saveAsSnippet": "Save as snippet…",
+      "showOnlyHost": "Show only {{host}}",
+      "clearHostFilter": "Clear host filter",
+      "showCurrentHost": "Show only the current host",
+      "clearConfirm_one": "Clear {{count}} command?",
+      "clearConfirm_other": "Clear {{count}} commands?",
+      "favoritesStay_one": "Your favorite stays.",
+      "favoritesStay_other": "Your {{count}} favorites stay.",
+      "clear": "Clear"
     },
     "multiplayerBar": {
       "ended": "Ended",
@@ -37,7 +44,9 @@
       "stopSharingTitle": "Stop sharing",
       "leaveSessionTitle": "Leave session",
       "stop": "Stop",
-      "leave": "Leave"
+      "leave": "Leave",
+      "waitingForKey": "Waiting for the host…",
+      "keyFailed": "Host didn't share the key"
     },
     "sftp": {
       "hostLabel": {
@@ -85,7 +94,16 @@
         "tooManyParts": "Use port or remote:local",
         "invalidRemotePort": "Port must be 1–65535",
         "invalidLocalPort": "Local port must be 1–65535"
-      }
+      },
+      "toast": {
+        "viewPorts": "View Ports →",
+        "forwardedOne": "Port {{port}} → localhost:{{localPort}} forwarded",
+        "forwardedMany_one": "{{count}} port forwarded",
+        "forwardedMany_other": "{{count}} ports forwarded",
+        "autoForwardCapped_one": "Auto-forwarding paused — {{count}} port already forwarded",
+        "autoForwardCapped_other": "Auto-forwarding paused — {{count}} ports already forwarded"
+      },
+      "portLabel": "Port {{port}}"
     },
     "rightPanel": {
       "font": "Font",
@@ -95,9 +113,11 @@
       "themeCustom": "custom",
       "createNewTheme": "Create New Theme",
       "closePanelTitle": "Close panel",
+      "resizeHandle": "Drag to resize, double-click to reset",
       "sections": {
         "history": "History",
-        "sftp": "SFTP"
+        "sftp": "SFTP",
+        "notes": "Notes"
       },
       "pluginUnavailable": "This panel is no longer available. The plugin that provided it was removed or turned off.",
       "pluginUnavailableAction": "Back to Themes"
@@ -227,11 +247,8 @@
         "openingShell": "Opening shell",
         "sftpSubsystem": "SFTP subsystem",
         "openingPort": "Opening port",
-        "ready": "Ready"
-      },
-      "connectionLost": {
-        "title": "Connection lost",
-        "subtitle": "Reconnecting…"
+        "ready": "Ready",
+        "portKnock": "Port knock"
       },
       "reconnectWait": {
         "offline": {
@@ -247,17 +264,17 @@
       "connectionError": {
         "title": "Connection failed",
         "retry": "Retry",
+        "enableLegacyAndRetry": "Turn on Legacy Algorithms and retry",
         "dismiss": "Dismiss"
       },
       "hostKeyConflict": {
         "title": "HOST KEY CHANGED",
-        "descriptionPrefix": "The fingerprint for ",
-        "descriptionSuffix": " has changed.",
         "replace": "Replace",
         "addAsNew": "Add as new",
         "abort": "Abort",
         "stored": "Stored",
-        "received": "Received"
+        "received": "Received",
+        "description": "The fingerprint for <host>{{address}}</host> has changed."
       },
       "passphrasePrompt": {
         "title": "KEY PASSPHRASE REQUIRED",
@@ -286,6 +303,24 @@
         "unlock": "Unlock vault",
         "retry": "Try again",
         "dismiss": "Close tab"
+      },
+      "identityPick": {
+        "title": "Your identity isn't available",
+        "missingBody": "You chose an identity for {{host}}, but it isn't on this device or was removed. No connection was attempted.",
+        "forbiddenBody": "You chose {{identity}} for {{host}}, but you can no longer use it. No connection was attempted.",
+        "choose": "Choose another identity",
+        "useHostNamed": "Use {{name}} (host) this time",
+        "useHost": "Use the host's credential this time"
+      },
+      "saveTarget": {
+        "rememberFor": "Remember for",
+        "saveFor": "Save for",
+        "thisHost": "This host",
+        "allVaultHosts": "All {{vault}} hosts",
+        "everyone": "Everyone",
+        "onlyMe": "Only me",
+        "ownNote": "Only you. Teammates keep the host's own settings.",
+        "teamNote": "Everyone updates {{host}} for the whole team. Only me leaves the host as it is."
       }
     },
     "statusBar": {
@@ -306,6 +341,10 @@
       "serialReopen": "Reopen the serial port",
       "serialAutoReconnectOn": "Auto-reconnect on — click to stop reclaiming the port",
       "serialAutoReconnectOff": "Auto-reconnect off — the port stays free after a drop",
+      "serialLineOn": "{{line}} on — click to turn it off",
+      "serialLineOff": "{{line}} off — click to turn it on",
+      "serialRtsFlowControlled": "RTS is driven by RTS/CTS flow control",
+      "serialBreak": "Send a break signal",
       "systemMetricsTitle": "System metrics",
       "activeTunnels_one": "{{count}} active tunnel",
       "activeTunnels_other": "{{count}} active tunnels",
@@ -315,6 +354,25 @@
       "sparklineMin": "min {{value}}ms",
       "sparklineAvg": "avg {{value}}ms",
       "sparklineMax": "max {{value}}ms"
+    },
+    "xterm": {
+      "linkTooltip": "Alt+click to open",
+      "sessionClosed": "Session closed",
+      "serialClosed": "Serial connection closed"
+    },
+    "pasteImage": {
+      "uploading": "Uploading screenshot",
+      "uploadingDetail": "to {{host}} · {{size}} · {{width}}×{{height}}",
+      "pasted": "Screenshot pasted",
+      "pastedDetail": "{{host}} · {{name}}",
+      "firstUse": "On the host for 7 days, only you can read it",
+      "settings": "Image paste settings",
+      "deleteFromHost": "Delete from host",
+      "deleted": "Screenshot deleted from the host",
+      "deleteFailed": "Couldn't delete the screenshot",
+      "failed": "Couldn't upload the screenshot",
+      "retry": "Retry",
+      "broadcast": "Image paste is off while you type into several panes at once."
     }
   }
 }

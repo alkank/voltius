@@ -1,6 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { openSystemDialog as dialogOpen } from "@/services/systemDialog";
+import type { ProxySpec } from "@/services/proxy";
+import type { KnockSpec } from "@/services/portKnock";
 
 export interface RemoteFile {
   name: string;
@@ -10,14 +12,6 @@ export interface RemoteFile {
   is_symlink: boolean;
   modified: number | null;
   permissions: number | null;
-}
-
-export interface LocalFile {
-  name: string;
-  path: string;
-  size: number;
-  is_dir: boolean;
-  modified: number | null;
 }
 
 export interface TransferProgress {
@@ -39,6 +33,11 @@ export async function sftpConnect(params: {
   jumpHosts?: Array<{ host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string }>;
   keepaliveIntervalSecs: number;
   keepaliveMax: number;
+  legacyAlgorithms?: boolean;
+  proxy?: ProxySpec | null;
+  knock?: KnockSpec | null;
+  /** A lost session's id to reconnect into, so its transfers resume. */
+  relink?: string;
 }): Promise<string> {
   return invoke("sftp_connect", {
     connectId: params.connectId,
@@ -51,6 +50,10 @@ export async function sftpConnect(params: {
     jumpHosts: params.jumpHosts ?? null,
     keepaliveIntervalSecs: params.keepaliveIntervalSecs,
     keepaliveMax: params.keepaliveMax,
+    legacyAlgorithms: params.legacyAlgorithms ?? false,
+    proxy: params.proxy ?? null,
+    knock: params.knock ?? null,
+    relink: params.relink ?? null,
   });
 }
 
@@ -72,6 +75,25 @@ export async function ftpConnect(params: {
     username: params.username,
     password: params.password ?? null,
     secure: params.secure,
+  });
+}
+
+/** Standalone WebDAV connection. `interactive`: a conflict overlay listens on `connectId`. */
+export async function webdavConnect(params: {
+  connectId: string;
+  url: string;
+  username: string;
+  password?: string;
+  proxy?: ProxySpec | null;
+  interactive: boolean;
+}): Promise<string> {
+  return invoke("webdav_connect", {
+    connectId: params.connectId,
+    url: params.url,
+    username: params.username,
+    password: params.password ?? null,
+    proxy: params.proxy ?? null,
+    interactive: params.interactive,
   });
 }
 
@@ -103,6 +125,39 @@ export async function sftpRename(sftpId: string, from: string, to: string): Prom
 
 export async function sftpDelete(sftpId: string, path: string): Promise<void> {
   return invoke("sftp_delete", { sftpId, path });
+}
+
+export interface OwnerInfo {
+  uid: number;
+  gid: number;
+  user: string;
+  group: string;
+}
+
+export interface AttrChange {
+  paths: string[];
+  set: number;
+  clear: number;
+  owner?: string;
+  group?: string;
+  recurse?: "all" | "files" | "dirs";
+}
+
+/** null when the host has no POSIX shell to report owners. */
+export async function sftpOwners(sftpId: string, paths: string[]): Promise<OwnerInfo[] | null> {
+  return invoke("sftp_owners", { sftpId, paths });
+}
+
+export async function sftpSetAttrs(sftpId: string, change: AttrChange): Promise<void> {
+  return invoke("sftp_set_attrs", { sftpId, change });
+}
+
+export async function fsOwners(paths: string[]): Promise<OwnerInfo[] | null> {
+  return invoke("fs_owners", { paths });
+}
+
+export async function fsSetAttrs(change: AttrChange): Promise<void> {
+  return invoke("fs_set_attrs", { change });
 }
 
 // ── Transfer ──────────────────────────────��──────────────────────────────���────
@@ -167,14 +222,19 @@ export async function sftpCancelTransfer(transferId: string): Promise<void> {
   return invoke("sftp_cancel_transfer", { transferId });
 }
 
+/** Tell the backend the transfer about to run under `transferId` is a retry. */
+export async function sftpMarkResume(transferId: string): Promise<void> {
+  return invoke("sftp_mark_resume", { transferId });
+}
+
+/** True if the session can run commands on its host (false for FTP and WebDAV). */
+export async function sftpCanExec(sftpId: string): Promise<boolean> {
+  return invoke("sftp_can_exec", { sftpId });
+}
+
 /** True if `tar` is available on the remote host. */
 export async function sftpTarAvailable(sftpId: string): Promise<boolean> {
   return invoke("sftp_tar_available", { sftpId });
-}
-
-/** True if `tar` is available on the local machine. */
-export async function fsTarAvailable(): Promise<boolean> {
-  return invoke("fs_tar_available");
 }
 
 /** Remote → Remote: transfer a single file between two SFTP sessions. */
@@ -233,14 +293,25 @@ export async function pickLocalPaths(opts: { title?: string } = {}): Promise<str
   return result ? [result] : [];
 }
 
-export async function onTransferProgress(
-  transferId: string,
-  callback: (progress: TransferProgress) => void,
-): Promise<UnlistenFn> {
-  return listen<TransferProgress>(`sftp-progress-${transferId}`, (e) =>
-    callback(e.payload),
-  );
+function onTransferEvent<T, R = T>(kind: string, pick: (payload: T) => R = (p) => p as unknown as R) {
+  return (transferId: string, callback: (value: R) => void): Promise<UnlistenFn> =>
+    listen<T>(`sftp-${kind}-${transferId}`, (e) => callback(pick(e.payload)));
 }
+
+export const onTransferProgress = onTransferEvent<TransferProgress>("progress");
+
+/** A remote name the local OS can't hold (or a traversal attempt) that the
+ *  backend skipped instead of writing; `path` is its full remote path. */
+export const onTransferSkipped = onTransferEvent<string>("skipped");
+
+/** Bytes already in place when an interrupted transfer picked up again. */
+export const onTransferResumed = onTransferEvent<{ offset: number }, number>("resumed", (p) => p.offset);
+
+/** The link dropped and the backend is waiting for the session to come back. */
+export const onTransferWaiting = onTransferEvent<{ waiting: boolean }, boolean>("waiting", (p) => p.waiting);
+
+/** The backend chose per-file (resumable) over the tar stream the row was started with. */
+export const onTransferAccel = onTransferEvent<{ accel: "tar" | "perFile" }, "tar" | "perFile">("accel", (p) => p.accel);
 
 // ── Local FS ─────────────────────��────────────────────────────────────────────
 
@@ -248,7 +319,7 @@ export async function fsHomeDir(): Promise<string> {
   return invoke("fs_home_dir");
 }
 
-export async function fsListDir(path: string): Promise<LocalFile[]> {
+export async function fsListDir(path: string): Promise<RemoteFile[]> {
   return invoke("fs_list_dir", { path });
 }
 
@@ -416,9 +487,10 @@ export interface EditorFile {
 export type EditorReadError =
   | { kind: "too_large"; size: number; limit: number }
   | { kind: "binary" }
+  | { kind: "image"; mime: string; size: number }
   | { kind: "io"; message: string };
 
-export const DEFAULT_EDITOR_MAX_BYTES = 5 * 1024 * 1024;
+export { DEFAULT_EDITOR_MAX_BYTES } from "@/services/editorLimits";
 
 export async function sftpReadFile(
   sftpId: string,
@@ -451,6 +523,21 @@ export function readEditorFile(
   maxBytes: number,
 ): Promise<EditorFile> {
   return sftpId === null ? fsReadFile(path, maxBytes) : sftpReadFile(sftpId, path, maxBytes);
+}
+
+export interface EditorImage {
+  mime: string;
+  bytes: Uint8Array<ArrayBuffer>;
+}
+
+/** An image for the editor's viewer, its type sniffed by the backend; rejects with an
+ *  `EditorReadError`, `binary` meaning the file is no image after all. */
+export async function readEditorImage(sftpId: string | null, path: string, maxBytes: number): Promise<EditorImage> {
+  const body = new Uint8Array(await (sftpId === null
+    ? invoke<ArrayBuffer>("fs_read_image", { path, maxBytes })
+    : invoke<ArrayBuffer>("sftp_read_image", { sftpId, path, maxBytes })));
+  const split = body.indexOf(0x0a);
+  return { mime: new TextDecoder().decode(body.subarray(0, split)), bytes: body.subarray(split + 1) };
 }
 
 /** Write a file for the editor through the backend matching the connection kind. */

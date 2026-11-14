@@ -1,5 +1,10 @@
-use crate::storage::vault;
+use crate::app_lock::AppLock;
+use crate::storage::config::config_dir;
+use crate::storage::profile::{self, ProfileDirs};
+use crate::storage::secrets::{SecretsStore, SECRETS_FILE};
+use crate::storage::vault::{self, VAULT_HOLD_FILE};
 use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
 #[tauri::command]
@@ -12,33 +17,55 @@ pub fn vault_status(app: AppHandle) -> serde_json::Value {
 
 #[tauri::command]
 pub fn vault_reset(app: AppHandle) -> Result<(), String> {
+    let data = data_dir(&app)?;
+    remove_legacy_vault_hold(&data);
+    wipe_secrets_and_config(&app)
+}
+
+fn remove_legacy_vault_hold(data_dir: &Path) {
+    let _ = std::fs::remove_file(data_dir.join(VAULT_HOLD_FILE));
+}
+
+pub fn reset_local_vault(data_dir: &Path, config_dir: &Path) -> Result<(), String> {
+    remove_legacy_vault_hold(data_dir);
+    wipe(&data_dir.join(SECRETS_FILE), config_dir, None)
+}
+
+pub fn drop_parked_profile(data_dir: &Path, account_id: &str) -> Result<(), String> {
+    profile::drop_parked(&data_dir.join(PARKED_DIR), account_id)
+}
+
+const PARKED_DIR: &str = "accounts";
+
+fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
 
-    let data_dir = app
-        .path()
+    app.path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+        .map_err(|e| format!("Failed to get app data dir: {e}"))
+}
 
-    let secrets = data_dir.join("secrets.enc");
+fn wipe_secrets_and_config(app: &AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    wipe(
+        &data_dir(app)?.join(SECRETS_FILE),
+        &config_dir(),
+        app.try_state::<AppLock>().as_deref(),
+    )
+}
+
+fn wipe(secrets: &Path, config: &Path, lock: Option<&AppLock>) -> Result<(), String> {
     if secrets.exists() {
-        std::fs::remove_file(&secrets).map_err(|e| format!("Failed to delete secrets: {e}"))?;
+        std::fs::remove_file(secrets).map_err(|e| format!("Failed to delete secrets: {e}"))?;
     }
-
-    // Delete legacy Stronghold vault if still present
-    let vault_hold = vault::vault_file_path(&app);
-    if vault_hold.exists() {
-        std::fs::remove_file(&vault_hold).ok();
+    if let Some(lock) = lock {
+        let _ = lock.set(None);
     }
-
-    // Delete entire config directory (covers all current and future config files)
-    let config = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("voltius");
     if config.exists() {
-        std::fs::remove_dir_all(&config)
+        std::fs::remove_dir_all(config)
             .map_err(|e| format!("Failed to delete config directory: {e}"))?;
     }
-
     Ok(())
 }
 
@@ -51,6 +78,20 @@ pub fn get_machine_fingerprint() -> Option<String> {
     let id = raw_machine_id()?;
     let hash = Sha256::digest(id.as_bytes());
     Some(hash.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn os_user_name() -> Option<String> {
+    ["USER", "USERNAME"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+}
+
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn os_user_name() -> Option<String> {
+    None
 }
 
 /// Platform-specific source for the raw (un-hashed) machine identifier.
@@ -109,28 +150,111 @@ fn android_id() -> Option<String> {
 /// Wipe local config + secrets so a different account can start clean.
 /// Deletes:
 ///   - secrets.enc  (encrypted with the OLD account's key — new key can't open it)
-///   - ~/.config/voltius/  (connections, identities, keys, folders JSON files)
+///   - the config dir  (connections, identities, keys, folders JSON files)
 /// Does NOT touch the OS keychain — caller handles that separately.
 #[tauri::command]
 pub fn config_wipe(app: AppHandle) -> Result<(), String> {
+    wipe_secrets_and_config(&app)
+}
+
+/// Park the live account's data under `park_as` (or discard it) and bring back
+/// the data parked under `restore`. Returns whether a profile was restored.
+#[tauri::command]
+pub fn account_profile_swap(
+    app: AppHandle,
+    state: tauri::State<SecretsStore>,
+    park_as: Option<String>,
+    restore: Option<String>,
+) -> Result<bool, String> {
     use tauri::Manager;
 
-    // Delete secrets store (keyed to old account — new enc_key cannot decrypt it)
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
-    let secrets = data_dir.join("secrets.enc");
-    if secrets.exists() {
-        std::fs::remove_file(&secrets).map_err(|e| format!("Failed to delete secrets.enc: {e}"))?;
+    let data_dir = data_dir(&app)?;
+    let secrets = data_dir.join(SECRETS_FILE);
+    let config = config_dir();
+    let parked = data_dir.join(PARKED_DIR);
+    // Locked first: a later save would recreate secrets.enc under the outgoing key.
+    state.lock();
+    if let Some(lock) = app.try_state::<AppLock>() {
+        let _ = lock.set(None);
+    }
+    profile::swap(
+        &ProfileDirs {
+            secrets: &secrets,
+            config: &config,
+            parked: &parked,
+        },
+        park_as.as_deref(),
+        restore.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn account_profile_drop(app: AppHandle, account_id: String) -> Result<(), String> {
+    drop_parked_profile(&data_dir(&app)?, &account_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_lock::LockKind;
+
+    #[test]
+    fn app_data_dir_matches_tauri_identifier() {
+        assert_eq!(
+            crate::storage::config::app_data_dir().unwrap(),
+            dirs::data_dir()
+                .unwrap()
+                .join(crate::storage::config::APP_IDENTIFIER)
+        );
     }
 
-    // Delete config directory (covers all JSON entity files)
-    let config = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("voltius");
-    if config.exists() {
-        std::fs::remove_dir_all(&config).map_err(|e| format!("Failed to wipe config: {e}"))?;
+    #[test]
+    fn reset_local_vault_removes_secrets_hold_and_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let config = dir.path().join("voltius");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(data.join(SECRETS_FILE), "x").unwrap();
+        std::fs::write(data.join(VAULT_HOLD_FILE), "x").unwrap();
+        std::fs::write(config.join("app-lock"), "vault").unwrap();
+
+        reset_local_vault(&data, &config).unwrap();
+
+        assert!(!data.join(SECRETS_FILE).exists());
+        assert!(!data.join(VAULT_HOLD_FILE).exists());
+        assert!(!config.exists());
     }
-    Ok(())
+
+    #[test]
+    fn reset_local_vault_on_empty_dirs_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        reset_local_vault(&dir.path().join("a"), &dir.path().join("b")).unwrap();
+    }
+
+    #[test]
+    fn drop_parked_profile_removes_the_parked_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let parked = dir.path().join(PARKED_DIR).join("acc");
+        std::fs::create_dir_all(&parked).unwrap();
+        drop_parked_profile(dir.path(), "acc").unwrap();
+        assert!(!parked.exists());
+    }
+
+    #[test]
+    fn a_wipe_removes_secrets_config_and_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = dir.path().join("secrets.enc");
+        let config = dir.path().join("voltius");
+        std::fs::create_dir(&config).unwrap();
+        std::fs::write(&secrets, "x").unwrap();
+        let lock = AppLock::load_from(config.join("app-lock"));
+        lock.set(Some(LockKind::Vault)).unwrap();
+
+        wipe(&secrets, &config, Some(&lock)).unwrap();
+
+        assert!(!secrets.exists());
+        assert!(!config.exists());
+        assert_eq!(lock.get(), None);
+    }
 }

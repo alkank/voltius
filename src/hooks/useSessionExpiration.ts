@@ -1,75 +1,113 @@
 import { useEffect } from "react";
-import { getAccountMode, lockVaultSession } from "@/services/account";
+import { getAccountMode } from "@/services/account";
+import { lockApp, recordLastActive, setHideInRecents } from "@/services/appLock";
+import { isLeaveLockSuppressed } from "@/services/leaveLockSuppression";
+import { useAppLockStore } from "@/stores/appLockStore";
+import { useEffectiveLockSettings } from "@/hooks/useEffectiveLockSettings";
 import { useSecurityStore } from "@/stores/securityStore";
+import { canLockApp } from "@/utils/accountMode";
+import { IMMEDIATELY } from "@/utils/sessionTimeout";
 
 const CHECK_INTERVAL_MS = 5000;
+const IMMEDIATE_IDLE_MINUTES = 5;
+const ACTIVITY_EVENTS = ["pointerdown", "mousemove", "keydown", "touchstart"] as const;
 
-export function useSessionExpiration(): void {
-  const sessionTimeoutMinutes = useSecurityStore((s) => s.sessionTimeoutMinutes);
+export function useSessionExpiration(ready = true): void {
+  const { sessionTimeoutMinutes } = useEffectiveLockSettings();
+  const systemAuthUnlock = useSecurityStore((s) => s.systemAuthUnlock);
 
   useEffect(() => {
-    if (!sessionTimeoutMinutes || sessionTimeoutMinutes <= 0) return;
+    if (!ready || sessionTimeoutMinutes === null || sessionTimeoutMinutes < 0) return;
 
-    const timeoutMs = sessionTimeoutMinutes * 60_000;
+    const immediate = sessionTimeoutMinutes === IMMEDIATELY;
+    const timeoutMs = (immediate ? IMMEDIATE_IDLE_MINUTES : sessionTimeoutMinutes) * 60_000;
     let lastActivityAt = Date.now();
+    let recordedAt = 0;
     let lockable = false;
     let disposed = false;
     let lockInProgress = false;
+    let unlistenResize: (() => void) | null = null;
+    let hidingFromRecents = false;
 
     getAccountMode()
       .then((mode) => {
-        lockable = mode === "local" || mode === "server";
+        lockable = canLockApp(mode, systemAuthUnlock);
+        // Android snapshots recents before visibilitychange reaches us, so the lock alone can't cover it.
+        if (immediate && lockable && !disposed) {
+          hidingFromRecents = true;
+          void setHideInRecents(true);
+        }
       })
-      .catch(() => {
-        lockable = false;
-      });
+      .catch(() => { lockable = false; });
 
-    const lockNow = async () => {
-      if (lockInProgress || disposed || !lockable) return;
+    const lockNow = () => {
+      if (lockInProgress || disposed || !lockable || useAppLockStore.getState().kind) return;
       lockInProgress = true;
-      try {
-        await lockVaultSession();
-      } finally {
-        if (!disposed) window.location.reload();
-      }
+      lockApp()
+        .catch(() => {})
+        .finally(() => {
+          lockInProgress = false;
+          lastActivityAt = Date.now();
+        });
+    };
+
+    const lockOnLeave = () => {
+      if (immediate && !isLeaveLockSuppressed()) lockNow();
+    };
+
+    const persistActivity = () => {
+      if (recordedAt === lastActivityAt) return;
+      recordedAt = lastActivityAt;
+      void recordLastActive(lastActivityAt);
     };
 
     const checkIdle = () => {
-      if (!lockable || lockInProgress || disposed) return;
-      if (Date.now() - lastActivityAt >= timeoutMs) {
-        lockNow().catch(() => {
-          lockInProgress = false;
-        });
-      }
+      if (Date.now() - lastActivityAt >= timeoutMs) lockNow();
+      else persistActivity();
     };
 
     const recordActivity = () => {
-      if (lockInProgress || disposed) return;
-      lastActivityAt = Date.now();
+      if (!lockInProgress && !disposed) lastActivityAt = Date.now();
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") checkIdle();
+      if (document.visibilityState === "hidden") {
+        persistActivity();
+        lockOnLeave();
+      } else checkIdle();
     };
 
-    window.addEventListener("pointerdown", recordActivity, { passive: true });
-    window.addEventListener("mousemove", recordActivity, { passive: true });
-    window.addEventListener("keydown", recordActivity);
-    window.addEventListener("focus", checkIdle);
-    window.addEventListener("touchstart", recordActivity, { passive: true });
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    if (immediate) {
+      import("@tauri-apps/api/window")
+        .then(async ({ getCurrentWindow }) => {
+          const win = getCurrentWindow();
+          const unlisten = await win.onResized(() => {
+            void win.isMinimized().then((min) => { if (min) lockOnLeave(); }).catch(() => {});
+          });
+          if (disposed) unlisten();
+          else unlistenResize = unlisten;
+        })
+        .catch(() => {});
+    }
 
+    for (const e of ACTIVITY_EVENTS) window.addEventListener(e, recordActivity, { passive: true });
+    window.addEventListener("focus", checkIdle);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    persistActivity();
     const intervalId = window.setInterval(checkIdle, CHECK_INTERVAL_MS);
+    const unsubscribeLock = useAppLockStore.subscribe((s, prev) => {
+      if (prev.kind && !s.kind) lastActivityAt = Date.now();
+    });
 
     return () => {
       disposed = true;
+      if (hidingFromRecents) void setHideInRecents(false);
       window.clearInterval(intervalId);
-      window.removeEventListener("pointerdown", recordActivity);
-      window.removeEventListener("mousemove", recordActivity);
-      window.removeEventListener("keydown", recordActivity);
+      unsubscribeLock();
+      unlistenResize?.();
+      for (const e of ACTIVITY_EVENTS) window.removeEventListener(e, recordActivity);
       window.removeEventListener("focus", checkIdle);
-      window.removeEventListener("touchstart", recordActivity);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [sessionTimeoutMinutes]);
+  }, [ready, sessionTimeoutMinutes, systemAuthUnlock]);
 }

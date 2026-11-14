@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
-import i18n from "@/i18n";
 import { useVaultStore } from "@/stores/vaultStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useShortcutHint } from "@/stores/shortcutStore";
 import { useVaultContents } from "@/hooks/useVaultContents";
 import { ContentCounts } from "@/components/shared/ContentCounts";
 import { useTeamStore } from "@/stores/teamStore";
@@ -16,8 +16,10 @@ import { useSubscriptionStore } from "@/stores/subscriptionStore";
 import { VaultShareSheet } from "@/components/vault-share/VaultShareSheet";
 import { useVaultAdmin } from "@/components/vault-admin/useVaultAdmin";
 import { VaultAdminSurface } from "@/components/vault-admin/VaultAdminSurface";
-import type { VaultAdminTarget } from "@/components/vault-admin/vaultAdminTarget";
+import { cloudVaultTarget, localVaultTarget, type VaultAdminTarget } from "@/components/vault-admin/vaultAdminTarget";
 import { chevronRotateStyle } from "@/utils/icons";
+import { formatRelative } from "@/utils/localeFormat";
+import { memberAvatarLabel, memberLabel } from "@/services/memberLabel";
 
 // ─── Members stack ─────────────────────────────────────────────────────────
 
@@ -42,7 +44,7 @@ export function MembersStack({
   hasTeam?: boolean;
 }) {
   const { t } = useTranslation();
-  const openMembersInvite = useUIStore((s) => s.openMembersInvite);
+  const openMembersPanel = useUIStore((s) => s.openMembersPanel);
   const [invHovered, setInvHovered] = useState(false);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = openProp ?? uncontrolledOpen;
@@ -103,7 +105,7 @@ export function MembersStack({
           {visible.map((m, i) => (
             <div
               key={m.user_id}
-              title={m.handle}
+              title={memberLabel(m)}
               style={{
                 marginLeft: i === 0 ? 0 : -9,
                 zIndex: MAX_STACK - i,
@@ -116,7 +118,7 @@ export function MembersStack({
                 transition: "border-color 0.2s, opacity 0.2s",
               }}
             >
-              <MiniAvatar name={m.handle} size={24} />
+              <MiniAvatar name={memberAvatarLabel(m)} size={24} />
             </div>
           ))}
           <AvatarOverflow count={overflow} size={24} ringColor="var(--t-bg-chrome)" />
@@ -166,7 +168,7 @@ export function MembersStack({
         glass
       >
         <div onMouseEnter={openPopover} onMouseLeave={closePopover}>
-          <VaultShareSheet vaultId={vaultId} variant="popover" onRequestFull={openMembersInvite} />
+          <VaultShareSheet vaultId={vaultId} variant="popover" onRequestFull={() => openMembersPanel("invite")} />
         </div>
       </PickerSurface>
     </div>
@@ -175,22 +177,12 @@ export function MembersStack({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function relativeTime(date: Date | null): string | null {
-  if (!date) return null;
-  const diffMs = Date.now() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return i18n.t("layout.vaultHeader.relativeTime.justNow");
-  if (diffMin < 60) return i18n.t("layout.vaultHeader.relativeTime.minutesAgo", { count: diffMin });
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return i18n.t("layout.vaultHeader.relativeTime.hoursAgo", { count: diffHr });
-  return i18n.t("layout.vaultHeader.relativeTime.daysAgo", { count: Math.floor(diffHr / 24) });
-}
-
 export default function VaultHeader() {
   const { t } = useTranslation();
   const vaults = useVaultStore((s) => s.vaults);
   const selectedVaultIds = useVaultStore((s) => s.selectedVaultIds);
   const setOmniOpen = useUIStore((s) => s.setOmniOpen);
+  const omniHint = useShortcutHint("omni");
   const { teams, membersByTeam, loadMembers } = useTeamStore();
 
   const [syncState, setSyncState] = useState(getSyncState);
@@ -221,9 +213,9 @@ export default function VaultHeader() {
   }, [team?.id]);
 
   const target: VaultAdminTarget | null = vault
-    ? { kind: "local", vaultId: vault.id, teamId: vault.teamId ?? null, name: vault.name }
+    ? localVaultTarget(vault)
     : standaloneTeam
-      ? { kind: "cloud", vaultId: null, teamId: standaloneTeam.id, name: standaloneTeam.name }
+      ? cloudVaultTarget(standaloneTeam)
       : null;
   const admin = useVaultAdmin(target);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -247,7 +239,7 @@ export default function VaultHeader() {
   const displayName = vault ? vault.name : (standaloneTeam!.name);
   const initial = displayName.trim().charAt(0).toUpperCase();
   const isE2EE = accountMode === "local";
-  const lastSync = relativeTime(syncState.lastSync);
+  const lastSync = syncState.lastSync ? formatRelative(syncState.lastSync) : null;
   const showSync = syncState.cloudActive && lastSync;
 
   return (
@@ -341,17 +333,18 @@ export default function VaultHeader() {
       >
         <Icon icon="lucide:search" width={14} className="shrink-0" />
         <span className="text-sm flex-1 text-left">{t("layout.vaultHeader.jumpTo")}</span>
-        <kbd
-          className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md"
-          style={{
-            background: "color-mix(in srgb, #000000 22%, transparent)",
-            color: "var(--t-text-secondary)",
-            border: "1px solid color-mix(in srgb, #ffffff 7%, transparent)",
-          }}
-        >
-          <span>⌘</span>
-          <span>K</span>
-        </kbd>
+        {omniHint && (
+          <kbd
+            className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md"
+            style={{
+              background: "color-mix(in srgb, #000000 22%, transparent)",
+              color: "var(--t-text-secondary)",
+              border: "1px solid color-mix(in srgb, #ffffff 7%, transparent)",
+            }}
+          >
+            {omniHint}
+          </kbd>
+        )}
       </button>
 
       {/* Right zone: online members */}

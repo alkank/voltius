@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use crate::storage::config::config_dir;
-use crate::storage::secrets::SecretsStore;
+use crate::storage::config::{config_dir, plain_leaf};
+use crate::storage::secrets::{write_atomic, SecretsStore};
 
 // ─── encrypt_payload ──────────────────────────────────────────────────────────
 
@@ -117,15 +117,6 @@ const PLUGIN_DATA_PREFIX: &str = "plugin-data/";
 /// own key, but it still arrives over the network, so the leaf name is required to
 /// be a plain file — no separators, no `..` — and everything else is refused.
 fn restore_dest(dir: &std::path::Path, filename: &str) -> Option<std::path::PathBuf> {
-    fn plain_leaf(name: &str) -> Option<&str> {
-        let ok = !name.is_empty()
-            && name != "."
-            && name != ".."
-            && !name.contains('/')
-            && !name.contains('\\');
-        ok.then_some(name)
-    }
-
     if let Some(sub) = filename.strip_prefix(PLUGIN_META_PREFIX) {
         return Some(
             dir.join("plugins")
@@ -177,14 +168,31 @@ fn strip_excluded(
         }
     }
 
-    let is_excluded_secret = |key: &str| {
+    drop_secrets(secrets, clocks, |key| {
         key.split(':')
             .nth(1)
             .map(|id| excluded.contains(id))
             .unwrap_or(false)
-    };
-    secrets.retain(|k, _| !is_excluded_secret(k));
-    clocks.retain(|k, _| !is_excluded_secret(k));
+    });
+}
+
+fn drop_secrets(
+    secrets: &mut HashMap<String, String>,
+    clocks: &mut HashMap<String, String>,
+    drop: impl Fn(&str) -> bool,
+) {
+    secrets.retain(|k, _| !drop(k));
+    clocks.retain(|k, _| !drop(k));
+}
+
+fn strip_secret_prefixes(
+    secrets: &mut HashMap<String, String>,
+    clocks: &mut HashMap<String, String>,
+    prefixes: &[String],
+) {
+    drop_secrets(secrets, clocks, |key| {
+        prefixes.iter().any(|p| key.starts_with(p.as_str()))
+    });
 }
 
 /// Collect every `*.json` in `dir` into `files`, keyed by `prefix` + filename.
@@ -227,6 +235,7 @@ pub fn backup_export(
     device_id: String,
     excluded_ids: Option<Vec<String>>,
     skip_files: Option<Vec<String>>,
+    skip_secret_prefixes: Option<Vec<String>>,
 ) -> Result<Vec<u8>, String> {
     if enc_key.len() != 32 {
         return Err("enc_key must be 32 bytes".to_string());
@@ -262,6 +271,11 @@ pub fn backup_export(
     let mut clocks = data.clocks;
     let excluded: HashSet<String> = excluded_ids.unwrap_or_default().into_iter().collect();
     strip_excluded(&mut files, &mut secrets, &mut clocks, &excluded);
+    strip_secret_prefixes(
+        &mut secrets,
+        &mut clocks,
+        &skip_secret_prefixes.unwrap_or_default(),
+    );
     let payload = BlobPayload {
         files,
         secrets,
@@ -324,7 +338,8 @@ pub fn backup_import(
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
         }
-        std::fs::write(&dest, content).map_err(|e| format!("Failed to restore {filename}: {e}"))?;
+        write_atomic(&dest, content.as_bytes())
+            .map_err(|e| format!("Failed to restore {filename}: {}", String::from(e)))?;
     }
     state.replace_all(payload.secrets, payload.secret_clocks)?;
 
@@ -345,6 +360,8 @@ pub const ENTITY_FILES: &[&str] = &[
     "snippets.json",
     "snippet_folders.json",
     "port_forwarding_rules.json",
+    "lan_group.json",
+    "favorite_commands.json",
 ];
 
 /// Decrypt a remote blob and return its payload without writing anything to disk.
@@ -388,38 +405,45 @@ pub fn state_import(
     let dir = config_dir();
     for (filename, content) in &files {
         if ENTITY_FILES.contains(&filename.as_str()) {
-            fs::write(dir.join(filename), content)
-                .map_err(|e| format!("Failed to write {filename}: {e}"))?;
+            write_atomic(&dir.join(filename), content.as_bytes())
+                .map_err(|e| format!("Failed to write {filename}: {}", String::from(e)))?;
         }
     }
     state.replace_all(secrets, secret_clocks.unwrap_or_default())?;
     Ok(())
 }
 
+fn load_root(name: &str) -> Option<String> {
+    std::fs::read_to_string(config_dir().join(name)).ok()
+}
+
+fn save_root(name: &str, state: String, command: &str) -> Result<(), String> {
+    write_atomic(&config_dir().join(name), state.as_bytes())
+        .map_err(|e| format!("{command} failed: {}", String::from(e)))
+}
+
 // ─── Theme preferences ────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn theme_load() -> Option<String> {
-    std::fs::read_to_string(config_dir().join("theme.json")).ok()
+    load_root("theme.json")
 }
 
 #[tauri::command]
 pub fn theme_save(state: String) -> Result<(), String> {
-    std::fs::write(config_dir().join("theme.json"), state)
-        .map_err(|e| format!("theme_save failed: {e}"))
+    save_root("theme.json", state, "theme_save")
 }
 
 // ─── App settings ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn settings_load() -> Option<String> {
-    std::fs::read_to_string(config_dir().join("settings.json")).ok()
+    load_root("settings.json")
 }
 
 #[tauri::command]
 pub fn settings_save(state: String) -> Result<(), String> {
-    std::fs::write(config_dir().join("settings.json"), state)
-        .map_err(|e| format!("settings_save failed: {e}"))
+    save_root("settings.json", state, "settings_save")
 }
 
 // ─── Cross-device live-session manifest ──────────────────────────────────────
@@ -428,27 +452,37 @@ pub fn settings_save(state: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn live_sessions_load() -> Option<String> {
-    std::fs::read_to_string(config_dir().join("live_sessions.json")).ok()
+    load_root("live_sessions.json")
 }
 
 #[tauri::command]
 pub fn live_sessions_save(state: String) -> Result<(), String> {
-    std::fs::write(config_dir().join("live_sessions.json"), state)
-        .map_err(|e| format!("live_sessions_save failed: {e}"))
+    save_root("live_sessions.json", state, "live_sessions_save")
+}
+
+#[tauri::command]
+pub fn ssh_config_state_load() -> Option<String> {
+    load_root("ssh-config.json")
+}
+
+#[tauri::command]
+pub fn ssh_config_state_save(state: String) -> Result<(), String> {
+    save_root("ssh-config.json", state, "ssh_config_state_save")
 }
 
 #[tauri::command]
 pub fn device_hostname() -> String {
+    host_name().unwrap_or_else(|| "Unknown device".to_string())
+}
+
+pub fn host_name() -> Option<String> {
     // Android's kernel hostname is always "localhost", so fall back to the
     // user-facing device model (e.g. "Pixel 8") via system properties.
     #[cfg(target_os = "android")]
     if let Some(name) = android_device_name() {
-        return name;
+        return Some(name);
     }
-    hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "Unknown device".to_string())
+    hostname::get().ok().and_then(|h| h.into_string().ok())
 }
 
 #[cfg(target_os = "android")]
@@ -491,7 +525,7 @@ struct UpdaterPrefs {
     auto: bool,
 }
 
-/// Whether the background updater loop may run. Missing/unreadable file ⇒ enabled.
+/// Whether updates download without asking. Missing/unreadable file ⇒ enabled.
 pub fn updater_auto_enabled() -> bool {
     match fs::read_to_string(config_dir().join("updater.json")) {
         Ok(s) => serde_json::from_str::<UpdaterPrefs>(&s)
@@ -514,8 +548,14 @@ pub fn updater_set_auto(enabled: bool) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lan_group_is_an_entity_file() {
+        assert!(ENTITY_FILES.contains(&"lan_group.json"));
+    }
 
     #[test]
     fn collect_json_dir_skips_named_files_and_prefixes_the_rest() {
@@ -610,6 +650,52 @@ mod tests {
         // A secret belonging to a NON-excluded id survives.
         assert!(secrets.contains_key("key:shared:private"));
         assert!(clocks.contains_key("key:shared:private"));
+    }
+
+    #[test]
+    fn strip_excluded_withholds_the_global_proxy_password_by_its_id_segment() {
+        let mut files = HashMap::new();
+        let mut secrets: HashMap<String, String> = [
+            ("proxy_password:__global__", "g"),
+            ("proxy_password:h1", "h"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let mut clocks = secrets.clone();
+        let excluded: HashSet<String> = ["__global__".to_string()].into_iter().collect();
+        strip_excluded(&mut files, &mut secrets, &mut clocks, &excluded);
+        assert_eq!(
+            secrets.keys().collect::<Vec<_>>(),
+            vec!["proxy_password:h1"]
+        );
+        assert_eq!(clocks.keys().collect::<Vec<_>>(), vec!["proxy_password:h1"]);
+    }
+
+    #[test]
+    fn strip_secret_prefixes_drops_matching_secrets_from_both_maps() {
+        let mut secrets: HashMap<String, String> = [
+            ("lan-group-secret:1", "g"),
+            ("lan-group-secret:12", "g"),
+            ("password:lan-group-secret", "p"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let mut clocks = secrets.clone();
+        strip_secret_prefixes(
+            &mut secrets,
+            &mut clocks,
+            &["lan-group-secret:".to_string()],
+        );
+        assert_eq!(
+            secrets.keys().collect::<Vec<_>>(),
+            vec!["password:lan-group-secret"]
+        );
+        assert_eq!(
+            clocks.keys().collect::<Vec<_>>(),
+            vec!["password:lan-group-secret"]
+        );
     }
 
     #[test]

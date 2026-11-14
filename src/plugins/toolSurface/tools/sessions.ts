@@ -36,6 +36,7 @@ export function buildSessionTools(ports: ToolSurfacePorts): Tool[] {
           connectionId: s.connectionId,
           connectionName: s.connectionName,
           localShell: s.localShell,
+          title: s.title ?? null,
           ownedByCaller: ports.owned.has(s.id),
         })),
     },
@@ -171,6 +172,9 @@ export function buildSessionTools(ports: ToolSurfacePorts): Tool[] {
       execute: async (raw) => {
         if (!mayAct(ports, String(raw.sessionId))) {
           return notOwned(ports);
+        }
+        if (ports.api.sessions.list().some((s) => s.id === String(raw.sessionId) && s.locked)) {
+          return refusal(ports.text?.tabLockedError ?? "tab_locked: the user locked this tab; ask them to unlock it first");
         }
         const g = await gate("close_session", raw);
         if (!g.ok) return g.result;

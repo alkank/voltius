@@ -1,31 +1,32 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import BottomSheet from "./BottomSheet";
-import FolderFormSheet from "./FolderFormSheet";
+import FolderFormSheet, { type FolderEdit } from "./FolderFormSheet";
 import type { Folder } from "@/types";
 import { SheetActionRow, type SheetAction } from "./SheetActionRow";
 
-type Mode = "menu" | "rename" | "confirm-delete";
+type Mode = "menu" | "edit" | "confirm-delete";
 
 const Row = (it: SheetAction) => <SheetActionRow attr="folder-action" it={it} />;
 
 export default function FolderActionsSheet({
-  folder, onRename, onDelete, onClose,
+  folder, onSave, onDelete, onClose,
 }: {
   folder: Folder;
-  onRename: (name: string) => void;
+  onSave: (edit: FolderEdit) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<Mode>("menu");
 
-  if (mode === "rename") {
+  if (mode === "edit") {
     return (
       <FolderFormSheet
-        title={t("mobile.sheets.folderActions.renameTitle")}
+        title={t("folders.editPanel.title")}
         initialName={folder.name}
-        onSubmit={(name) => onRename(name)}
+        initialAppearance={{ color: folder.color, icon: folder.icon }}
+        onSubmit={onSave}
         onClose={onClose}
       />
     );
@@ -33,7 +34,7 @@ export default function FolderActionsSheet({
 
   if (mode === "confirm-delete") {
     return (
-      <BottomSheet title={t("mobile.sheets.folderActions.deleteTitle")} onClose={onClose} registerBack={false}>
+      <BottomSheet title={t("mobile.sheets.folderActions.deleteTitle")} onClose={onClose}>
         <div className="px-3 pt-1 pb-2 text-sm text-(--t-text-dim)">
           {t("mobile.sheets.folderActions.deleteBody", { name: folder.name })}
         </div>
@@ -44,8 +45,8 @@ export default function FolderActionsSheet({
   }
 
   return (
-    <BottomSheet title={folder.name} onClose={onClose} registerBack={false}>
-      <Row slug="rename" icon="lucide:pencil" label={t("common.action.rename")} onTap={() => setMode("rename")} />
+    <BottomSheet title={folder.name} onClose={onClose}>
+      <Row slug="rename" icon="lucide:pencil" label={t("common.action.edit")} onTap={() => setMode("edit")} />
       <Row slug="delete" icon="lucide:trash-2" label={t("common.action.delete")} danger onTap={() => setMode("confirm-delete")} />
     </BottomSheet>
   );

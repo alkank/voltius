@@ -4,6 +4,9 @@ import { getMyUserId, listMembers } from "@/services/teamService";
 import type { TeamMember, UserSearchResult } from "@/services/teamService";
 import type { Tier } from "@/stores/subscriptionTier";
 import type { RecentPerson } from "@/stores/recentPeopleStore";
+import { compareStrings } from "@/utils/localeFormat";
+import { searchMatcher } from "@/utils/search";
+import { memberSortKey } from "@/services/memberLabel";
 
 /**
  * The name to show for a session. `connection_name` is null when the server has
@@ -30,6 +33,12 @@ export function guestCapFor(tier: string | undefined): number {
   return tier === "business" ? 50 : tier === "teams" ? 10 : 1;
 }
 
+/** Mirrors the server's `host_tier_session_limit`: concurrent shared sessions a tier may host. */
+export function sessionCapFor(tier: string | undefined): number {
+  return tier === "business" ? 20 : tier === "teams" ? 5 : tier === "pro" ? 1 : 0;
+}
+
+// Deliberately not TIER_RANK: pro must rank as free for session guest caps.
 const OWNER_TIER_RANK: Record<string, number> = { business: 2, teams: 1 };
 
 /**
@@ -87,7 +96,7 @@ export async function allTeammates(): Promise<Teammate[]> {
 
   return [...merged.values()].sort((a, b) => {
     if (!!a.is_online !== !!b.is_online) return a.is_online ? -1 : 1;
-    return (a.handle ?? "").localeCompare(b.handle ?? "");
+    return compareStrings(memberSortKey(a), memberSortKey(b));
   });
 }
 
@@ -165,20 +174,21 @@ export function memberHasAccess(
  * adds Elsewhere on Voltius from the server's results. A person is listed once —
  * the most specific group wins.
  */
-export function groupPeople<T extends { user_id: string; handle?: string }>(input: {
+export function groupPeople<T extends { user_id: string; handle?: string; member_name?: string | null }>(input: {
   query: string;
+  nameOf?: (userId: string) => string | null;
   teammates: T[];
   recent: RecentPerson[];
   results: UserSearchResult[];
 }): { recent: RecentPerson[]; teammates: T[]; strangers: UserSearchResult[] } {
-  const q = input.query.trim().toLowerCase();
-  const matches = (handle: string | undefined) => !q || !!handle?.toLowerCase().includes(q);
+  const q = input.query.trim();
+  const matches = searchMatcher(q);
 
-  const recent = input.recent.filter((p) => matches(p.handle));
+  const recent = input.recent.filter((p) => matches(p.handle) || matches(input.nameOf?.(p.user_id) ?? ""));
   const recentIds = new Set(recent.map((p) => p.user_id));
   // Recent is the more specific group: a person already in Recent does not repeat
   // under Your teams, even if they are also a current teammate.
-  const teammates = input.teammates.filter((p) => !recentIds.has(p.user_id) && matches(p.handle));
+  const teammates = input.teammates.filter((p) => !recentIds.has(p.user_id) && (matches(p.handle) || matches(p.member_name ?? "")));
   const claimed = new Set([...recentIds, ...teammates.map((p) => p.user_id)]);
   const strangers = q ? input.results.filter((r) => !claimed.has(r.user_id) && !r.is_teammate) : [];
   return { recent, teammates, strangers };

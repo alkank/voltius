@@ -1,25 +1,29 @@
 import i18n from "@/i18n";
-import { fromJSON, detectFormat } from "./formats";
-import type { ConnectionExport, ExportBundle } from "./formats";
+import { decryptText, fromJSON, detectFormat, importedBundle } from "./formats";
+import type { ImportOutcome } from "./formats";
 import { connectionsFromCSV } from "./parsers/csv";
 import { connectionsFromMobaXterm, extractMobaXtermBundle } from "./parsers/mobaxterm";
 import { bundleFromTermius, extractTermiusBundle } from "./parsers/termius";
+import { bundleFromZoc, extractZocBundle } from "./parsers/zoc";
+import { bundleFromPutty, extractPuttyBundle } from "./parsers/putty";
+import { bundleFromOpenssh, extractOpensshBundle } from "./parsers/openssh";
+import { bundleFromSecureCrt, extractSecureCrtBundle } from "./parsers/securecrt";
 
 export interface Importer {
   key: string;
   label: string;
   icon: string;
-  sub: string;
+  /** i18n keys, translated where rendered. */
+  subKey: string;
   fileAccept: string;
-  hint?: string;
-  placeholder: string;
-  parse(text: string): ExportBundle;
+  hintKey?: string;
+  /** Hint shown on Android, where autoExtract is unavailable. */
+  mobileHintKey?: string;
+  placeholderKey: string;
+  parse(text: string): ImportOutcome | Promise<ImportOutcome>;
   /** Optional: one-step extraction from a locally-installed source app. */
-  autoExtract?(): Promise<ExportBundle>;
-}
-
-function connectionsOnlyBundle(connections: ConnectionExport[]): ExportBundle {
-  return { version: 1, exported_at: "", folders: [], connections, identities: [], keys: [], snippets: [], portForwardingRules: [] };
+  autoExtract?(): Promise<ImportOutcome>;
+  extractFromFolder?(dir: string): Promise<ImportOutcome>;
 }
 
 export const IMPORTERS: Importer[] = [
@@ -27,50 +31,96 @@ export const IMPORTERS: Importer[] = [
     key: "voltius",
     label: "Voltius JSON",
     icon: "lucide:braces",
-    sub: "JSON",
+    subKey: "importExport.importers.voltius.sub",
     fileAccept: ".json",
-    placeholder: 'Paste Voltius JSON here, or drop a .json file…\n\n{ "version": 1, "connections": [...] }',
+    placeholderKey: "importExport.importers.voltius.placeholder",
     parse: fromJSON,
   },
   {
     key: "csv",
     label: "CSV",
     icon: "lucide:table-2",
-    sub: "Spreadsheet",
+    subKey: "importExport.importers.csv.sub",
     fileAccept: ".csv,.txt",
-    placeholder: "Paste CSV here, or drop a file…\n\nname,host,port,username,auth_type,tags",
-    parse: (text) => connectionsOnlyBundle(connectionsFromCSV(text)),
+    placeholderKey: "importExport.importers.csv.placeholder",
+    parse: (text) => importedBundle({ connections: connectionsFromCSV(text) }),
+  },
+  {
+    key: "openssh",
+    label: "OpenSSH",
+    icon: "lucide:file-terminal",
+    subKey: "importExport.importers.openssh.sub",
+    fileAccept: "",
+    hintKey: "importExport.importers.openssh.hint",
+    mobileHintKey: "importExport.importers.openssh.hintMobile",
+    placeholderKey: "importExport.importers.openssh.placeholder",
+    parse: (text) => bundleFromOpenssh(text),
+    autoExtract: extractOpensshBundle,
   },
   {
     key: "mobaxterm",
     label: "MobaXterm",
     icon: "custom:mobaxterm",
-    sub: "Local install · auto-decrypt",
+    subKey: "importExport.importers.mobaxterm.sub",
     fileAccept: ".ini,.mxtsessions,.mobaconf,.txt",
-    hint: "Requires MobaXterm to be installed (Windows only).",
-    placeholder: "Drop MobaXterm.ini here, or paste its contents…",
-    parse: (text) => connectionsOnlyBundle(connectionsFromMobaXterm(text)),
+    hintKey: "importExport.importers.mobaxterm.hint",
+    placeholderKey: "importExport.importers.mobaxterm.placeholder",
+    parse: (text) => importedBundle({ connections: connectionsFromMobaXterm(text) }),
     autoExtract: extractMobaXtermBundle,
   },
   {
     key: "termius",
     label: "Termius",
     icon: "simple-icons:termius",
-    sub: "Local install · auto-extract",
+    subKey: "importExport.importers.termius.sub",
     fileAccept: ".json",
-    hint: "Requires Termius to be installed and logged in.",
-    placeholder: "Use Auto Extract for Termius. Pasted legacy Termius dumps are not supported for faithful import.",
+    hintKey: "importExport.importers.termius.hint",
+    placeholderKey: "importExport.importers.termius.placeholder",
     parse: bundleFromTermius,
     autoExtract: extractTermiusBundle,
   },
+  {
+    key: "zoc",
+    label: "ZOC Terminal",
+    icon: "custom:zoc",
+    subKey: "importExport.importers.zoc.sub",
+    fileAccept: ".zhd,.txt",
+    hintKey: "importExport.importers.zoc.hint",
+    placeholderKey: "importExport.importers.zoc.placeholder",
+    parse: bundleFromZoc,
+    autoExtract: extractZocBundle,
+  },
+  {
+    key: "putty",
+    label: "PuTTY",
+    icon: "custom:putty",
+    subKey: "importExport.importers.putty.sub",
+    fileAccept: ".reg,.txt",
+    hintKey: "importExport.importers.putty.hint",
+    placeholderKey: "importExport.importers.putty.placeholder",
+    parse: bundleFromPutty,
+    autoExtract: extractPuttyBundle,
+  },
+  {
+    key: "securecrt",
+    label: "SecureCRT",
+    icon: "custom:securecrt",
+    subKey: "importExport.importers.securecrt.sub",
+    fileAccept: ".ini,.xml",
+    hintKey: "importExport.importers.securecrt.hint",
+    placeholderKey: "importExport.importers.securecrt.placeholder",
+    parse: bundleFromSecureCrt,
+    autoExtract: () => extractSecureCrtBundle(),
+    extractFromFolder: extractSecureCrtBundle,
+  },
 ];
 
-export function parseImport(text: string): ExportBundle | "encrypted" {
+export async function parseImport(text: string): Promise<ImportOutcome> {
   const detected = detectFormat(text.trim());
-  if (detected === "voltius-encrypted") return "encrypted";
-  if (detected === "json") return fromJSON(text);
-  if (detected === "csv") return connectionsOnlyBundle(connectionsFromCSV(text));
-  if (detected === "mobaxterm") return connectionsOnlyBundle(connectionsFromMobaXterm(text));
-  if (detected === "termius") return bundleFromTermius(text);
-  throw new Error(i18n.t("common.error.couldNotDetectFormat"));
+  if (detected === "voltius-encrypted") {
+    return { kind: "backup", unlock: async (password) => fromJSON(await decryptText(text, password)) };
+  }
+  const importer = IMPORTERS.find((i) => i.key === (detected === "json" ? "voltius" : detected));
+  if (!importer) throw new Error(i18n.t("common.error.couldNotDetectFormat"));
+  return importer.parse(text);
 }

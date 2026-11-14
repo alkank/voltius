@@ -10,18 +10,55 @@ vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: mockT }) }));
 vi.mock("@/i18n", () => ({ default: { t: mockT } }));
 vi.mock("@iconify/react", () => ({ Icon: () => null }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
-const { openBillingCheckout } = vi.hoisted(() => ({ openBillingCheckout: vi.fn(async () => true) }));
-vi.mock("@/services/billingCheckout", () => ({ openBillingCheckout }));
 vi.mock("@/services/sync", () => ({
   getSyncState: () => ({ status: "idle", lastSync: null, error: null, cloudActive: false, blobSizeBytes: null }),
   onSyncStateChange: () => () => {},
   syncNow: vi.fn(),
   scheduleSync: vi.fn(),
+  setSyncPaused: vi.fn(),
+  getDeviceId: async () => "self",
+  onRemotePayloadMerged: () => () => {},
 }));
+const { setLanSyncPaused } = vi.hoisted(() => ({ setLanSyncPaused: vi.fn(async () => {}) }));
+vi.mock("@/services/lanSync", () => ({ setLanSyncPaused }));
+vi.mock("@/hooks/useLanDeviceRows", () => ({ useLanDeviceRows: () => [] }));
+const { view, defaultProviders, useSyncProvidersMock, resetProvidersMock } = vi.hoisted(() => {
+  type ProviderOverride = Record<string, unknown>;
+  const view = (over: ProviderOverride) => ({
+    id: "x", label: "X", icon: "lucide:cloud", availability: "active",
+    state: { status: "success", lastSync: null, error: null, blobSizeBytes: null, configured: true },
+    syncNow: null, action: null, pauseToggle: null, ...over,
+  });
+  const defaultProviders = () => [
+    view({ id: "voltius", label: "Voltius Sync" }),
+    view({ id: "plugin-cloudflare-sync", label: "Cloudflare Sync", availability: "disabled", action: { kind: "enable" } }),
+    view({ id: "plugin-gist-sync", label: "GitHub Gist Sync", action: { kind: "configure", pageId: "plugin-gist-sync:gist-sync-settings" } }),
+  ];
+  const defaultReturn = () => ({
+    providers: defaultProviders(),
+    effective: { configured: true, status: "success", lastSync: null, error: null, errorSource: null },
+  });
+  const useSyncProvidersMock = vi.fn(defaultReturn);
+  const resetProvidersMock = () => useSyncProvidersMock.mockImplementation(defaultReturn);
+  return { view, defaultProviders, useSyncProvidersMock, resetProvidersMock };
+});
+vi.mock("@/hooks/useSyncProviders", () => ({ useSyncProviders: useSyncProvidersMock }));
+const { availableCatalog } = vi.hoisted(() => ({ availableCatalog: { list: [] as unknown[] } }));
+vi.mock("@/hooks/useAvailableSyncProviders", () => ({ useAvailableSyncProviders: () => ({ available: availableCatalog.list, appVersion: null }) }));
+vi.mock("@/components/settings/usePluginInstaller", () => ({
+  usePluginInstaller: () => ({ busy: new Set(), startInstall: vi.fn(), startUpdate: vi.fn(), modal: null }),
+}));
+const { noAccount } = vi.hoisted(() => ({ noAccount: { value: true } }));
+vi.mock("@/hooks/useNoAccountInstall", () => ({ useCanPairDevices: () => noAccount.value }));
+const { openDialog } = vi.hoisted(() => ({ openDialog: vi.fn() }));
+vi.mock("@/stores/pairDeviceDialogStore", () => ({ openPairDeviceDialog: openDialog }));
+const { runAction } = vi.hoisted(() => ({ runAction: vi.fn() }));
+vi.mock("@/services/syncProviderAction", () => ({ runSyncProviderAction: runAction }));
 
-import { scheduleSync } from "@/services/sync";
+import { scheduleSync, setSyncPaused } from "@/services/sync";
+import { useLanSyncStore } from "@/stores/lanSyncStore";
+import { usePolicyStore } from "@/stores/policyStore";
 import SyncSection from "./SyncSection";
-import { useSubscriptionStore } from "@/stores/subscriptionStore";
 
 const toggleFor = (c: HTMLElement, domain: string) =>
   c.querySelector(`[data-sync-domain="${domain}"] button[role="switch"]`) as HTMLButtonElement | null;
@@ -83,9 +120,13 @@ describe("held-back settings summary", () => {
   );
   afterEach(cleanup);
 
-  test("counts the device-scoped default under App settings", () => {
+  test("counts the device-scoped defaults under App settings", () => {
     const { container } = render(<SyncSection />);
-    expect(el(container, "held-back-appSettings")?.textContent).toContain("1");
+    expect(el(container, "held-back-appSettings")?.textContent).toContain('"count":3');
+    fireEvent.click(el(container, "held-back-appSettings")!);
+    expect(el(container, "resume-appSettings.terminal.preferredShell")).toBeTruthy();
+    expect(el(container, "resume-appSettings.locale")).toBeTruthy();
+    expect(el(container, "resume-appSettings.proxy")).toBeTruthy();
   });
 
   test("lists a held-back key and resumes it", () => {
@@ -94,6 +135,19 @@ describe("held-back settings summary", () => {
     fireEvent.click(el(container, "held-back-appSettings")!);
     fireEvent.click(el(container, "resume-appSettings.locale")!);
     expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.locale")).toBe(true);
+  });
+
+  test("lists a locked toggle as managed, with no resume", () => {
+    const KEY = "appSettings.toggles.cursor-blink";
+    usePolicyStore.setState({ machine: { policy: { [KEY]: true }, defaults: {} } });
+    try {
+      const { container } = render(<SyncSection />);
+      fireEvent.click(el(container, "held-back-appSettings")!);
+      expect(el(container, `held-${KEY}`)?.textContent).toContain("common.policy.managed");
+      expect(el(container, `resume-${KEY}`)).toBeNull();
+    } finally {
+      usePolicyStore.setState({ machine: { policy: {}, defaults: {} } });
+    }
   });
 
   test("shows nothing for a domain with no held-back keys", () => {
@@ -108,16 +162,191 @@ describe("held-back settings summary", () => {
   });
 });
 
-describe("SyncSection upgrade prompt", () => {
-  beforeEach(() => {
-    openBillingCheckout.mockClear();
-    useSubscriptionStore.setState({ accountMode: "server", isPro: false });
-  });
-  afterEach(cleanup);
+describe("SyncSection Voltius group", () => {
+  beforeEach(() => runAction.mockClear());
+  afterEach(() => { cleanup(); resetProvidersMock(); });
 
-  test("a signed-in free user is offered checkout, not the billing portal", () => {
+  test("a signed-in free user's upgrade button routes through the shared provider action", () => {
+    useSyncProvidersMock.mockImplementation(() => ({
+      providers: [view({ id: "voltius", label: "Voltius Sync", availability: "needs_upgrade", action: { kind: "upgrade" } })],
+      effective: { configured: false, status: "idle", lastSync: null, error: null, errorSource: null },
+    }));
     const { getByText } = render(<SyncSection />);
     fireEvent.click(getByText("settings.sync.requiresPro.upgrade"));
-    expect(openBillingCheckout).toHaveBeenCalledWith("pro");
+    expect(runAction).toHaveBeenCalledWith({ kind: "upgrade" });
+  });
+
+  test("with no upgrade on offer the requires-Pro row has no upgrade button", () => {
+    useSyncProvidersMock.mockImplementation(() => ({
+      providers: [view({ id: "voltius", label: "Voltius Sync", availability: "needs_upgrade", action: null })],
+      effective: { configured: false, status: "idle", lastSync: null, error: null, errorSource: null },
+    }));
+    const { getByText, queryByText } = render(<SyncSection />);
+    expect(getByText("settings.sync.requiresPro.title")).toBeTruthy();
+    expect(queryByText("settings.sync.requiresPro.upgrade")).toBeNull();
+  });
+
+  test("a signed-out user's sign-in button routes through the shared provider action", () => {
+    useSyncProvidersMock.mockImplementation(() => ({
+      providers: [view({ id: "voltius", label: "Voltius Sync", availability: "locked", action: { kind: "signIn" } })],
+      effective: { configured: false, status: "idle", lastSync: null, error: null, errorSource: null },
+    }));
+    const { getByText } = render(<SyncSection />);
+    fireEvent.click(getByText("settings.sync.notConnected.signIn"));
+    expect(runAction).toHaveBeenCalledWith({ kind: "signIn" });
+  });
+});
+
+describe("SyncSection pause", () => {
+  beforeEach(() => vi.mocked(setSyncPaused).mockClear());
+  afterEach(() => { cleanup(); resetProvidersMock(); });
+
+  const pauseToggle = (c: HTMLElement) => toggleFor(c, "pause");
+  const voltius = (availability: string) => () => ({
+    providers: [view({ id: "voltius", label: "Voltius Sync", availability })],
+    effective: { configured: false, paused: false, status: "idle", lastSync: null, error: null, errorSource: null },
+  });
+
+  test("switching the pause on pauses sync", () => {
+    const { container } = render(<SyncSection />);
+    fireEvent.click(pauseToggle(container)!);
+    expect(setSyncPaused).toHaveBeenCalledWith(true);
+  });
+
+  test("a paused provider reads as paused and can be switched back", () => {
+    useSyncProvidersMock.mockImplementation(voltius("paused"));
+    const { container, getByText } = render(<SyncSection />);
+    expect(getByText("settings.sync.active.paused")).toBeTruthy();
+    expect(pauseToggle(container)!.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(pauseToggle(container)!);
+    expect(setSyncPaused).toHaveBeenCalledWith(false);
+  });
+
+  test("an unreachable server is named with its reason", () => {
+    useSyncProvidersMock.mockImplementation(() => ({
+      providers: [view({ id: "voltius", label: "Voltius Sync", state: { status: "offline", lastSync: null, error: "connection refused", blobSizeBytes: null, configured: true } })],
+      effective: { configured: true, paused: false, status: "offline", lastSync: null, error: null, errorSource: null },
+    }));
+    expect(render(<SyncSection />).getByText('settings.sync.active.offlineDetail:{"error":"connection refused"}')).toBeTruthy();
+  });
+
+  test("no pause is offered before sync is available", () => {
+    useSyncProvidersMock.mockImplementation(voltius("needs_upgrade"));
+    expect(pauseToggle(render(<SyncSection />).container)).toBeNull();
+    cleanup();
+    useSyncProvidersMock.mockImplementation(voltius("locked"));
+    expect(pauseToggle(render(<SyncSection />).container)).toBeNull();
+  });
+});
+
+describe("SyncSection plugin providers", () => {
+  afterEach(() => { cleanup(); resetProvidersMock(); });
+
+  const otherSync = {
+    id: "plugin-other-sync", name: "Other Sync", author: "a", description: "d", repo: "", version: "1.0.0",
+    tags: [], theme: false, sourceId: "voltius", permissions: ["sync:write"],
+  };
+
+  test("lists plugin providers without a hardcoded Gist group", () => {
+    const { container, queryByText } = render(<SyncSection />);
+    expect([...container.querySelectorAll("[data-sync-provider]")].map((e) => e.getAttribute("data-sync-provider")))
+      .toEqual(["plugin-cloudflare-sync", "plugin-gist-sync"]);
+    expect(queryByText("settings.sync.gistTitle")).toBeNull();
+  });
+
+  test("a disabled provider's button runs the enable action", () => {
+    const { container } = render(<SyncSection />);
+    const row = container.querySelector("[data-sync-provider='plugin-cloudflare-sync']")!;
+    fireEvent.click(row.querySelector("button")!);
+    expect(runAction).toHaveBeenCalledWith({ kind: "enable" });
+  });
+
+  test("a provider with a real syncNow renders Sync now and calls it on click", async () => {
+    const syncNow = vi.fn(async () => {});
+    useSyncProvidersMock.mockImplementation(() => ({
+      providers: [
+        ...defaultProviders(),
+        view({ id: "plugin-real-sync", label: "Real Sync", syncNow }),
+      ],
+      effective: { configured: true, status: "success", lastSync: null, error: null, errorSource: null },
+    }));
+    const { container } = render(<SyncSection />);
+    const row = container.querySelector("[data-sync-provider='plugin-real-sync']")!;
+    const button = row.querySelector("button")!;
+    expect(button.textContent).toContain("settings.sync.active.syncNow");
+    fireEvent.click(button);
+    await vi.waitFor(() => expect(syncNow).toHaveBeenCalledTimes(1));
+  });
+
+  test("installable providers are listed inside the Sync plugins group, after the installed ones", () => {
+    availableCatalog.list = [otherSync];
+    try {
+      const { container, getByText, queryByText } = render(<SyncSection />);
+      const group = getByText("settings.sync.providersTitle").parentElement!;
+      const rows = [...group.querySelectorAll("[data-sync-provider], [data-available-sync-provider]")];
+      expect(rows.map((r) => r.getAttribute("data-sync-provider") ?? r.getAttribute("data-available-sync-provider")))
+        .toEqual(["plugin-cloudflare-sync", "plugin-gist-sync", "plugin-other-sync"]);
+      expect(container.querySelectorAll("[data-available-sync-provider]")).toHaveLength(1);
+      expect(queryByText("settings.sync.availableTitle")).toBeNull();
+    } finally {
+      availableCatalog.list = [];
+    }
+  });
+
+  test("the Sync plugins group appears when only installable providers exist", () => {
+    useSyncProvidersMock.mockImplementation(() => ({
+      providers: [view({ id: "voltius", label: "Voltius Sync" })],
+      effective: { configured: true, status: "success", lastSync: null, error: null, errorSource: null },
+    }));
+    availableCatalog.list = [otherSync];
+    try {
+      const { getByText } = render(<SyncSection />);
+      const group = getByText("settings.sync.providersTitle").parentElement!;
+      expect(group.querySelector("[data-available-sync-provider='plugin-other-sync']")).not.toBeNull();
+    } finally {
+      availableCatalog.list = [];
+    }
+  });
+});
+
+describe("Local network group", () => {
+  afterEach(() => {
+    cleanup();
+    noAccount.value = true;
+    openDialog.mockClear();
+    setLanSyncPaused.mockClear();
+    useLanSyncStore.setState({ status: "stopped", paused: false });
+  });
+
+  test("a no-account install can open Pair a device", () => {
+    const { container } = render(<SyncSection />);
+    fireEvent.click(container.querySelector("[data-sync-pair]")!);
+    expect(openDialog).toHaveBeenCalled();
+  });
+
+  test("an account install shows local sync status and pause, but no pairing", () => {
+    noAccount.value = false;
+    useLanSyncStore.setState({ status: "running", paused: false });
+    const { container, getByText } = render(<SyncSection />);
+    expect(container.querySelector("[data-lan-status]")).not.toBeNull();
+    expect(getByText("layout.sync.local.status.none")).toBeTruthy();
+    expect(container.querySelector("[data-sync-pair]")).toBeNull();
+    fireEvent.click(toggleFor(container, "lanPause")!);
+    expect(setLanSyncPaused).toHaveBeenCalledWith(true);
+  });
+
+  test("a paused local sync reads as paused and resumes from the same toggle", () => {
+    noAccount.value = false;
+    useLanSyncStore.setState({ status: "paused", paused: true });
+    const { container, getByText } = render(<SyncSection />);
+    expect(getByText("layout.sync.local.status.paused")).toBeTruthy();
+    fireEvent.click(toggleFor(container, "lanPause")!);
+    expect(setLanSyncPaused).toHaveBeenCalledWith(false);
+  });
+
+  test("an account install whose local sync never started shows no Local network group", () => {
+    noAccount.value = false;
+    const { container } = render(<SyncSection />);
+    expect(container.querySelector("[data-lan-status]")).toBeNull();
   });
 });

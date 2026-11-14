@@ -2,10 +2,13 @@ import { test, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
 import type { PluginManifest } from "@/plugins/api";
 
-// Reproduces the Task 3 fix: a desktopOnly seeded plugin (e.g. plugin-ssh-config) is
+// Reproduces the Task 3 fix: a desktopOnly seeded plugin is
 // still loaded on Android but hidden from the Installed list by visiblePlugins — an
 // update for it must not be counted in the tab's "N updates" badge either, since
 // there is no row anywhere on Android to offer it through.
+
+const catalogEntry = (id: string, name: string, version = "1.0.0") =>
+  ({ id, name, author: "Voltius", description: "", repo: "", version, tags: [], theme: false, sourceId: "voltius" });
 
 const manifest = (id: string, extra: Partial<PluginManifest> = {}): PluginManifest =>
   ({ id, name: id, version: "1.0.0", description: "", permissions: [], ...extra } as PluginManifest);
@@ -39,10 +42,10 @@ vi.mock("@/stores/marketplaceStore", () => ({
     selector ? selector(marketplaceState) : marketplaceState,
   FIRST_PARTY_SOURCE,
 }));
-vi.mock("@/stores/notificationStore", () => ({
+vi.mock("@/stores/notificationStore", () => ({ APP_SOURCE: { kind: "app" },
   useNotificationStore: Object.assign(() => ({ push: vi.fn() }), { getState: () => ({ push: vi.fn() }) }),
 }));
-vi.mock("@/stores/toggleSettingsStore", () => ({ getToggle: () => false, useToggle: () => false }));
+vi.mock("@/stores/toggleSettingsStore", () => ({ getToggle: () => false, useToggle: () => [false, () => {}] }));
 vi.mock("@/components/shared/ToolbarViewControls", () => ({ useFilterShortcut: () => {} }));
 vi.mock("@/components/shared/Toggle", () => ({ Toggle: () => null }));
 vi.mock("@/components/settings/sections/PluginPermissionModal", () => ({ PluginPermissionModal: () => null }));
@@ -58,7 +61,7 @@ vi.mock("@/stores/seededTombstoneStore", () => ({
   loadSeededEntries: vi.fn(async () => seeded.entries),
 }));
 const androidFlag = vi.hoisted(() => ({ value: false }));
-vi.mock("@/utils/platform", () => ({ useIsAndroid: () => androidFlag.value }));
+vi.mock("@/utils/platform", () => ({ isMobilePlatform: (p: string | null) => p === "android" || p === "ios", useIsIOS: () => false, useIsAndroid: () => androidFlag.value, useIsMobile: () => androidFlag.value }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (k: string) => k }),
   initReactI18next: { type: "3rdParty", init: () => {} },
@@ -78,15 +81,15 @@ afterEach(() => {
   loaded.list = [];
   seeded.entries = new Map();
   usePluginRegistryStore.setState({ overrides: {} });
-  useUIStore.setState({ settingsSection: "plugins", settingsPluginPageId: null, settingsSubPage: null });
+  useUIStore.setState({ settingsSection: "plugins", settingsPluginPageId: null, settingsSubPage: null, pluginBrowseRequest: null });
 });
 
 test("a desktopOnly seeded plugin's update is counted and shown on desktop", async () => {
   androidFlag.value = false;
-  loaded.list = [manifest("plugin-ssh-config", { version: "1.0.0", desktopOnly: true })];
-  seeded.entries = new Map([["plugin-ssh-config", { folder: "ssh-config", manifest: loaded.list[0] }]]);
+  loaded.list = [manifest("plugin-gist-sync", { version: "1.0.0", desktopOnly: true })];
+  seeded.entries = new Map([["plugin-gist-sync", { folder: "gist-sync", manifest: loaded.list[0] }]]);
   marketplaceState.catalog = [
-    { id: "plugin-ssh-config", name: "SSH Config", author: "Voltius", description: "", repo: "", version: "2.0.0", tags: [], theme: false, sourceId: "voltius" },
+    catalogEntry("plugin-gist-sync", "GitHub Gist Sync", "2.0.0"),
   ];
   render(<PluginsSection />);
   expect(await screen.findByText(/updateCount/)).toBeTruthy();
@@ -94,10 +97,10 @@ test("a desktopOnly seeded plugin's update is counted and shown on desktop", asy
 
 test("a desktopOnly seeded plugin's update is NOT counted or shown on Android (no row exists to act on it)", async () => {
   androidFlag.value = true;
-  loaded.list = [manifest("plugin-ssh-config", { version: "1.0.0", desktopOnly: true })];
-  seeded.entries = new Map([["plugin-ssh-config", { folder: "ssh-config", manifest: loaded.list[0] }]]);
+  loaded.list = [manifest("plugin-gist-sync", { version: "1.0.0", desktopOnly: true })];
+  seeded.entries = new Map([["plugin-gist-sync", { folder: "gist-sync", manifest: loaded.list[0] }]]);
   marketplaceState.catalog = [
-    { id: "plugin-ssh-config", name: "SSH Config", author: "Voltius", description: "", repo: "", version: "2.0.0", tags: [], theme: false, sourceId: "voltius" },
+    catalogEntry("plugin-gist-sync", "GitHub Gist Sync", "2.0.0"),
   ];
   render(<PluginsSection />);
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -111,7 +114,7 @@ test("a loaded id with no real seeded artifact is never counted, even with a mat
   loaded.list = [manifest("plugin-docker", { version: "1.0.0" })];
   seeded.entries = new Map(); // no artifact behind this id
   marketplaceState.catalog = [
-    { id: "plugin-docker", name: "Docker", author: "Voltius", description: "", repo: "", version: "2.0.0", tags: [], theme: false, sourceId: "voltius" },
+    catalogEntry("plugin-docker", "Docker", "2.0.0"),
   ];
   render(<PluginsSection />);
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -123,8 +126,59 @@ test("a non-desktopOnly seeded plugin's update is still counted on Android", asy
   loaded.list = [manifest("plugin-docker", { version: "1.0.0" })];
   seeded.entries = new Map([["plugin-docker", { folder: "docker", manifest: loaded.list[0] }]]);
   marketplaceState.catalog = [
-    { id: "plugin-docker", name: "Docker", author: "Voltius", description: "", repo: "", version: "2.0.0", tags: [], theme: false, sourceId: "voltius" },
+    catalogEntry("plugin-docker", "Docker", "2.0.0"),
   ];
   render(<PluginsSection />);
   expect(await screen.findByText(/updateCount/)).toBeTruthy();
+});
+
+test("a browse request opens the Browse tab filtered to that plugin and is consumed", async () => {
+  marketplaceState.catalog = [catalogEntry("plugin-proxmox", "Proxmox"), catalogEntry("plugin-docker", "Docker")];
+  useUIStore.setState({ pluginBrowseRequest: { query: "Proxmox" } });
+  render(<PluginsSection />);
+  expect(await screen.findByDisplayValue("Proxmox")).toBeTruthy();
+  expect(screen.getByText("Proxmox")).toBeTruthy();
+  expect(screen.queryByText("Docker")).toBeNull();
+  expect(useUIStore.getState().pluginBrowseRequest).toBeNull();
+});
+
+test("a tag browse request preselects the tag and keeps theme entries that only set the theme flag", async () => {
+  marketplaceState.catalog = [
+    { ...catalogEntry("navy", "Navy"), tags: ["theme", "dark"], theme: true },
+    { ...catalogEntry("flagged", "Flagged"), theme: true },
+    catalogEntry("plugin-docker", "Docker"),
+  ];
+  useUIStore.setState({ pluginBrowseRequest: { tag: "theme" } });
+  render(<PluginsSection />);
+  expect(await screen.findByText("Navy")).toBeTruthy();
+  expect(screen.getByText("Flagged")).toBeTruthy();
+  expect(screen.queryByText("Docker")).toBeNull();
+  expect(screen.getByRole("button", { name: "theme" }).getAttribute("aria-pressed")).toBe("true");
+  expect(useUIStore.getState().pluginBrowseRequest).toBeNull();
+});
+
+test("a browse request arriving while the Installed tab is open switches to Browse", async () => {
+  marketplaceState.catalog = [catalogEntry("plugin-proxmox", "Proxmox"), catalogEntry("plugin-docker", "Docker")];
+  render(<PluginsSection />);
+  expect(screen.queryByDisplayValue("Proxmox")).toBeNull();
+  act(() => { useUIStore.setState({ pluginBrowseRequest: { query: "Proxmox" } }); });
+  expect(await screen.findByDisplayValue("Proxmox")).toBeTruthy();
+  expect(screen.queryByText("Docker")).toBeNull();
+});
+
+test("with installs turned off, Browse shows one notice and locks each Install button without a per-row note", async () => {
+  const { usePolicyStore } = await import("@/stores/policyStore");
+  usePolicyStore.setState({ machine: { policy: { "plugins.allowInstall": false }, defaults: {} } });
+  marketplaceState.catalog = [catalogEntry("plugin-proxmox", "Proxmox"), catalogEntry("plugin-docker", "Docker")];
+  useUIStore.setState({ pluginBrowseRequest: {} });
+  try {
+    render(<PluginsSection />);
+    expect(await screen.findByText("settings.plugins.browse.installsOff")).toBeTruthy();
+    const installs = screen.getAllByText("settings.plugins.browse.install").map((el) => el.closest("button")!);
+    expect(installs).toHaveLength(2);
+    expect(installs.every((b) => b.closest("fieldset[disabled]"))).toBe(true);
+    expect(screen.queryByText("common.policy.managed")).toBeNull();
+  } finally {
+    usePolicyStore.setState({ machine: { policy: {}, defaults: {} } });
+  }
 });

@@ -1,13 +1,13 @@
 [package]
 name = "voltius"
-version = "0.35.1"
+version = "0.72.0"
 description = "Open-Source SSH & SFTP Client"
 authors = ["Voltius Contributors"]
 edition = "2021"
 
 [lib]
 name = "voltius_lib"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 # NOTE: profiles are defined at the workspace root (Cargo.toml). Cargo ignores
 # `[profile.*]` in non-root members, so they must not live here.
@@ -16,6 +16,16 @@ crate-type = ["cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+clap = { version = "4", features = ["derive", "color", "suggestions", "wrap_help"] }
+clap_complete = "4"
+anstream = "0.6"
+anstyle = "1"
+url = "2"
+quick-xml = "0.39"
+httpdate = "1"
+percent-encoding = "2"
+infer = "0.19"
+png = "0.17"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
@@ -28,9 +38,15 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 # `des` enables the 3des-cbc cipher for the optional legacy-algorithms toggle.
-russh = { version = "0.62", features = ["des"] }
+russh = { version = "0.65.0", default-features = false, features = ["flate2", "rsa", "ring", "des"] }
 russh-sftp = "2.3"
-tokio-util = { version = "0.7", default-features = false }
+tokio-socks = "0.5"
+tokio-util = { version = "0.7", default-features = false, features = ["io", "io-util", "rt"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+tower-service = "0.3"
+http-body-util = "0.1"
+bytes = "1"
 tauri-plugin-dialog = "2"
 async-trait = "0.1"
 thiserror = "2"
@@ -40,14 +56,25 @@ voltius-diagnostics = { path = "../crates/voltius-diagnostics" }
 chacha20poly1305 = { version = "0.10", features = ["rand_core"] }
 voltius-crypto = { path = "../crates/voltius-crypto" }
 hkdf = "0.12"
+hmac = "0.12"
+snow = "0.9"
 sha2 = "0.10"
+zeroize = "1"
 rand = "0.8"
+mdns-sd = "0.21"
+if-addrs = "0.15"
+socket2 = { version = "0.6", features = ["all"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = "2"
 keyring-core = "1"
 base64 = "0.22"
 hostname = "0.4"
 crypto_secretbox = "0.1"
 rusty-leveldb = "4"
+rusqlite = { version = "0.40", features = ["bundled"] }
+ruzstd = "0.9"
+tar = "0.4"
+flate2 = "1"
 portable-pty = "0.9"
 ssh-key = { version = "0.6", features = ["ed25519", "p256", "p384", "p521", "rsa", "encryption"] }
 rsa = { version = "0.9", features = ["getrandom"] }
@@ -58,10 +85,12 @@ sysinfo = "0.39"
 fontdb = { version = "0.24", default-features = false, features = ["fs", "memmap", "std"] }
 bollard = "0.21"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 serialport = { version = "4", default-features = false }
 aes = "0.9"
 cfb8 = "0.9"
+cbc = { version = "0.2", features = ["block-padding"] }
+blowfish = { version = "0.10", features = ["bcrypt"] }
 # `ring` to match russh's existing TLS backend (avoid pulling in aws-lc-rs too).
 suppaftp = { version = "9", default-features = false, features = ["tokio-rustls-ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
@@ -69,15 +98,23 @@ rustls-native-certs = "0.8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+minisign-verify = "0.2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
 # machine-uid 0.6 has no Android/iOS backend (its lib.rs fails to compile there).
 # Desktop reads it via raw_machine_id(); mobile uses ANDROID_ID instead (see vault.rs).
 machine-uid = "0.6"
+plist = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-registry = "0.6"
 windows-native-keyring-store = "1"
+windows = { version = "0.61", features = ["Security_Credentials_UI", "Win32_System_WinRT"] }
+windows-future = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Persistent credential store: the Secret Service (gnome-keyring/KWallet) over
@@ -99,6 +136,29 @@ gio = "0.18"
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 
+# Touch ID / Face ID through LocalAuthentication (system_auth/macos.rs).
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSError"] }
+objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError", "block2"] }
+block2 = "0.6"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# NSArray for the share sheet (ios_native.rs); the rest for managed app configuration (policy/managed_ios.rs).
+objc2-foundation = { version = "0.3", features = [
+  "NSString",
+  "NSArray",
+  "NSUserDefaults",
+  "NSDictionary",
+  "NSValue",
+  "NSNotification",
+  "NSOperation",
+  "NSObject",
+  "block2",
+] }
+# iOS has only the data-protection keychain.
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 # reqwest's default rustls path uses aws-lc-rs + rustls-platform-verifier, which hangs
@@ -109,4 +169,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "1"
 
 [dev-dependencies]
+# Issues throwaway certificates for the TLS proxy tests, so no private key is committed.
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
 tempfile = "3"
+proptest = "1"
+# Paused clock, so stall-watchdog tests skip the real 15 s wait.
+tokio = { version = "1", features = ["test-util"] }
+vt100 = "0.16"

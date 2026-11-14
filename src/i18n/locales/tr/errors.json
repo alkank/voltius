@@ -1,0 +1,62 @@
+{
+  "errors": {
+    "permission-denied": "İzin reddedildi",
+    "not-found": "Böyle bir dosya veya klasör yok",
+    "already-exists": "Bu adda bir dosya veya klasör zaten var",
+    "storage-full": "Yeterli disk alanı veya kota kalmadı",
+    "read-only-filesystem": "Dosya sistemi salt okunur",
+    "connection-refused": "Sunucu bağlantıyı reddetti — adresi ve portu, ayrıca hizmetin çalıştığını kontrol edin",
+    "host-unreachable": "Sunucuya ulaşılamıyor — adresi ve ağ bağlantınızı kontrol edin",
+    "timed-out": "İşlem zaman aşımına uğradı",
+    "connection-lost": "Bağlantı koptu",
+    "connection-lost-resumable": "Bağlantı koptu — kaldığı yerden devam etmek için aktarımı tekrar deneyin",
+    "transfer-verify-failed": "Kopya orijinalle eşleşmediği için silindi — yeniden kopyalamak için tekrar deneyin",
+    "transfer-source-changed": "Dosya kopyalanırken değişmeye devam etti — yazılması bittiğinde tekrar deneyin",
+    "port-in-use": "{{port}} portu ve sonrakiler zaten kullanımda ({{attempts}} port denendi)",
+    "bind-address-unavailable": "Bu bilgisayarda {{address}} adresi yok",
+    "remote-forward-denied": "Sunucu uzak yönlendirmeyi reddetti — port orada zaten kullanımda olabilir ya da yönlendirmeye izin verilmiyor olabilir",
+    "ssh-legacy-algorithms-required": "Sunucu yalnızca varsayılan olarak kapalı olan eski algoritmaları sunuyor ({{offered}}). Bağlanmak için bu sunucuda \"Eski algoritmalar\" seçeneğini açın.",
+    "ssh-no-common-algorithm": "Sunucu yalnızca Voltius'un desteklemediği algoritmaları sunuyor: {{offered}}.",
+    "ssh-key-rejected": "Açık anahtar kimlik doğrulaması reddedildi",
+    "ssh-password-rejected": "Parola kimlik doğrulaması reddedildi — kullanıcı adını ve parolayı kontrol edin",
+    "ssh-password-expired": "Sunucu yeni bir parola istiyor — bir kez terminalden giriş yapıp parolayı orada değiştirin",
+    "ssh-prompt-unanswerable": "Sunucu \"{{prompt}}\" diye sordu; bu soru otomatik olarak yanıtlanamaz",
+    "ssh-no-usable-auth-method": "Kullanılabilir kimlik doğrulama yöntemi yok — sunucu yalnızca şunları kabul ediyor: {{methods}}",
+    "ssh-auth-timeout": "Kimlik doğrulama {{seconds}} sn sonra zaman aşımına uğradı — sunucu bağlantıyı kabul etti ama hiç yanıt vermedi. Bazı eski SSH sunucuları bu adımda takılır; sunucunun \"Eski algoritmalar\" seçeneğini ya da başka bir kimlik doğrulama yöntemini deneyin.",
+    "login-rejected": "Sunucu kullanıcı adını veya parolayı reddetti",
+    "resource-locked": "Dosya sunucuda kilitli — başka biri açmış olabilir",
+    "vault-locked": "$t(common.error.vaultLocked)",
+    "vault-unreadable": "$t(common.error.vaultUnreadable)",
+    "vault-sign-in-required": "Ekip kasaları etkin bir sunucu bağlantısı gerektirir. Devam etmek için oturum açın.",
+    "vault-read-only": "Bu kasaya yazma izniniz yok. Değişiklik yapabilen bir rol için bir kasa yöneticisine başvurun.",
+    "vault-role-read-only": "Bu kasaya yazma izniniz yok (rolünüz: {{role}}). Yalnızca sahipler, yöneticiler ve düzenleyiciler değişiklik yapabilir.",
+    "vault-permissions-unavailable": "Anahtar zinciri kullanılamadığı için kasa izinleri doğrulanamadı. Tekrar deneyin.",
+    "vault-permissions-corrupted": "Kasa izin verileri bozuk. Erişimi yenilemek için tekrar oturum açın.",
+    "knock-udp-via-proxy": "UDP vuruşları bir proxy üzerinden gönderilemez. Bu sunucu için TCP adımları veya doğrudan bağlantı kullanın.",
+    "device-file-access-off": "Bu cihazda dosya erişimi kapalı. Cihazda Ayarlar › Cihazlar bölümünden açın.",
+    "device-access-denied": "Cihaz, dosyalarını açma isteğini reddetti.",
+    "device-approval-timed-out": "Cihazdaki isteğe zamanında yanıt verilmedi.",
+    "device-busy": "Bu cihazda çok fazla dosya oturumu açık. Birini kapatıp tekrar deneyin.",
+    "device-unreachable": "Bu cihaza ulaşılamıyor. Açık ve aynı ağda olduğundan emin olun.",
+    "device-access-expired": "Bu cihaza erişim sona erdi. İzin istemek için yeniden açın.",
+    "device-read-only": "Bu cihaz bu klasörleri salt okunur olarak paylaşıyor.",
+    "device-forgotten": "Bu cihazı unuttunuz, bu yüzden dosyaları kapatıldı.",
+    "pair": {
+      "ended": {
+        "accountDevice": "Diğer cihaz bir Voltius hesabına giriş yapmış. Burada aynı hesapla giriş yapın.",
+        "bothGrouped": "İki cihaz da zaten başka cihazlarla eşlenmiş. Birinde gruptan ayrılın, sonra yeniden eşleyin.",
+        "alreadyPaired": "Bu cihazlar zaten eşlenmiş.",
+        "timedOut": "Eşleme zaman aşımına uğradı.",
+        "cancelled": "Eşleme iptal edildi.",
+        "busy": "Diğer cihaz şu anda başka biriyle eşleniyor. Biraz sonra tekrar deneyin.",
+        "tooManyAttempts": "Çok fazla başarısız deneme. Eşleme kapatıldı. Yeniden denemek için Cihaz eşle ekranını tekrar açın.",
+        "failed": "Eşleme tamamlanamadı. Tekrar deneyin.",
+        "stopped": "Eşleme durdu. Yeniden denemek için Cihaz eşle ekranını tekrar açın."
+      }
+    }
+  },
+  "errorAt": {
+    "proxy": "Proxy {{proxy}}: {{cause}}",
+    "jumpHost": "Atlama sunucusu {{jumpHost}}: {{cause}}"
+  }
+}

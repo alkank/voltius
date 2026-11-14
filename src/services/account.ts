@@ -1,17 +1,42 @@
-import { invoke } from "@tauri-apps/api/core";
+import { notifyAccountModeChanged } from "@/utils/accountMode";
+import { deriveX25519Keypair, wrapUserSecrets } from "@/services/crypto/identityKeys";
+import { invoke } from "@/lib/invoke";
+import { featureDisabledError } from "@/services/featureDisabled";
 import i18n from "@/i18n";
-import { setVaultKey, verifyVaultKey, lockVault, getVaultStatus, unlockVaultIfNeeded, wipeLocalConfig } from "./vault";
+import { logFailure } from "@/lib/logger";
+import { setVaultKey, getVaultKey, verifyVaultKey, lockVault, getVaultStatus, unlockVaultIfNeeded, wipeLocalConfig, readLocalSecrets } from "./vault";
+import { deviceScopedSecretKeys } from "./deviceScopedSecrets";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
 import { useVaultKeysStore } from "@/stores/vaultKeysStore";
-import { appFetch, isAbortError } from "@/services/http";
+import { sameKey } from "./vaultKeyCandidates";
+import { fetchWithTimeout } from "@/services/fetchWithTimeout";
 import { VaultUnreadableError } from "./vaultErrors";
-import { rememberServer } from "@/utils/serverInstance";
+import {
+  clearSecret, keepsPlainPassword, readPlainSecret, readSecret, rememberPassword, replacePassword, secretState, storeDeviceKey,
+  storePassword,
+} from "./vaultSecret";
+import { serverAllowed } from "@/services/policy/serverPolicy";
+import { ServerBlockedError } from "@/services/accountErrors";
+import { normalizeServerUrl, rememberServer } from "@/utils/serverInstance";
+import { base64ToByteArray, bytesToHex, hexToBytes } from "@/utils/base64";
+import { EmailUndeliverableError, isEmailUndeliverable } from "@/utils/emailVerification";
+import { deleteAccountFailure } from "@/utils/deleteAccount";
+import type { SavedAccount } from "./savedAccounts";
+import { joinRefusal, toEnrollmentOutcome, type EnrollmentCredential, type EnrollmentOutcome } from "./enrollment/enrollmentPublic";
+import { enrollmentErrorFrom } from "./enrollment/enrollmentApi";
+import { invitationRefusal, RegistrationClosedError } from "./teamInvitation";
+import { adoptSessionTokens, authDevice, refreshAccessToken } from "./authTokens";
+import { fetchAuth } from "./authFetch";
+export { adoptSessionTokens } from "./authTokens";
+import { proofBody, twoFactorError, TwoFactorRequiredError, type TwoFactorProof } from "./twoFactorProof";
+import {
+  authChallenge, authErrorToError, authLogin, authPasskeyStart, authSecondFactor, type LoginData, type Refused,
+} from "./authClient";
 
 function reloadSubscription() {
   useSubscriptionStore.getState().load().catch(() => {});
 }
 
-const FORCE_LOCK_FLAG_KEY = "voltius.force-lock-next-auth";
 
 interface DeriveKeysResult {
   auth_key: string;   // base64 — sent to server
@@ -29,14 +54,6 @@ interface UnwrappedUserSecrets {
   x25519_private: number[];
 }
 
-function hexToBytes(hex: string): number[] {
-  const bytes: number[] = [];
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes.push(parseInt(hex.slice(i, i + 2), 16));
-  }
-  return bytes;
-}
-
 function isHexEncoded32ByteKey(value: string): boolean {
   return /^[0-9a-fA-F]{64}$/.test(value);
 }
@@ -49,17 +66,14 @@ async function generateUserSecrets(): Promise<GeneratedUserSecrets> {
   return invoke<GeneratedUserSecrets>("generate_user_secrets_cmd");
 }
 
-async function wrapUserSecrets(kek: number[], dek: number[], x25519Private: number[]): Promise<string> {
-  return invoke<string>("wrap_user_secrets_cmd", { kek, dek, x25519Private });
-}
-
 async function unwrapUserSecrets(kek: number[], wrappedB64: string): Promise<UnwrappedUserSecrets> {
   return invoke<UnwrappedUserSecrets>("unwrap_user_secrets_cmd", { kek, wrappedB64 });
 }
 
-/** The identity every wrap and unwrap uses; `getMyX25519Keypair` derives the same. */
-async function deriveX25519Keypair(encKey: number[]): Promise<{ public_key: string; private_key: string }> {
-  return invoke<{ public_key: string; private_key: string }>("derive_x25519_keypair", { encKey });
+/** What lets a registration through besides open sign-up: an enrolment token or an emailed invitation. */
+export interface SignupCredential {
+  enrollment?: EnrollmentCredential;
+  invitation?: string;
 }
 
 async function registerOnServer(args: {
@@ -69,8 +83,12 @@ async function registerOnServer(args: {
   authKey: string;
   publicKey: string;
   wrappedUserSecrets: string;
-}): Promise<{ jwt_token: string; refresh_token: string }> {
-  const machine_fingerprint = await invoke<string | null>("get_machine_fingerprint").catch(() => null);
+  credential: SignupCredential;
+}): Promise<{ jwt_token: string; refresh_token: string; enrollment?: EnrollmentOutcome }> {
+  const [machine_fingerprint, device] = await Promise.all([
+    invoke<string | null>("get_machine_fingerprint").catch(() => null),
+    authDevice(),
+  ]);
 
   const res = await fetchWithTimeout(`${args.serverUrl}/v1/auth/register`, {
     method: "POST",
@@ -82,16 +100,51 @@ async function registerOnServer(args: {
       public_key: args.publicKey,
       wrapped_user_secrets: args.wrappedUserSecrets,
       machine_fingerprint,
+      device,
+      ...(args.credential.enrollment && { enrollment: args.credential.enrollment }),
+      ...(args.credential.invitation && { invitation: args.credential.invitation }),
     }),
   });
 
   if (res.status === 409) throw new Error(i18n.t("common.error.emailAlreadyRegistered"));
-  if (!res.ok) throw new Error(i18n.t("common.error.registrationFailed", { status: res.status }));
-  return res.json();
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const failed = { status: res.status, headers: res.headers, json: async () => body };
+    const refused = args.credential.enrollment ? await enrollmentErrorFrom(failed) : null;
+    if (joinRefusal(refused)) throw refused;
+    const code = (body as { error?: unknown } | null)?.error;
+    const invitationError = invitationRefusal(code);
+    if (invitationError) throw invitationError;
+    if (code === "REGISTRATION_DISABLED") throw new RegistrationClosedError(i18n.t("common.error.registrationDisabled"));
+    throw (await featureDisabledError(failed)) ?? new Error(i18n.t("common.error.registrationFailed", { status: res.status }));
+  }
+  const data = await res.json();
+  rememberWithdrawnInvitations(data.withdrawn_invitations);
+  return { ...data, enrollment: toEnrollmentOutcome(data.enrollment) ?? undefined };
 }
 
-function normalizeServerUrl(url: string): string {
-  return url.replace(/\/+$/, "");
+// Held in sessionStorage because adding an account reloads the window before anything is shown.
+const WITHDRAWN_INVITATIONS_KEY = "voltius.withdrawn-invitations";
+
+function rememberWithdrawnInvitations(withdrawn: { team_name: string }[] | undefined): void {
+  if (!withdrawn?.length) return;
+  sessionStorage.setItem(WITHDRAWN_INVITATIONS_KEY, JSON.stringify(withdrawn.map((w) => w.team_name)));
+}
+
+export async function announceWithdrawnInvitations(): Promise<void> {
+  const saved = sessionStorage.getItem(WITHDRAWN_INVITATIONS_KEY);
+  if (!saved) return;
+  sessionStorage.removeItem(WITHDRAWN_INVITATIONS_KEY);
+  const { APP_SOURCE, useNotificationStore } = await import("@/stores/notificationStore");
+  for (const team of JSON.parse(saved) as string[]) {
+    useNotificationStore.getState().addToast({
+      source: APP_SOURCE,
+      type: "toast",
+      message: i18n.t("common.toast.invitationWithdrawnAtSignup", { team }),
+      severity: "warning",
+      duration: 0,
+    });
+  }
 }
 
 /** Unwrap cached user secrets into the vault-keys store; null when unusable. */
@@ -110,8 +163,9 @@ async function adoptUserSecrets(kek: number[], wrapped: string | null): Promise<
   }
 }
 
-/** First candidate that opens secrets.enc; the first one when no vault exists yet. */
-async function keyThatOpensVault(...candidates: number[][]): Promise<number[] | null> {
+/** First present candidate that opens secrets.enc; the first one when no vault exists yet. */
+async function keyThatOpensVault(...maybe: Array<number[] | null | undefined>): Promise<number[] | null> {
+  const candidates = maybe.filter((k): k is number[] => !!k);
   const { exists } = await getVaultStatus();
   if (!exists) return candidates[0] ?? null;
   for (const key of candidates) {
@@ -159,25 +213,26 @@ async function passwordVaultKey(kek: number[], recoverFromServer: boolean): Prom
     if (recovered === null) useVaultKeysStore.getState().markIdentityUnproven();
     else if (recovered !== "legacy") dek = recovered;
   }
-  return keyThatOpensVault(...(dek ? [dek, kek] : [kek]));
+  const prior = await keychainGet(PRIOR_WRAPPED_KEY);
+  const priorKey = prior ? await wrappedVaultKey(kek, prior) : null;
+  const opened = await keyThatOpensVault(dek, kek, priorKey);
+  // A password-mode vault never needs it; left behind, it outlives the password's seal.
+  if (opened && (await keychainGet(PENDING_VAULT_KEY))) await keychainDelete(PENDING_VAULT_KEY);
+  if (opened && prior) await settlePriorWrapped(kek, prior, opened);
+  return opened;
 }
 
-async function fetchWithTimeout(input: string, init?: RequestInit, timeoutMs = 10_000): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await appFetch(input, { ...init, signal: controller.signal, connectTimeout: timeoutMs });
-  } catch (e) {
-    if (isAbortError(e)) {
-      throw new Error(i18n.t("common.error.serverUnreachableTimeout"));
-    }
+async function storedWrappedKey(kek: number[], entry: string): Promise<number[] | null> {
+  const wrapped = await keychainGet(entry);
+  return wrapped ? wrappedVaultKey(kek, wrapped) : null;
+}
 
-    // WebView2 / network errors are often opaque objects; normalise them.
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(i18n.t("common.error.networkError", { message: msg }));
-  } finally {
-    clearTimeout(timer);
-  }
+/** Read-only: the vault opens, or with no vault the cached wrapped secrets unwrap. */
+async function passwordProvenOffline(kek: number[]): Promise<boolean> {
+  const dek = await storedWrappedKey(kek, "wrapped_user_secrets");
+  if (!(await getVaultStatus()).exists) return !!dek;
+  const prior = await storedWrappedKey(kek, PRIOR_WRAPPED_KEY);
+  return !!(await keyThatOpensVault(dek, kek, prior));
 }
 
 // ─── Keychain helpers ─────────────────────────────────────────────────────────
@@ -186,11 +241,15 @@ async function keychainGet(key: string): Promise<string | null> {
   return invoke<string | null>("keychain_get", { key });
 }
 async function keychainSet(key: string, value: string): Promise<void> {
-  return invoke("keychain_set", { key, value });
+  await invoke("keychain_set", { key, value });
+  if (key === "mode") notifyAccountModeChanged();
 }
 async function keychainDelete(key: string): Promise<void> {
   return invoke("keychain_delete", { key });
 }
+
+const PENDING_VAULT_KEY = "vault_key_pending";
+const PRIOR_WRAPPED_KEY = "wrapped_user_secrets_prior";
 
 /**
  * Write the keychain entries that make a server session, for every route into
@@ -206,60 +265,91 @@ async function persistServerSession(session: {
   jwt?: string;
   refreshToken?: string;
 }): Promise<void> {
-  if (session.password) await keychainSet("master_password", session.password);
+  if (session.password) await storePassword(session.password);
   if (session.accountId) await keychainSet("account_id", session.accountId);
   await keychainSet("mode", "server");
   await keychainSet("email", session.email);
-  if (session.jwt) await keychainSet("jwt", session.jwt);
-  if (session.refreshToken) await keychainSet("refresh_token", session.refreshToken);
   await keychainSet("server_url", session.serverUrl);
+  if (session.jwt && session.refreshToken) {
+    await adoptSessionTokens({ jwt_token: session.jwt, refresh_token: session.refreshToken });
+  }
   rememberServer(session.serverUrl);
 }
 
-function setForceLockFlag(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(FORCE_LOCK_FLAG_KEY, "1");
-  } catch {
-    // Ignore storage availability errors in hardened runtimes.
-  }
+function failWith(expected: string | Refused, step?: "second") {
+  return (e: unknown): never => {
+    throw authErrorToError(e, expected, step);
+  };
 }
 
-export function consumeForceLockFlag(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const forced = window.sessionStorage.getItem(FORCE_LOCK_FLAG_KEY) === "1";
-    if (forced) window.sessionStorage.removeItem(FORCE_LOCK_FLAG_KEY);
-    return forced;
-  } catch {
-    return false;
-  }
+async function accountIdFor(serverUrl: string, email: string): Promise<string> {
+  return authChallenge(serverUrl, email).catch(failWith("common.error.accountNotFound"));
 }
 
-export async function lockVaultSession(): Promise<void> {
+/**
+ * Sign in and hand the session to `then`. An account with two-factor on throws
+ * TwoFactorRequiredError instead, whose `complete` runs the same `then` once a
+ * code is accepted, so every caller's follow-up survives the extra step.
+ */
+async function serverLogin<T>(
+  serverUrl: string,
+  accountId: string,
+  authKey: string,
+  refused: string | Refused,
+  then: (data: LoginData) => Promise<T>,
+): Promise<T> {
+  const step = await authLogin(serverUrl, accountId, authKey).catch(failWith(refused));
+  if (step.kind === "signed") return then(step.data);
+  const second = <R>(call: Promise<R>) => call.catch(failWith(refused, "second"));
+  throw new TwoFactorRequiredError<T>(
+    step.methods,
+    async (proof) => then(await second(authSecondFactor(serverUrl, step.pendingToken, proof))),
+    async (returnTo) => ({ url: await second(authPasskeyStart(serverUrl, step.pendingToken, returnTo)) }),
+  );
+}
+
+export type LockKind = "screen" | "vault";
+
+export async function getAppLock(): Promise<LockKind | null> {
+  return invoke<LockKind | null>("app_lock_get").catch(() => null);
+}
+
+// The backend holds the lock in memory before it writes, so a failed write still locks this run.
+export async function setAppLock(kind: LockKind | null): Promise<void> {
+  await invoke("app_lock_set", { kind }).catch((e) => console.warn("[app-lock] marker not persisted:", e));
+}
+
+export async function lockVaultSession({ keepKeychainEntry = false }: { keepKeychainEntry?: boolean } = {}): Promise<void> {
+  await setAppLock("vault");
   const mode = await keychainGet("mode");
   await lockVault();
-  setForceLockFlag();
-
-  // Lock should require re-entering the master password on local/server accounts.
-  if (mode === "local" || mode === "server") {
-    await keychainDelete("master_password");
+  if (!keepKeychainEntry && (mode === "local" || mode === "server")) {
+    await clearSecret();
   }
+}
+
+/** Derives the key rather than reading the keychain, which holds no plaintext once bound. */
+export async function isCurrentMasterPassword(password: string): Promise<boolean> {
+  const accountId = await keychainGet("account_id");
+  if (!accountId) return false;
+  const { enc_key: kek } = await deriveKeys(password, accountId);
+  return sameKey(useVaultKeysStore.getState().kek, kek) || sameKey(getVaultKey(), kek);
 }
 
 // ─── Account operations ───────────────────────────────────────────────────────
 
+export function randomVaultKey(): number[] {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)));
+}
+
 /** First launch, no friction — random key protected by OS keychain. */
 export async function createLocalAccountNoPassword(): Promise<void> {
   const accountId = crypto.randomUUID();
-  const rawKey = crypto.getRandomValues(new Uint8Array(32));
-  const keyBytes = Array.from(rawKey);
-  // Store key as hex so we can recover it from keychain on next launch
-  const keyHex = keyBytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const keyBytes = randomVaultKey();
 
   setVaultKey(keyBytes);
 
-  await keychainSet("master_password", keyHex); // hex = "password" for this mode
+  await storeDeviceKey(bytesToHex(keyBytes)); // hex = "password" for this mode
   await keychainSet("account_id", accountId);
   await keychainSet("mode", "local-nopassword");
 }
@@ -271,18 +361,12 @@ export async function createLocalAccount(password: string): Promise<void> {
 
   setVaultKey(enc_key);
 
-  await keychainSet("master_password", password);
+  await storePassword(password);
   await keychainSet("account_id", accountId);
   await keychainSet("mode", "local");
 }
 
-/** Cloud account — registers on server and stores JWT. */
-export async function createServerAccount(
-  email: string,
-  password: string,
-  serverUrl: string,
-): Promise<void> {
-  serverUrl = normalizeServerUrl(serverUrl);
+async function registerServerAccount(email: string, password: string, serverUrl: string, credential: SignupCredential) {
   const accountId = crypto.randomUUID();
   const { auth_key, enc_key } = await deriveKeys(password, accountId);
   const secrets = await generateUserSecrets();
@@ -293,10 +377,23 @@ export async function createServerAccount(
 
   const data = await registerOnServer({
     serverUrl, email, accountId, authKey: auth_key,
-    publicKey: public_key, wrappedUserSecrets: wrapped_user_secrets,
+    publicKey: public_key, wrappedUserSecrets: wrapped_user_secrets, credential,
   });
+  return { accountId, kek: enc_key, secrets, wrapped_user_secrets, data };
+}
 
-  useVaultKeysStore.getState().set({ dek: secrets.dek, x25519Private: secrets.x25519_private, kek: enc_key });
+/** Cloud account — registers on server and stores JWT. */
+export async function createServerAccount(
+  email: string,
+  password: string,
+  serverUrl: string,
+  credential: SignupCredential = {},
+): Promise<EnrollmentOutcome | null> {
+  serverUrl = normalizeServerUrl(serverUrl);
+  const { accountId, kek, secrets, wrapped_user_secrets, data } =
+    await registerServerAccount(email, password, serverUrl, credential);
+
+  useVaultKeysStore.getState().set({ dek: secrets.dek, x25519Private: secrets.x25519_private, kek });
   setVaultKey(secrets.dek);
 
   await persistServerSession({
@@ -305,6 +402,7 @@ export async function createServerAccount(
   });
   await keychainSet("wrapped_user_secrets", wrapped_user_secrets);
   reloadSubscription();
+  return data.enrollment ?? null;
 }
 
 /** Unlock with password (vault must exist). */
@@ -312,14 +410,11 @@ export async function login(password: string, email?: string, serverUrl?: string
   if (serverUrl) serverUrl = normalizeServerUrl(serverUrl);
   let accountId = await keychainGet("account_id");
 
-  if (!accountId && email && serverUrl) {
-    const res = await fetchWithTimeout(`${serverUrl}/v1/auth/challenge?email=${encodeURIComponent(email)}`);
-    if (!res.ok) throw authFailure(res.status, "common.error.accountNotFound");
-    accountId = (await res.json()).account_id;
-  }
+  if (!accountId && email && serverUrl) accountId = await accountIdFor(serverUrl, email);
   if (!accountId) throw new Error(i18n.t("common.error.noAccountFoundCreateOne"));
 
   const mode = await keychainGet("mode");
+  const blocked = !serverUrl && (await storedServerBlocked(mode));
 
   // Re-authenticate with server if in server mode (e.g. after logout deleted the JWT)
   const resolvedEmail = email ?? await keychainGet("email");
@@ -331,57 +426,89 @@ export async function login(password: string, email?: string, serverUrl?: string
       : null;
 
   let encKey: number[];
+  let cachedSecretsOpen = false;
   if (mode === "local-nopassword") {
     // password IS the stored hex key — convert back to bytes
     encKey = hexToBytes(password);
     if (!(await keyThatOpensVault(encKey))) throw new Error(i18n.t("common.error.incorrectPassword"));
   } else {
     const { enc_key: kek } = await deriveKeys(password, accountId);
+    if (blocked) {
+      if (!(await passwordProvenOffline(kek))) throw new Error(i18n.t("common.error.incorrectPassword"));
+      throw new ServerBlockedError(password);
+    }
     const opened = await passwordVaultKey(kek, false);
     // Without a cached dek only the server can supply a cloud vault's key.
     if (!opened && !reauth) throw new Error(i18n.t("common.error.incorrectPassword"));
+    // Only the dek unwrapped from this device's cached secrets proves the password without the server.
+    cachedSecretsOpen = !!opened && opened !== kek;
     encKey = opened ?? kek;
   }
 
-  setVaultKey(encKey);
+  const deviceKey = mode === "local-nopassword" || (!mode && isHexEncoded32ByteKey(password));
+  const openLocally = async () => {
+    setVaultKey(encKey);
+    await (deviceKey ? storeDeviceKey(password) : rememberPassword(password));
+    await keychainSet("account_id", accountId);
+    if (!mode) {
+      // Heal missing mode for local accounts (e.g. Windows after mock-keychain loss).
+      // Server mode is corrected below if server auth succeeds.
+      await keychainSet("mode", isHexEncoded32ByteKey(password) ? "local-nopassword" : "local");
+    }
+  };
 
-  await keychainSet("master_password", password);
-  await keychainSet("account_id", accountId);
-  if (!mode) {
-    // Heal missing mode for local accounts (e.g. Windows after mock-keychain loss).
-    // Server mode is corrected below if server auth succeeds.
-    await keychainSet("mode", isHexEncoded32ByteKey(password) ? "local-nopassword" : "local");
+  if (!reauth) return openLocally();
+
+  // An unlock is not a sign-in: while the server still honours this device's
+  // session, a password that opened the vault has nothing left to prove.
+  if (cachedSecretsOpen && (await sessionStillHonoured())) {
+    await openLocally();
+    await persistServerSession({ serverUrl: reauth.serverUrl, email: reauth.email });
+    reloadSubscription();
+    return;
   }
 
-  if (reauth) {
-    const { auth_key, enc_key: kek } = await deriveKeys(password, accountId);
-    const res = await fetchWithTimeout(`${reauth.serverUrl}/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account_id: accountId, auth_key }),
-    });
-    if (!res.ok) throw new Error(i18n.t("common.error.serverLoginFailed"));
-    const data = await res.json();
-    await persistServerSession({
-      serverUrl: reauth.serverUrl, email: reauth.email,
-      jwt: data.jwt_token, refreshToken: data.refresh_token,
-    });
+  const readStoredPassword = await passwordStoredBefore();
+  const { auth_key, enc_key: kek } = await deriveKeys(password, accountId);
+  const knownHere = await cachedSecretsUnwrapWith(kek);
+  // The local writes wait for the server: a sign-in left at the code step must not look like a local account.
+  await serverLogin(
+    reauth.serverUrl, accountId, auth_key,
+    () => new Error(i18n.t("common.error.serverLoginFailed")),
+    async (data) => {
+      await openLocally();
+      await persistServerSession({
+        serverUrl: reauth.serverUrl, email: reauth.email,
+        jwt: data.jwt_token, refreshToken: data.refresh_token,
+      });
 
-    if (data.wrapped_user_secrets) {
-      const unwrapped = await unwrapUserSecrets(kek, data.wrapped_user_secrets);
-      useVaultKeysStore.getState().set({ dek: unwrapped.dek, x25519Private: unwrapped.x25519_private, kek });
-      // This device's secrets.enc may predate the split and still be kek-encrypted.
-      const opens = await keyThatOpensVault(unwrapped.dek, kek);
-      // Server login proved the password, so this is an unreadable file, not a bad one.
-      if (!opens) throw new VaultUnreadableError();
-      setVaultKey(opens);
-      await keychainSet("wrapped_user_secrets", data.wrapped_user_secrets);
-    } else {
-      // Legacy account — trigger one-time migration
-      await migrateToWrappedUserSecrets(password, accountId, kek, reauth.serverUrl, data.jwt_token);
-    }
+      if (data.wrapped_user_secrets) {
+        const unwrapped = await unwrapUserSecrets(kek, data.wrapped_user_secrets);
+        useVaultKeysStore.getState().set({ dek: unwrapped.dek, x25519Private: unwrapped.x25519_private, kek });
+        await keychainSet("wrapped_user_secrets", data.wrapped_user_secrets);
+        // This device's secrets.enc may predate the split and still be kek-encrypted.
+        const opens = (await keyThatOpensVault(unwrapped.dek, kek, encKey))
+          ?? (await reopenWithStoredPassword(readStoredPassword, password, accountId, unwrapped.dek));
+        // Server login proved the password, so this is an unreadable file, not a bad one.
+        if (!opens) throw new VaultUnreadableError();
+        setVaultKey(opens);
+        // After the reopen: it may still need the old sealed password.
+        if (!knownHere) await resealChangedPassword(password);
+      } else {
+        // Legacy account — trigger one-time migration
+        await migrateToWrappedUserSecrets(password, accountId, kek, reauth.serverUrl, data.jwt_token);
+      }
 
-    reloadSubscription();
+      reloadSubscription();
+    },
+  );
+}
+
+async function sessionStillHonoured(): Promise<boolean> {
+  try {
+    return typeof (await refreshAccessToken({ fetchImpl: fetchWithTimeout, quiet: true })) !== "string";
+  } catch {
+    return false;
   }
 }
 
@@ -390,24 +517,38 @@ export async function login(password: string, email?: string, serverUrl?: string
  * the account has no master password to retype, so the unlock prompt cannot help
  * and the caller must offer the vault recovery screen instead.
  */
-export type AutoLoginOutcome = "ok" | "declined" | "vault-unreadable";
+export type AutoLoginOutcome = "ok" | "declined" | "vault-unreadable" | "sealed" | "wrong-key" | "server-blocked";
 
 /** Auto-login from keychain — instant (no secret access). */
 export async function autoLogin(): Promise<AutoLoginOutcome> {
   // A keychain failure here (e.g. an OS keychain backend unavailable on a platform)
   // must degrade to "no session", never throw — an unhandled rejection would abort the
   // splash init and freeze the app on its loading screen.
-  let password: string | null, accountId: string | null, mode: string | null;
+  let password: string | null;
   try {
-    [password, accountId, mode] = await Promise.all([
-      keychainGet("master_password"),
-      keychainGet("account_id"),
-      keychainGet("mode"),
-    ]);
+    if ((await secretState()) === "sealed") {
+      return (await storedServerBlocked(await keychainGet("mode"))) ? "server-blocked" : "sealed";
+    }
+    password = await readPlainSecret();
   } catch {
     return "declined";
   }
   if (!password) return "declined";
+  return openWithStoredSecret(password);
+}
+
+async function storedServerBlocked(mode: string | null): Promise<boolean> {
+  return mode === "server" && !serverAllowed(await keychainGet("server_url"));
+}
+
+/** The launch-time unlock, given the stored secret however it was obtained. */
+export async function openWithStoredSecret(password: string): Promise<AutoLoginOutcome> {
+  let accountId: string | null, mode: string | null;
+  try {
+    [accountId, mode] = await Promise.all([keychainGet("account_id"), keychainGet("mode")]);
+  } catch {
+    return "declined";
+  }
 
   try {
     let encKey: number[];
@@ -415,13 +556,12 @@ export async function autoLogin(): Promise<AutoLoginOutcome> {
     // In OS-keychain mode, the stored value is already the encryption key.
     // Some older installs may miss mode/account_id metadata; heal it silently.
     if (mode === "local-nopassword" || (!mode && !accountId && isHexEncoded32ByteKey(password))) {
-      if (!isHexEncoded32ByteKey(password)) return "declined";
-      encKey = hexToBytes(password); // password = stored hex key
-
       // The key lives in the OS keychain and is the only one this account has, so
       // a vault it cannot open is unreadable, not a wrong password. Installing it
       // regardless would defer the failure to the first secret read, inside the app.
-      if (!(await keyThatOpensVault(encKey))) return "vault-unreadable";
+      const opened = await noPasswordVaultKey(password);
+      if (!opened) return isHexEncoded32ByteKey(password) ? "vault-unreadable" : "declined";
+      encKey = opened;
 
       if (!accountId) {
         await keychainSet("account_id", crypto.randomUUID());
@@ -431,6 +571,7 @@ export async function autoLogin(): Promise<AutoLoginOutcome> {
       }
     } else {
       if (!accountId) return "declined";
+      if (await storedServerBlocked(mode)) return "server-blocked";
       const { enc_key: kek } = await deriveKeys(password, accountId);
 
       // Local Tauri calls only, except a cloud account missing its wrapped
@@ -438,7 +579,7 @@ export async function autoLogin(): Promise<AutoLoginOutcome> {
       const opened = await passwordVaultKey(kek, mode === "server");
       // Decline rather than install a key already proven not to open the file.
       // A password account keeps the unlock prompt: another password may open it.
-      if (!opened) return "declined";
+      if (!opened) return "wrong-key";
       encKey = opened;
 
       if (!mode) {
@@ -474,9 +615,30 @@ export async function logout(): Promise<void> {
   await resetVault();
 }
 
+/**
+ * Permanently deletes the signed-in cloud account (DELETE /v1/auth/account),
+ * then signs this device out. The server cancels a renewing subscription and
+ * removes the account in one go, or refuses with a coded error (see
+ * `deleteAccountFailure`). On any failure the session is left intact, since
+ * the account still exists.
+ */
+export async function deleteAccount(): Promise<void> {
+  const serverUrl = await keychainGet("server_url");
+  if (!serverUrl) throw new Error(i18n.t("common.error.notConnectedToServer"));
+  const res = await fetchAuth(`${serverUrl}/v1/auth/account`, { method: "DELETE" });
+  if (!res.ok) {
+    const body: unknown = await res.json().catch(() => null);
+    const { key, params } = deleteAccountFailure(res.status, body);
+    throw new Error(i18n.t(key, params));
+  }
+  await logout();
+}
+
 export async function getAccountMode(): Promise<string | null> {
   return keychainGet("mode");
 }
+
+export { getAccountId } from "./authTokens";
 
 export async function getCurrentUserEmail(): Promise<string | null> {
   return keychainGet("email");
@@ -489,7 +651,12 @@ export interface MeResponse {
   allow_stranger_invites?: boolean;
   tier?: string;
   email_verified?: boolean;
+  email_undeliverable?: boolean;
+  handle_managed?: boolean;
+  two_factor_enabled?: boolean;
 }
+
+export const EMAIL_CHANGED_EVENT = "voltius:email-changed";
 
 /** Fetches /v1/auth/me and caches the handle for offline use. Returns the
  *  full payload so callers that need the live tier/preference fields — the
@@ -528,21 +695,9 @@ export async function getMyHandle(): Promise<string> {
 }
 
 async function refreshJwt(): Promise<void> {
-  const [refreshToken, serverUrl] = await Promise.all([
-    keychainGet("refresh_token"),
-    keychainGet("server_url"),
-  ]);
-  if (!refreshToken || !serverUrl) throw new Error(i18n.t("common.error.sessionExpired"));
-
-  const res = await fetchWithTimeout(`${serverUrl}/v1/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
-  if (!res.ok) throw new Error(i18n.t("common.error.sessionRefreshFailed"));
-
-  const { jwt_token } = await res.json();
-  await keychainSet("jwt", jwt_token);
+  const outcome = await refreshAccessToken({ fetchImpl: fetchWithTimeout });
+  if (outcome === "no-session") throw new Error(i18n.t("common.error.sessionExpired"));
+  if (typeof outcome === "string") throw new Error(i18n.t("common.error.sessionRefreshFailed"));
 }
 
 export async function refreshSession(): Promise<void> {
@@ -560,18 +715,22 @@ export async function refreshVerificationState(): Promise<boolean> {
   return useSubscriptionStore.getState().emailVerified;
 }
 
-export async function resendVerificationEmail(): Promise<void> {
-  const [jwt, serverUrl] = await Promise.all([
-    keychainGet("jwt"),
-    keychainGet("server_url"),
-  ]);
+export async function resendVerificationEmail(session?: { serverUrl: string; jwt: string }): Promise<void> {
+  const [jwt, serverUrl] = session
+    ? [session.jwt, session.serverUrl]
+    : await Promise.all([keychainGet("jwt"), keychainGet("server_url")]);
   if (!jwt || !serverUrl) throw new Error(i18n.t("common.error.notConnectedToServer"));
 
   const res = await fetchWithTimeout(`${serverUrl}/v1/auth/resend-verification-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
   });
-  if (!res.ok) throw new Error(i18n.t("common.error.resendVerificationFailed"));
+  if (res.ok) return;
+  const body = await res.json().catch(() => null);
+  if (isEmailUndeliverable(res.status, body)) {
+    throw new EmailUndeliverableError(i18n.t("notifications.emailVerification.toast.undeliverable"));
+  }
+  throw new Error(i18n.t("common.error.resendVerificationFailed"));
 }
 
 export async function isServerMode(): Promise<boolean> {
@@ -590,121 +749,400 @@ export async function setMasterPassword(password: string): Promise<void> {
 
   // Re-encrypt secrets store with new key (ensure unlocked first — autoLogin sets the key lazily)
   await unlockVaultIfNeeded();
-  await invoke("secrets_reencrypt", { newEncKey: enc_key });
+  const groupKey = priorMode === "local-nopassword" ? await sharedGroupKey() : null;
+  await withPendingVaultKey(groupKey ?? enc_key, async () => {
+    if (groupKey) (await wrapVaultKey(enc_key, groupKey))();
+    else await invoke("secrets_reencrypt", { newEncKey: enc_key });
+    // Crash-safe order: a stored password opens through the pending key; with none, a password mode asks for it.
+    if (await keepsPlainPassword()) {
+      await storePassword(password);
+      await keychainSet("mode", "local");
+    } else {
+      await keychainSet("mode", "local");
+      await storePassword(password);
+    }
+  });
 
-  await keychainSet("master_password", password);
-  await keychainSet("mode", "local");
-
-  setVaultKey(enc_key);
+  if (!groupKey) setVaultKey(enc_key);
 
   // If connected to cloud, re-push immediately so other devices get a blob
   // encrypted with the new key — without this, pullAndMerge on any other
   // device would fail to decrypt this device's old blob.
-  if (priorMode === "server") {
-    const { push } = await import("@/services/sync");
-    push().catch(() => {});
-  }
+  if (priorMode === "server") pushUnderNewVaultKey();
 }
 
-/**
- * Turns a failed auth response into the message the status actually means.
- * The auth limiter is a hardcoded 10/min per IP with no env override, and a
- * retry loop can exhaust it before the user types anything — collapsing every
- * non-ok status into `expected` rendered that 429 as "Account not found",
- * which sends people off to create a second account they don't need.
- */
-function authFailure(status: number, expected: string): Error {
-  if (status === 429) return new Error(i18n.t("common.error.tooManyAttempts"));
-  if (status === 404 || status === 401 || status === 403) return new Error(i18n.t(expected));
-  return new Error(i18n.t("common.error.serverError", { status }));
+interface ServerSignIn {
+  accountId: string;
+  kek: number[];
+  data: LoginData;
 }
 
-/** Sign in to an existing cloud account (any local mode — replaces local identity). */
+async function signInServerAccount<T>(
+  email: string,
+  password: string,
+  serverUrl: string,
+  then: (signedIn: ServerSignIn) => Promise<T>,
+): Promise<T> {
+  const accountId = await accountIdFor(serverUrl, email);
+
+  const { auth_key, enc_key: kek } = await deriveKeys(password, accountId);
+
+  return serverLogin(
+    serverUrl, accountId, auth_key,
+    "common.error.invalidEmailOrPassword",
+    (data) => then({ accountId, kek, data }),
+  );
+}
+
+type BeforeKeyChange = () => Promise<void>;
+
+// The server has already accepted, so a failing hook must not abort the switch.
+async function runBeforeKeyChange(hook?: BeforeKeyChange): Promise<void> {
+  await hook?.().catch(logFailure("before the vault key changes"));
+}
+
 export async function signInToCloud(
   email: string,
   password: string,
   serverUrl: string,
+  beforeKeyChange?: BeforeKeyChange,
 ): Promise<void> {
   serverUrl = normalizeServerUrl(serverUrl);
-  const res = await fetchWithTimeout(`${serverUrl}/v1/auth/challenge?email=${encodeURIComponent(email)}`);
-  if (!res.ok) throw authFailure(res.status, "common.error.accountNotFound");
-  const { account_id: accountId } = await res.json();
+  await signInServerAccount(email, password, serverUrl, async ({ accountId, kek, data }) => {
+    await runBeforeKeyChange(beforeKeyChange);
+    // Read with the outgoing key, before setVaultKey swaps it.
+    const carried = await readLocalSecrets(deviceScopedSecretKeys());
 
-  const { auth_key, enc_key: kek } = await deriveKeys(password, accountId);
+    let vaultKey = kek;
+    if (data.wrapped_user_secrets) {
+      const unwrapped = await unwrapUserSecrets(kek, data.wrapped_user_secrets);
+      useVaultKeysStore.getState().set({ dek: unwrapped.dek, x25519Private: unwrapped.x25519_private, kek });
+      vaultKey = unwrapped.dek;
+      await keychainSet("wrapped_user_secrets", data.wrapped_user_secrets);
+    }
 
-  const loginRes = await fetchWithTimeout(`${serverUrl}/v1/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ account_id: accountId, auth_key }),
+    setVaultKey(vaultKey);
+
+    await persistServerSession({
+      serverUrl, email, accountId, password,
+      jwt: data.jwt_token, refreshToken: data.refresh_token,
+    });
+    reloadSubscription();
+
+    // Delete the old secrets.enc (encrypted with the previous account's key — the new
+    // key cannot open it and secrets_unlock would fail with "wrong key or corrupted file").
+    // config_wipe also clears the JSON entity files; clearLocalEntityState will repopulate
+    // them with empty arrays so syncOnLogin starts from a clean slate.
+    await wipeLocalConfig(carried);
   });
-  if (!loginRes.ok) throw authFailure(loginRes.status, "common.error.invalidEmailOrPassword");
-  const data = await loginRes.json();
+}
 
-  let vaultKey = kek;
-  if (data.wrapped_user_secrets) {
-    const unwrapped = await unwrapUserSecrets(kek, data.wrapped_user_secrets);
-    useVaultKeysStore.getState().set({ dek: unwrapped.dek, x25519Private: unwrapped.x25519_private, kek });
-    vaultKey = unwrapped.dek;
-    await keychainSet("wrapped_user_secrets", data.wrapped_user_secrets);
+/** Sign in to, or register, another cloud account without touching the active session. */
+export async function authenticateServerAccount(
+  kind: "signin" | "register",
+  email: string,
+  password: string,
+  serverUrl: string,
+  credential: SignupCredential = {},
+): Promise<{ account: Omit<SavedAccount, "mode">; enrollment: EnrollmentOutcome | null }> {
+  serverUrl = normalizeServerUrl(serverUrl);
+  const saved = (accountId: string, data: { jwt_token: string; refresh_token: string }, wrapped: string | null) => {
+    rememberServer(serverUrl);
+    return {
+      account_id: accountId,
+      email,
+      server_url: serverUrl,
+      master_password: password,
+      jwt: data.jwt_token,
+      refresh_token: data.refresh_token,
+      wrapped_user_secrets: wrapped,
+    };
+  };
+  if (kind === "register") {
+    const { accountId, data, wrapped_user_secrets } = await registerServerAccount(email, password, serverUrl, credential);
+    return { account: saved(accountId, data, wrapped_user_secrets), enrollment: data.enrollment ?? null };
   }
-
-  setVaultKey(vaultKey);
-
-  await persistServerSession({
-    serverUrl, email, accountId, password,
-    jwt: data.jwt_token, refreshToken: data.refresh_token,
-  });
-  reloadSubscription();
-
-  // Delete the old secrets.enc (encrypted with the previous account's key — the new
-  // key cannot open it and secrets_unlock would fail with "wrong key or corrupted file").
-  // config_wipe also clears the JSON entity files; clearLocalEntityState will repopulate
-  // them with empty arrays so syncOnLogin starts from a clean slate.
-  await wipeLocalConfig();
+  return signInServerAccount(email, password, serverUrl, async ({ accountId, data }) => ({
+    account: saved(accountId, data, data.wrapped_user_secrets ?? null),
+    enrollment: null,
+  }));
 }
 
 /** Link an existing local account to a cloud server — registers and enables sync. */
 export async function linkToCloud(
   email: string,
   serverUrl: string,
-): Promise<void> {
+  beforeKeyChange?: BeforeKeyChange,
+  typedPassword?: string,
+  credential: SignupCredential = {},
+): Promise<EnrollmentOutcome | null> {
   serverUrl = normalizeServerUrl(serverUrl);
-  const [password, accountId] = await Promise.all([
-    keychainGet("master_password"),
-    keychainGet("account_id"),
-  ]);
+  const accountId = await keychainGet("account_id");
   const mode = await keychainGet("mode");
+  const read = mode === "local-nopassword" || typedPassword ? null : await readSecret(i18n.t("layout.appLock.sealReason"));
+  const password = typedPassword || (read?.outcome === "ok" ? read.value : null);
 
   if (!accountId) throw new Error(i18n.t("common.error.noAccountFound"));
   if (mode === "local-nopassword") throw new Error(i18n.t("common.error.setMasterPasswordBeforeLinking"));
   if (!password) throw new Error(i18n.t("common.error.masterPasswordRequired"));
+  if (typedPassword && !(await isCurrentMasterPassword(typedPassword))) {
+    throw new Error(i18n.t("common.error.incorrectPassword"));
+  }
+  await unlockVaultIfNeeded();
 
   const { auth_key, enc_key: kek } = await deriveKeys(password, accountId);
-  const secrets = await generateUserSecrets();
-  const wrapped_user_secrets = await wrapUserSecrets(kek, secrets.dek, secrets.x25519_private);
-  // The kek, not the fresh dek: linking does not rekey the vault this account
-  // already has, so the session stays on the kek.
-  const { public_key } = await deriveX25519Keypair(kek);
+  const { dek } = await generateUserSecrets();
+  const identity = await deriveX25519Keypair(dek);
+  const x25519Private = base64ToByteArray(identity.private_key);
+  const wrapped_user_secrets = await wrapUserSecrets(kek, dek, x25519Private);
 
   const data = await registerOnServer({
     serverUrl, email, accountId, authKey: auth_key,
-    publicKey: public_key, wrappedUserSecrets: wrapped_user_secrets,
+    publicKey: identity.public_key, wrappedUserSecrets: wrapped_user_secrets, credential,
   });
+  await runBeforeKeyChange(beforeKeyChange);
 
-  useVaultKeysStore.getState().set({ dek: secrets.dek, x25519Private: secrets.x25519_private, kek });
+  useVaultKeysStore.getState().set({ dek, x25519Private, kek });
 
   await persistServerSession({
     serverUrl, email, jwt: data.jwt_token, refreshToken: data.refresh_token,
   });
-  await keychainSet("wrapped_user_secrets", wrapped_user_secrets);
+  // A paired vault sits on its group key, not the kek; settleVaultOnDek retries a failed move.
+  await withPriorWrappedKey(kek, async () => {
+    await keychainSet("wrapped_user_secrets", wrapped_user_secrets);
+    await moveVaultToKey(getVaultKey() ?? kek, dek);
+  }).catch((e) => console.warn("Linking kept the vault on its key:", e));
   reloadSubscription();
+  return data.enrollment ?? null;
 }
 
 // ─── New account management features ─────────────────────────────────────────
 
+/** Upload this device's blob under the vault key just installed; never throws. A paused device pushes on resume. */
+function pushUnderNewVaultKey(): void {
+  import("@/services/sync")
+    .then(({ push, isSyncPaused }) => (isSyncPaused() ? undefined : push()))
+    .catch(() => {});
+}
+
+async function ensureIdentity() {
+  return (await import("@/services/identity")).ensureIdentity();
+}
+
+/**
+ * Puts secrets.enc and the session on `to`, from `from`.
+ * Returns how to put both back, or null when they were already there.
+ */
+export async function moveVaultToKey(from: number[], to: number[]): Promise<(() => Promise<void>) | null> {
+  const opener = await keyThatOpensVault(to, from);
+  if (!opener) throw new Error(i18n.t("common.error.currentPasswordIncorrect"));
+  const sessionKey = getVaultKey();
+  const rekeyed = opener === from;
+  if (rekeyed) {
+    await unlockVaultIfNeeded();
+    await invoke("secrets_rekey", { oldEncKey: from, newEncKey: to });
+  } else if (sameKey(sessionKey, to)) {
+    return null;
+  }
+  setVaultKey(to);
+  return async () => {
+    if (rekeyed) {
+      await unlockVaultIfNeeded();
+      await invoke("secrets_rekey", { oldEncKey: to, newEncKey: from });
+    }
+    if (sessionKey) setVaultKey(sessionKey);
+  };
+}
+
+/**
+ * A password reaches a vault key it does not derive the way a cloud password reaches its dek.
+ * Writes the keychain entry; the returned call puts the keys in the session.
+ */
+async function wrapVaultKey(kek: number[], key: number[]): Promise<() => void> {
+  const x25519Private = base64ToByteArray((await deriveX25519Keypair(key)).private_key);
+  await keychainSet("wrapped_user_secrets", await wrapUserSecrets(kek, key, x25519Private));
+  return () => useVaultKeysStore.getState().set({ dek: key, x25519Private, kek });
+}
+
+/**
+ * While `step` moves a no-password vault, a launch that finds the stored key stale tries `key`.
+ * A failed step keeps the entry while `key` still opens the file: then nothing else reaches it.
+ */
+async function withPendingVaultKey(key: number[], step: () => Promise<void>): Promise<void> {
+  await whileMoving(PENDING_VAULT_KEY, bytesToHex(key), step, async () => {
+    if (!(await keyThatOpensVault(key))) await keychainDelete(PENDING_VAULT_KEY);
+  });
+}
+
+/**
+ * The password-mode counterpart: while `step` overwrites `wrapped_user_secrets` and moves the
+ * vault, the launch-time open also tries the entry it replaced, still wrapped under `kek`.
+ */
+async function withPriorWrappedKey(kek: number[], step: () => Promise<void>): Promise<void> {
+  const prior = (await keychainGet(PRIOR_WRAPPED_KEY)) ?? (await keychainGet("wrapped_user_secrets"));
+  if (!prior) return step();
+  await whileMoving(PRIOR_WRAPPED_KEY, prior, step, async () => {
+    const priorKey = await wrappedVaultKey(kek, prior);
+    await settlePriorWrapped(kek, prior, priorKey && (await keyThatOpensVault(priorKey)));
+  });
+}
+
+/** Keeps `entry` in the keychain while `step` runs; after a failure, `afterFailure` decides whether it stays. */
+async function whileMoving(
+  entry: string,
+  value: string,
+  step: () => Promise<void>,
+  afterFailure: () => Promise<void>,
+): Promise<void> {
+  await keychainSet(entry, value);
+  try {
+    await step();
+  } catch (e) {
+    await afterFailure().catch(() => {});
+    throw e;
+  }
+  await keychainDelete(entry).catch(() => {});
+}
+
+async function wrappedVaultKey(kek: number[], wrapped: string): Promise<number[] | null> {
+  return unwrapUserSecrets(kek, wrapped).then((u) => u.dek, () => null);
+}
+
+/**
+ * Drops the prior entry unless only its key opens the vault. Then a local vault takes it back as
+ * its stored key; a cloud one keeps it until settleVaultOnDek moves the vault onto the dek.
+ */
+async function settlePriorWrapped(kek: number[], prior: string, opened: number[] | null): Promise<void> {
+  if (!opened || !sameKey(opened, await wrappedVaultKey(kek, prior))) return keychainDelete(PRIOR_WRAPPED_KEY);
+  if ((await keychainGet("mode")) === "server") return;
+  await keychainSet("wrapped_user_secrets", prior);
+  await adoptUserSecrets(kek, prior);
+  await keychainDelete(PRIOR_WRAPPED_KEY);
+}
+
+/** The stored key, or the pending one left by an interrupted move, which then becomes the stored key. */
+async function noPasswordVaultKey(stored: string): Promise<number[] | null> {
+  const pending = await keychainGet(PENDING_VAULT_KEY);
+  const keys = [stored, pending].filter((k): k is string => !!k && isHexEncoded32ByteKey(k));
+  const opened = keys.length > 0 ? await keyThatOpensVault(...keys.map(hexToBytes)) : null;
+  if (pending) {
+    if (opened && bytesToHex(opened) !== stored.toLowerCase()) await storeDeviceKey(bytesToHex(opened));
+    await keychainDelete(PENDING_VAULT_KEY);
+  }
+  return opened;
+}
+
+async function sharedGroupKey(): Promise<number[] | null> {
+  const grouped = await (await import("@/services/lanGroup")).readGroup();
+  return grouped ? getVaultKey() : null;
+}
+
+/**
+ * Puts a no-account vault on `key` for good. The keychain names `key` before the file moves,
+ * so a failure or a crash at any step leaves a key the next launch tries that opens it.
+ */
+export async function adoptVaultKey(key: number[]): Promise<void> {
+  const current = getVaultKey();
+  if (!current) throw new Error(i18n.t("common.error.vaultLocked"));
+  if ((await keychainGet("mode")) === "local") {
+    const kek = useVaultKeysStore.getState().kek ?? current;
+    const wrappedBefore = await keychainGet("wrapped_user_secrets");
+    await withPriorWrappedKey(kek, async () => {
+      const hold = await wrapVaultKey(kek, key);
+      try {
+        await moveVaultToKey(current, key);
+      } catch (e) {
+        if (!wrappedBefore) await keychainDelete("wrapped_user_secrets").catch(() => {});
+        throw e;
+      }
+      hold();
+    });
+    return;
+  }
+  await withPendingVaultKey(key, async () => {
+    const undo = await moveVaultToKey(current, key);
+    try {
+      await storeDeviceKey(bytesToHex(key));
+    } catch (e) {
+      await undo?.().catch((u) => console.warn("Putting the vault back on its old key failed:", u));
+      throw e;
+    }
+  });
+}
+
+/** Once the identity no longer rides on the vault key, a kek vault has no reason to stay there. */
+export async function settleVaultOnDek(): Promise<void> {
+  const { kek, dek } = useVaultKeysStore.getState();
+  const vaultKey = getVaultKey();
+  if (!kek || !dek || !vaultKey || sameKey(vaultKey, dek)) return;
+  if ((await keychainGet("mode")) !== "server") return;
+  const identity = await ensureIdentity().catch(() => null);
+  if (!identity?.stored) return;
+  if (getVaultKey() !== vaultKey || useVaultKeysStore.getState().kek !== kek) return;
+  if (await moveVaultToKey(vaultKey, dek)) pushUnderNewVaultKey();
+  await keychainDelete(PRIOR_WRAPPED_KEY);
+}
+
+/** Whether this device already knew this password: its cached secrets are wrapped under its kek. */
+async function cachedSecretsUnwrapWith(kek: number[]): Promise<boolean> {
+  return !!(await storedWrappedKey(kek, "wrapped_user_secrets"));
+}
+
+/** `rememberPassword` keeps a sealed secret, so a password changed elsewhere must be sealed anew. */
+async function resealChangedPassword(password: string): Promise<void> {
+  if ((await secretState().catch(() => "none")) !== "sealed") return;
+  await replacePassword(password, i18n.t("layout.appLock.sealReason"));
+}
+
+/** The password stored before a sign-in replaces it; a sealed one is read, with its prompt, only if needed. */
+async function passwordStoredBefore(): Promise<() => Promise<string | null>> {
+  const state = await secretState().catch(() => "none" as const);
+  if (state === "sealed") {
+    return async () => {
+      const read = await readSecret(i18n.t("layout.appLock.sealReason"));
+      return read.outcome === "ok" ? read.value : null;
+    };
+  }
+  const plain = state === "plain" ? await readPlainSecret().catch(() => null) : null;
+  return async () => plain;
+}
+
+/** A change made elsewhere leaves this vault on the old kek, which the password stored here still reaches. */
+async function reopenWithStoredPassword(
+  readStored: () => Promise<string | null>,
+  typed: string,
+  accountId: string,
+  dek: number[],
+): Promise<number[] | null> {
+  const sessionKey = getVaultKey();
+  try {
+    const stored = await readStored();
+    if (!stored || stored === typed) return null;
+    const { enc_key: oldKek } = await deriveKeys(stored, accountId);
+    if (!(await keyThatOpensVault(oldKek))) return null;
+    setVaultKey(oldKek);
+    await ensureIdentity().catch(() => null);
+    await moveVaultToKey(oldKek, dek);
+    pushUnderNewVaultKey();
+    return dek;
+  } catch (e) {
+    console.warn("Reopening the vault with the stored password failed:", e);
+    if (sessionKey) setVaultKey(sessionKey);
+    return null;
+  }
+}
+
+// The server commits before minting tokens, so only a 4xx or its own answer proves a change did not land.
+async function passwordChangeMayHaveLanded(res: Response | null, newWrapped: string): Promise<boolean> {
+  if (res && res.status >= 400 && res.status < 500) return false;
+  const me = await getMe(5_000);
+  return !me || me.wrapped_user_secrets === newWrapped;
+}
+
 export async function changeMasterPassword(
   currentPassword: string,
   newPassword: string,
+  proof?: TwoFactorProof | null,
 ): Promise<void> {
   const [accountId, jwt, serverUrl] = await Promise.all([
     keychainGet("account_id"),
@@ -729,40 +1167,58 @@ export async function changeMasterPassword(
     const unwrapped = await unwrapUserSecrets(old_kek, me.wrapped_user_secrets);
     cachedDek = unwrapped.dek;
     cachedX25519 = unwrapped.x25519_private;
+    useVaultKeysStore.getState().set({ dek: cachedDek, x25519Private: cachedX25519, kek: old_kek });
   }
+
+  const identity = await ensureIdentity();
+  if (identity.proven) cachedX25519 = base64ToByteArray(identity.privateKey);
 
   const { auth_key: new_auth_key, enc_key: new_kek } = await deriveKeys(newPassword, accountId);
   const new_wrapped_user_secrets = await wrapUserSecrets(new_kek, cachedDek, cachedX25519);
 
+  const undoMove = await moveVaultToKey(old_kek, cachedDek);
+  // A change that did not land must leave the vault on the key the current password still reaches.
+  const undoMoveUnlessLanded = async (res: Response | null) => {
+    if (!undoMove || (await passwordChangeMayHaveLanded(res, new_wrapped_user_secrets))) return;
+    await undoMove().catch((e) => console.warn("Putting the vault back on its old key failed:", e));
+  };
+
   const res = await fetchWithTimeout(`${serverUrl}/v1/auth/password`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
-    body: JSON.stringify({ old_auth_key, new_auth_key, new_wrapped_user_secrets }),
+    body: JSON.stringify({ old_auth_key, new_auth_key, new_wrapped_user_secrets, ...proofBody(proof) }),
+  }).catch(async (e) => {
+    await undoMoveUnlessLanded(null);
+    throw e;
   });
   if (!res.ok) {
+    await undoMoveUnlessLanded(res);
+    const refusal = await twoFactorError(res);
+    if (refusal) throw refusal;
     if (res.status === 401) throw new Error(i18n.t("common.error.currentPasswordIncorrect"));
     throw new Error(i18n.t("common.error.passwordChangeFailed", { status: res.status }));
   }
 
   const data = await res.json();
-  await keychainSet("master_password", newPassword);
-  await keychainSet("jwt", data.jwt_token);
-  await keychainSet("refresh_token", data.refresh_token);
+  await replacePassword(newPassword, i18n.t("layout.appLock.sealReason"));
+  await adoptSessionTokens(data);
   await keychainSet("wrapped_user_secrets", new_wrapped_user_secrets);
   useVaultKeysStore.getState().set({ dek: cachedDek, x25519Private: cachedX25519, kek: new_kek });
+  if (undoMove) pushUnderNewVaultKey();
   reloadSubscription();
 }
 
-export async function changeEmail(newEmail: string, currentPassword: string): Promise<void> {
-  const [accountId, jwt, serverUrl] = await Promise.all([
-    keychainGet("account_id"),
-    keychainGet("jwt"),
-    keychainGet("server_url"),
-  ]);
+/** The login key for the signed-in account, as the server expects it to re-prove a password. */
+export async function deriveAuthKey(password: string): Promise<string> {
+  const accountId = await keychainGet("account_id");
   if (!accountId) throw new Error(i18n.t("common.error.noAccountFound"));
-  if (!jwt || !serverUrl) throw new Error(i18n.t("common.error.notConnectedToServer"));
+  return (await deriveKeys(password, accountId)).auth_key;
+}
 
-  const { auth_key } = await deriveKeys(currentPassword, accountId);
+export async function changeEmail(newEmail: string, currentPassword: string): Promise<void> {
+  const auth_key = await deriveAuthKey(currentPassword);
+  const [jwt, serverUrl] = await Promise.all([keychainGet("jwt"), keychainGet("server_url")]);
+  if (!jwt || !serverUrl) throw new Error(i18n.t("common.error.notConnectedToServer"));
 
   const res = await fetchWithTimeout(`${serverUrl}/v1/auth/email`, {
     method: "PUT",
@@ -775,6 +1231,7 @@ export async function changeEmail(newEmail: string, currentPassword: string): Pr
 
   await keychainSet("email", newEmail);
   await refreshSession();
+  window.dispatchEvent(new Event(EMAIL_CHANGED_EVENT));
 }
 
 async function migrateToWrappedUserSecrets(
@@ -788,9 +1245,7 @@ async function migrateToWrappedUserSecrets(
     // Derive existing deterministic X25519 keypair from legacy enc_key (= kek)
     const { private_key: legacyX25519PrivateB64 } = await deriveX25519Keypair(kek);
 
-    const legacyX25519Private = Array.from(
-      Uint8Array.from(atob(legacyX25519PrivateB64), (c) => c.charCodeAt(0))
-    );
+    const legacyX25519Private = base64ToByteArray(legacyX25519PrivateB64);
 
     const secrets = await generateUserSecrets();
     const dek = secrets.dek;
@@ -833,8 +1288,7 @@ async function migrateToWrappedUserSecrets(
     setVaultKey(vaultKey);
     await keychainSet("wrapped_user_secrets", wrapped_user_secrets);
 
-    const { push } = await import("@/services/sync");
-    push().catch(() => {});
+    pushUnderNewVaultKey();
   } catch (e) {
     console.warn("Migration failed, falling back to legacy key:", e);
     setVaultKey(kek);

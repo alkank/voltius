@@ -2,31 +2,34 @@ import { writeClipboard } from "../../utils/clipboard";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { Icon } from "@iconify/react";
 import { useHostPingStore } from "@/stores/hostPingStore";
 import { usePluginStore, findRightPanelSectionWithFlag } from "@/stores/pluginStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useStatusBarStore } from "@/stores/statusBarStore";
+import { useDismissBlockedReason } from "@/hooks/useSessionLocked";
+import { closeSessionTabs } from "@/services/closeSession";
 import { useSessionStore } from "@/stores/sessionStore";
+import { useConnectedSince } from "@/services/sessionUptime";
 import { serialAutoReconnectEnabled } from "@/stores/serialAutoReconnect";
-import { useAllConnections } from "@/hooks/useAllConnections";
+import { useConnection } from "@/hooks/useAllConnections";
+import { sessionUserAtHost } from "@/components/terminal/sessionOverlay";
 import { useStatusBarContributions } from "@/hooks/useStatusBarContributions";
-import { getPfState } from "@/services/portForwardingTunnels";
+import { useCopiedFlash } from "@/hooks/useCopiedFlash";
+import { usePfState } from "@/hooks/usePfStates";
 import { sshGetSystemInfo, type SystemInfo } from "@/services/ssh";
 import { metricsStart, metricsStop, onMetricsSnapshot, type MetricsSnapshot } from "@/services/metrics";
 import { getDistroIcon, getDistroColor, getDistroLabel } from "@/utils/icons";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/shared/ContextMenu";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { latencyColor, latencyTone, pingStatusTone } from "@/utils/statusTone";
-import type { ActiveTunnel, SerialConnectParams } from "@/types";
+import type { SerialConnectParams, SerialLine, SerialLines } from "@/types";
+import { serialSendBreak } from "@/services/serial";
 import type { TerminalStatusBarContributionContext } from "@/plugins/api";
+import { PORT_FORWARDING_ICON } from "@/lib/conceptIcons";
+import { pluginPanelId } from "./terminalPanels";
 
-interface PfStatePayload {
-  session_id: string;
-  tunnels: ActiveTunnel[];
-  suppressed_ports: number[];
-}
 
 interface Props {
   sessionId: string;
@@ -36,6 +39,7 @@ interface Props {
   serialConfig?: SerialConnectParams;
   sessionStatus: "connecting" | "connected" | "disconnected" | "error";
   dimensions?: { cols: number; rows: number };
+  visible?: boolean;
 }
 
 interface ConnectedSystemInfo {
@@ -117,35 +121,101 @@ const SPARKLINE_MAX = 20;
 const statusBarItemClass = "h-full rounded-none transition-colors hover:bg-(--t-bg-card-hover)";
 const statusBarIdentityGroupClass = "flex items-center h-full";
 
-function StatusBarIconButton({
+function StatusBarButton({
   icon,
+  label,
   title,
   color,
   dimmed,
+  disabled,
   onClick,
 }: {
-  icon: string;
   title: string;
   color: string;
   dimmed?: boolean;
+  disabled?: boolean;
   onClick: () => void;
-}) {
+} & ({ icon: string; label?: never } | { label: string; icon?: never })) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
       title={title}
-      className={`items-center px-1 ${statusBarItemClass}`}
-      style={{ color, display: "flex", alignItems: "center", opacity: dimmed ? 0.45 : 1 }}
+      aria-disabled={disabled}
+      className={`items-center px-1 ${statusBarItemClass} aria-disabled:cursor-default aria-disabled:hover:bg-transparent`}
+      style={{
+        color,
+        display: "flex",
+        alignItems: "center",
+        opacity: disabled ? 0.25 : dimmed ? 0.45 : 1,
+        fontFamily: label ? "var(--font-mono)" : undefined,
+        fontSize: label ? 10 : undefined,
+        letterSpacing: label ? "0.04em" : undefined,
+      }}
     >
-      <Icon icon={icon} width={11} />
+      {icon ? <Icon icon={icon} width={11} /> : label}
     </button>
   );
 }
 
-export function TerminalStatusBar({ sessionId, sessionType, connectionId, connectionName, serialConfig, sessionStatus, dimensions }: Props) {
+const SERIAL_LINES: SerialLine[] = ["dtr", "rts"];
+
+function SerialLineControls({
+  sessionId,
+  lines,
+  rtsFlowControlled,
+  disabled,
+}: {
+  sessionId: string;
+  lines: SerialLines | undefined;
+  rtsFlowControlled: boolean;
+  disabled: boolean;
+}) {
   const { t } = useTranslation();
-  const connections = useAllConnections();
-  const connection = useMemo(() => connections.find((c) => c.id === connectionId), [connections, connectionId]);
+  const setSerialLine = useSessionStore((s) => s.setSerialLine);
+  const [breaking, setBreaking] = useState(false);
+
+  const sendBreak = () => {
+    setBreaking(true);
+    serialSendBreak(sessionId)
+      .catch(() => {})
+      .finally(() => setBreaking(false));
+  };
+
+  return (
+    <>
+      {SERIAL_LINES.map((line) => {
+        const on = lines?.[line] ?? false;
+        const label = line.toUpperCase();
+        const flowControlled = line === "rts" && rtsFlowControlled;
+        return (
+          <StatusBarButton
+            key={line}
+            label={label}
+            title={
+              flowControlled
+                ? t("terminal.statusBar.serialRtsFlowControlled")
+                : t(on ? "terminal.statusBar.serialLineOn" : "terminal.statusBar.serialLineOff", { line: label })
+            }
+            color={on ? "var(--t-accent)" : "var(--t-text-dim)"}
+            disabled={disabled || flowControlled}
+            onClick={() => void setSerialLine(sessionId, line, !on).catch(() => {})}
+          />
+        );
+      })}
+      <StatusBarButton
+        label="BRK"
+        title={t("terminal.statusBar.serialBreak")}
+        color={breaking ? "var(--t-accent)" : "var(--t-text-dim)"}
+        disabled={disabled || breaking}
+        onClick={sendBreak}
+      />
+    </>
+  );
+}
+
+export function TerminalStatusBar({ sessionId, sessionType, connectionId, connectionName, serialConfig, sessionStatus, dimensions, visible = true }: Props) {
+  const { t } = useTranslation();
+  const connection = useConnection(connectionId);
   const pingStatus = useHostPingStore((s) => s.statuses[connectionId]);
   const latencyMs = useHostPingStore((s) => s.latencies[connectionId]);
   const toggleRightPanel = useUIStore((s) => s.toggleRightPanel);
@@ -159,13 +229,14 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
   );
   const monitoringActive = metricsSectionId !== null;
   const reconnect = useSessionStore((s) => s.reconnect);
-  const disconnect = useSessionStore((s) => s.disconnect);
+  const disconnectBlockedReason = useDismissBlockedReason(sessionId);
   const closeSerialPort = useSessionStore((s) => s.closeSerialPort);
   const setSerialAutoReconnect = useSessionStore((s) => s.setSerialAutoReconnect);
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === sessionId));
   const serialAutoReconnect = session ? serialAutoReconnectEnabled(session, connection) : true;
+  const userAtHost = connection ? sessionUserAtHost(session, connection) : "";
 
-  const [tunnels, setTunnels] = useState<ActiveTunnel[]>([]);
+  const tunnels = usePfState(sessionType === "ssh" ? sessionId : null)?.tunnels ?? [];
   const [pulse, setPulse] = useState(false);
   const prevCountRef = useRef(0);
 
@@ -173,10 +244,8 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
   const streamIdRef = useRef<string | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
 
-  const [copied, setCopied] = useState(false);
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { copied, flash: flashCopied } = useCopiedFlash(1200);
 
-  const connectedAtRef = useRef<number | null>(null);
   const [uptime, setUptime] = useState<string | null>(null);
 
   const [showDimensions, setShowDimensions] = useState(false);
@@ -184,8 +253,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
 
   // System info popover
   const [showDistroInfo, setShowDistroInfo] = useState(false);
-  const [copiedDistro, setCopiedDistro] = useState(false);
-  const copiedDistroTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { copied: copiedDistro, flash: flashCopiedDistro } = useCopiedFlash(1200);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [localSystemInfo, setLocalSystemInfo] = useState<ConnectedSystemInfo | null>(null);
   const systemInfoFetchedRef = useRef(false);
@@ -199,6 +267,13 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
       sshGetSystemInfo(sessionId).then(setSystemInfo).catch(() => {});
     }
   }, [sessionId, sessionType, sessionStatus]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const { increment, decrement } = useStatusBarStore.getState();
+    increment();
+    return decrement;
+  }, [visible]);
 
   useEffect(() => {
     systemInfoFetchedRef.current = false;
@@ -267,36 +342,16 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
 
   // ── Session uptime ────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    if (sessionStatus === "connected") {
-      if (connectedAtRef.current === null) connectedAtRef.current = Date.now();
-      const tick = () => {
-        const elapsed = Math.floor((Date.now() - connectedAtRef.current!) / 1000);
-        setUptime(fmtUptime(elapsed));
-      };
-      tick();
-      const interval = setInterval(tick, 1000);
-      return () => clearInterval(interval);
-    } else {
-      connectedAtRef.current = null;
-      setUptime(null);
-    }
-  }, [sessionStatus]);
-
-  // ── Port forwarding events ────────────────────────────────────────────────
+  const connectedAt = useConnectedSince(sessionStatus === "connected" ? sessionId : null);
 
   useEffect(() => {
-    if (sessionType !== "ssh") return;
-
-    getPfState(sessionId).then((s) => setTunnels(s.tunnels)).catch(() => {});
-
-    let cleanup: (() => void) | undefined;
-    listen<PfStatePayload>("pf-state-changed", ({ payload }) => {
-      if (payload.session_id === sessionId) setTunnels(payload.tunnels);
-    }).then((u) => { cleanup = u; });
-
-    return () => { cleanup?.(); };
-  }, [sessionId, sessionType]);
+    if (connectedAt === null) { setUptime(null); return; }
+    if (!visible) return;
+    const tick = () => setUptime(fmtUptime(Math.floor((Date.now() - connectedAt) / 1000)));
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [connectedAt, visible]);
 
   useEffect(() => {
     const count = tunnels.length;
@@ -326,6 +381,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
       setMetrics(null);
       return;
     }
+    if (!visible) return;
 
     let cancelled = false;
     (async () => {
@@ -346,21 +402,33 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
       stopStream();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, sessionType, sessionStatus, monitoringActive]);
+  }, [sessionId, sessionType, sessionStatus, monitoringActive, visible]);
 
   // ── Context menu items ────────────────────────────────────────────────────
 
   const copyHostText = sessionType === "ssh" && connection
-    ? `${connection.username}@${connection.host}`
+    ? userAtHost
     : (serialConfig?.port ?? "");
 
+  const serialLabel = serialConfig
+    ? t("panes.terminal.serialSubtitle", { port: serialConfig.port, baud: serialConfig.baud })
+    : t("terminal.statusBar.serialFallback");
+
   const ctxItems = useMemo<ContextMenuItem[]>(() => {
+    const disconnectItem: ContextMenuItem = {
+      label: t("common.action.disconnect"),
+      icon: "lucide:plug",
+      danger: true,
+      divider: true,
+      disabledReason: disconnectBlockedReason,
+      onClick: () => closeSessionTabs([sessionId]),
+    };
     if (sessionType === "ssh" && connection) {
       return [
         {
-          label: t("terminal.statusBar.copyLabel", { text: `${connection.username}@${connection.host}` }),
+          label: t("terminal.statusBar.copyLabel", { text: userAtHost }),
           icon: "lucide:copy",
-          onClick: () => writeClipboard(`${connection.username}@${connection.host}`).catch(() => {}),
+          onClick: () => writeClipboard(userAtHost).catch(() => {}),
         },
         {
           label: t("terminal.statusBar.copyLabel", { text: connection.host }),
@@ -369,16 +437,10 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
         },
         {
           label: t("terminal.statusBar.openPortsPanel"),
-          icon: "lucide:network",
+          icon: PORT_FORWARDING_ICON,
           onClick: () => toggleRightPanel("ports"),
         },
-        {
-          label: t("common.action.disconnect"),
-          icon: "lucide:plug",
-          danger: true,
-          divider: true,
-          onClick: () => void disconnect(sessionId),
-        },
+        disconnectItem,
       ];
     }
     if (sessionType === "serial" && serialConfig) {
@@ -388,28 +450,16 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
           icon: "lucide:copy",
           onClick: () => writeClipboard(serialConfig.port).catch(() => {}),
         },
-        {
-          label: t("common.action.disconnect"),
-          icon: "lucide:plug",
-          danger: true,
-          divider: true,
-          onClick: () => void disconnect(sessionId),
-        },
+        disconnectItem,
       ];
     }
     if (sessionType === "local") {
       return [
-        {
-          label: t("common.action.disconnect"),
-          icon: "lucide:plug",
-          danger: true,
-          divider: true,
-          onClick: () => void disconnect(sessionId),
-        },
+        disconnectItem,
       ];
     }
     return [];
-  }, [sessionType, connection, serialConfig, connectionName, sessionId, toggleRightPanel, disconnect, t]);
+  }, [sessionType, connection, userAtHost, serialConfig, connectionName, sessionId, toggleRightPanel, disconnectBlockedReason, t]);
 
   const statusBarContributionContext = useMemo<TerminalStatusBarContributionContext>(() => ({
     sessionId,
@@ -429,7 +479,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
 
   const activeTunnelCount = tunnels.filter((t) => t.state === "active").length;
   const portsIsActive = rightPanelOpen && rightPanelSection === "ports";
-  const metricsIsActive = rightPanelOpen && metricsSectionId !== null && rightPanelSection === `plugin:${metricsSectionId}`;
+  const metricsIsActive = rightPanelOpen && metricsSectionId !== null && rightPanelSection === pluginPanelId(metricsSectionId);
   const isConnected = sessionStatus === "connected";
   const isDisconnectedOrError = sessionStatus === "disconnected" || sessionStatus === "error";
 
@@ -457,11 +507,13 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
 
   const handleCopyHost = () => {
     if (!copyHostText) return;
-    writeClipboard(copyHostText).then(() => {
-      setCopied(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), 1200);
-    }).catch(() => {});
+    writeClipboard(copyHostText).then(() => flashCopied()).catch(() => {});
+  };
+
+  const handleCopySystemInfo = () => {
+    if (!systemInfoCopyText) return;
+    writeClipboard(systemInfoCopyText).catch(() => {});
+    flashCopiedDistro();
   };
 
   const borderTopColor = sessionStatus === "error"
@@ -589,13 +641,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
                       icon={systemIcon}
                       width={12}
                       style={{ flexShrink: 0, color: "var(--t-text-dim)", cursor: "pointer" }}
-                      onClick={showDistroPopover ? () => {
-                        if (!systemInfoCopyText) return;
-                        writeClipboard(systemInfoCopyText).catch(() => {});
-                        setCopiedDistro(true);
-                        if (copiedDistroTimeoutRef.current) clearTimeout(copiedDistroTimeoutRef.current);
-                        copiedDistroTimeoutRef.current = setTimeout(() => setCopiedDistro(false), 1200);
-                      } : undefined}
+                      onClick={showDistroPopover ? handleCopySystemInfo : undefined}
                     />
                     {showDistroInfo && showDistroPopover && (
                       <div
@@ -645,7 +691,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
                   </div>
                 )}
                 <span
-                  title={`${connection.username}@${connection.host}`}
+                  title={userAtHost}
                   onClick={handleCopyHost}
                   className={`flex items-center px-1 text-(--t-text-dim) ${statusBarItemClass}`}
                   style={{
@@ -656,11 +702,11 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
                     cursor: "pointer",
                   }}
                 >
-                  {copied ? t("terminal.statusBar.copiedBang") : `${connection.username}@${connection.host}`}
+                  {copied ? t("terminal.statusBar.copiedBang") : userAtHost}
                 </span>
               </div>
               {isDisconnectedOrError && (
-                <StatusBarIconButton
+                <StatusBarButton
                   icon="lucide:rotate-ccw"
                   title={t("terminal.statusBar.reconnectTitle")}
                   color="var(--t-status-error)"
@@ -680,13 +726,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
                 icon={systemIcon}
                 width={12}
                 style={{ flexShrink: 0, color: localSystemColor(localOsName), cursor: "pointer" }}
-                onClick={() => {
-                  if (!systemInfoCopyText) return;
-                  writeClipboard(systemInfoCopyText).catch(() => {});
-                  setCopiedDistro(true);
-                  if (copiedDistroTimeoutRef.current) clearTimeout(copiedDistroTimeoutRef.current);
-                  copiedDistroTimeoutRef.current = setTimeout(() => setCopiedDistro(false), 1200);
-                }}
+                onClick={handleCopySystemInfo}
               />
               {showDistroInfo && (
                 <div
@@ -737,7 +777,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
             <>
               <Icon icon="lucide:ethernet-port" width={11} className="text-(--t-text-dim)" />
               <span
-                title={serialConfig ? `${serialConfig.port} · ${serialConfig.baud} baud` : t("terminal.statusBar.serialFallback")}
+                title={serialLabel}
                 onClick={handleCopyHost}
                 className={`flex items-center px-1 text-(--t-text-dim) ${statusBarItemClass}`}
                 style={{
@@ -748,9 +788,9 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
                   cursor: "pointer",
                 }}
               >
-                {copied ? t("terminal.statusBar.copiedBang") : (serialConfig ? `${serialConfig.port} · ${serialConfig.baud} baud` : t("terminal.statusBar.serialFallback"))}
+                {copied ? t("terminal.statusBar.copiedBang") : serialLabel}
               </span>
-              <StatusBarIconButton
+              <StatusBarButton
                 icon={isDisconnectedOrError ? "lucide:plug" : "lucide:unplug"}
                 title={isDisconnectedOrError ? t("terminal.statusBar.serialReopen") : t("terminal.statusBar.serialClose")}
                 color={isDisconnectedOrError ? "var(--t-status-error)" : "var(--t-text-dim)"}
@@ -758,12 +798,18 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
                   void (isDisconnectedOrError ? reconnect(sessionId) : closeSerialPort(sessionId))
                 }
               />
-              <StatusBarIconButton
+              <StatusBarButton
                 icon={serialAutoReconnect ? "lucide:refresh-cw" : "lucide:refresh-cw-off"}
                 title={serialAutoReconnect ? t("terminal.statusBar.serialAutoReconnectOn") : t("terminal.statusBar.serialAutoReconnectOff")}
                 color="var(--t-text-dim)"
                 dimmed={!serialAutoReconnect}
                 onClick={() => void setSerialAutoReconnect(sessionId, !serialAutoReconnect)}
+              />
+              <SerialLineControls
+                sessionId={sessionId}
+                lines={session?.serialLines}
+                rtsFlowControlled={serialConfig?.flowControl === "rts-cts"}
+                disabled={sessionStatus !== "connected"}
               />
             </>
           )}
@@ -789,7 +835,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
           )}
           {metrics && (
             <button
-              onClick={() => metricsSectionId && toggleRightPanel(`plugin:${metricsSectionId}`)}
+              onClick={() => metricsSectionId && toggleRightPanel(pluginPanelId(metricsSectionId))}
               className={`flex items-center gap-1.5 px-1.5 ${statusBarItemClass}`}
               style={{
                 color: "var(--t-text-dim)",
@@ -798,7 +844,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
               title={t("terminal.statusBar.systemMetricsTitle")}
             >
               <span
-                className={highCpu ? "cpu-alert-pulse" : undefined}
+                className={highCpu && visible ? "cpu-alert-pulse" : undefined}
                 style={{ color: cpuColor(metrics.cpu_percent), fontVariantNumeric: "tabular-nums" }}
               >
                 {t("terminal.statusBar.cpu", { pct: metrics.cpu_percent.toFixed(0) })}
@@ -836,7 +882,7 @@ export function TerminalStatusBar({ sessionId, sessionType, connectionId, connec
               }}
               title={t("terminal.statusBar.activeTunnels", { count: activeTunnelCount })}
             >
-              <Icon icon="lucide:network" width={11} />
+              <Icon icon={PORT_FORWARDING_ICON} width={11} />
               {activeTunnelCount > 0 && <span>{activeTunnelCount}</span>}
             </button>
           )}

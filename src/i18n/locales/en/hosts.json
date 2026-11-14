@@ -8,10 +8,11 @@
       "importExport": "Import/Export",
       "import": "Import…",
       "export": "Export…",
-      "fromImporter": "From {{label}}",
+      "importFrom": "Import from",
       "newHost": "New Host",
       "newSerialHost": "New Serial Host",
-      "newFolder": "New Folder"
+      "newFolder": "New Folder",
+      "systemShell": "System default"
     },
     "card": {
       "pin": "Pin",
@@ -31,30 +32,31 @@
       "copyHostnameIp": "Copy Hostname/IP",
       "copiedHost": "Copied {{host}}",
       "executeSnippet": "Execute Snippet",
-      "cloudSyncDisabled": "Cloud sync disabled",
-      "enableCloudSync": "Enable cloud sync",
-      "disableCloudSync": "Disable cloud sync",
       "enableReachability": "Enable reachability check",
       "disableReachability": "Disable reachability check",
       "connectTitle": "Connect (or double-click)",
       "openFilesTitle": "Open files (or double-click)",
       "inUseBy": "In use by {{name}}",
       "inUseByOverflow_one": "In use by {{name}} + {{count}} other",
-      "inUseByOverflow_other": "In use by {{name}} + {{count}} others"
+      "inUseByOverflow_other": "In use by {{name}} + {{count}} others",
+      "filesSuffix": "files",
+      "knockProtected": "Knock-protected. Probed only after Voltius knocks.",
+      "knockWindowOpen": "Knock window open",
+      "knockProtectedShort": "knock-protected"
     },
     "page": {
       "all": "All",
       "folders": "Folders",
       "new": "New",
       "pinned": "Pinned",
-      "folderEmpty": "This folder is empty",
-      "addHost": "Add Host",
       "noSearchResults": "No hosts match \"{{search}}\"",
       "ejectMoveTo": "Move to {{name}}",
       "ejectRemoveFromFolder": "Remove from folder",
       "emptyState": {
         "title": "No hosts yet",
-        "subtitle": "Add your first SSH host to get started"
+        "subtitle": "Add a server to connect to it in one click.",
+        "import": "Import hosts",
+        "quickConnect": "Connect without saving"
       },
       "draft": {
         "unsaved": "Unsaved"
@@ -72,8 +74,6 @@
         "moveItemsTo_other": "Move {{count}} items to",
         "copyItemsTo_one": "Copy {{count}} item to",
         "copyItemsTo_other": "Copy {{count}} items to",
-        "enableCloudSync": "Enable cloud sync ({{count}})",
-        "disableCloudSync": "Disable cloud sync ({{count}})",
         "enableReachability": "Enable reachability check ({{count}})",
         "disableReachability": "Disable reachability check ({{count}})",
         "exportHosts": "Export {{count}} hosts",
@@ -97,21 +97,21 @@
     },
     "remoteSessions": {
       "title": "Live on other devices",
-      "justNow": "just now",
-      "minutesAgo": "{{count}}m ago",
-      "hoursAgo": "{{count}}h ago",
-      "daysAgo": "{{count}}d ago",
       "kill": "Kill session",
+      "join": "Join session",
       "killing": "Killing session…",
       "undo": "Undo",
       "killFailed": "Couldn't kill remotely — open the session to end it",
-      "dismiss": "Dismiss"
+      "dismiss": "Dismiss",
+      "deviceActive": "{{device}} · active {{age}}",
+      "unknownDevice": "Unknown device"
     },
     "teamSessions": {
       "title": "Team Sessions",
       "joinByCode": "Join by code",
-      "emptyHint": "Terminals your teammates share appear here. Got an invite code? Paste it into search to join.",
+      "emptyHint": "Terminals your teammates share appear here. Got an invite link or code? Use Join by code.",
       "live": "LIVE",
+      "sharedBy": "Shared by {{name}}",
       "pasteInviteCode": "Paste an invite link or code to join a private session:",
       "inviteCodePlaceholder": "voltius://join?… or sessionId:token",
       "join": "Join",
@@ -142,6 +142,22 @@
       "failed": "Host command failed for {{host}}: {{error}}",
       "missingSnippet": "Host command snippet is missing for {{host}}",
       "postPromptTimedOut": "Post-command for {{host}} was skipped: no response within 60s"
+    },
+    "connectAs": {
+      "title": "Connect as",
+      "yours": "yours",
+      "hostDefault": "host default",
+      "vaultDefault": "My identity for {{vault}}…",
+      "clearPick": "Clear my choice"
+    },
+    "managed": {
+      "badge": "ssh config",
+      "tooltip": "Managed by ~/.ssh/config · alias {{alias}}",
+      "bannerTitle": "Managed by ~/.ssh/config",
+      "bannerBodyBefore": "Alias ",
+      "bannerBodyAfter": ". Locked fields follow the file.",
+      "detach": "Detach",
+      "detachMenu": "Detach from ~/.ssh/config"
     }
   }
 }

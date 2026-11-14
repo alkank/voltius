@@ -1,21 +1,15 @@
-import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
-import i18n from "@/i18n";
-import { useClickOutside } from "@/hooks/useClickOutside";
-import { getSyncState, onSyncStateChange, syncNow, type SyncStatus } from "@/services/sync";
-import { getExposedApi } from "@/plugins/runtime";
-import { syncStatusColor, type GistSyncPublicApi } from "@/services/syncStatus";
-import { runManualSync } from "@/services/syncIntent";
-import { SyncStatusIcon, useSyncMotion } from "@/components/shared/SyncStatusIcon";
-import { useGistSyncState } from "@/hooks/useGistSyncState";
+import { useAnchoredPopover } from "@/hooks/useAnchoredPopover";
+import { runSyncMenuAction, useSyncProviderPanel } from "@/hooks/useSyncProviderPanel";
+import { splitCloudProvider, type SyncProviderAction, type SyncProviderView } from "@/services/syncProviders";
 import { useVaultContents } from "@/hooks/useVaultContents";
 import { ContentCounts } from "@/components/shared/ContentCounts";
-import { useUIStore } from "@/stores/uiStore";
-import { useSubscriptionStore } from "@/stores/subscriptionStore";
-import { openBillingCheckout } from "@/services/billingCheckout";
-
-const GIST_SYNC_PLUGIN_ID = "plugin-gist-sync";
+import type { usePluginInstaller } from "@/components/settings/usePluginInstaller";
+import { useAvailableSyncProviders } from "@/hooks/useAvailableSyncProviders";
+import { AvailableSyncProviderRow } from "@/components/shared/AvailableSyncProviderRow";
+import { LocalNetworkSection } from "@/components/shared/LocalNetworkSection";
+import { providerLang, SyncHeaderButton, SyncInlineAction, SyncSectionHeader } from "@/components/shared/SyncSectionParts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -25,92 +19,33 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-function statusLabel(status: SyncStatus, lastSync: Date | null): string {
-  if (status === "syncing") return i18n.t("layout.sync.status.syncing");
-  if (status === "success") return lastSync ? i18n.t("layout.sync.status.syncedAt", { time: formatTime(lastSync) }) : i18n.t("layout.sync.status.synced");
-  if (status === "error")   return i18n.t("layout.sync.status.error");
-  if (status === "offline") return i18n.t("layout.sync.status.offline");
-  return i18n.t("layout.sync.status.idle");
-}
-
 // ─── Section ──────────────────────────────────────────────────────────────────
 
-type SectionVariant =
-  | { kind: "active"; status: SyncStatus; lastSync: Date | null; error: string | null; blobSizeBytes: number | null }
-  | { kind: "misconfigured"; onConfigure: () => void }
-  | { kind: "disabled"; onEnable: () => void }
-  | { kind: "locked"; onSignIn: () => void }
-  | { kind: "needs_upgrade"; onUpgrade: () => void };
-
-function SyncSection({
-  label,
-  methodIcon,
-  variant,
-  onSyncNow,
-}: {
-  label: string;
-  methodIcon: string;
-  variant: SectionVariant;
-  onSyncNow: () => Promise<void>;
-}) {
+function SyncSection({ provider, onAction }: { provider: SyncProviderView; onAction: (action: SyncProviderAction) => void }) {
   const { t } = useTranslation();
-  const isActive = variant.kind === "active";
-  const isSyncing = isActive && variant.status === "syncing";
-  const [pending, setPending] = useState(isSyncing);
-  const sync = useSyncMotion(isActive ? variant.status : "idle");
+  const { syncNow, inactive: inactiveRow, status, header, devices } = useSyncProviderPanel(provider);
 
-  useEffect(() => {
-    setPending(isActive && variant.status === "syncing");
-  }, [isActive, isActive ? variant.status : null]);
-
-  const canSync = isActive && !pending;
-
-  const handleSync = () => {
-    if (!canSync) return;
-    setPending(true);
-    runManualSync(onSyncNow).catch(() => {});
+  const act = () => {
+    if (provider.action) onAction(provider.action);
   };
+  const toggle = provider.pauseToggle;
 
   return (
-    <div className="px-3 py-2.5 space-y-2">
-      {/* Method header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <Icon icon={methodIcon} width={12} style={{ color: "var(--t-text-dim)" }} />
-          <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--t-text-dim)" }}>
-            {label}
-          </span>
-        </div>
-        <button
-          onClick={handleSync}
-          disabled={!canSync}
-          className="flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-medium transition-all"
-          style={{
-            color: canSync ? "var(--t-text-secondary)" : "var(--t-text-dim)",
-            background: "var(--t-bg-elevated)",
-            opacity: !isActive ? 0.4 : 1,
-          }}
-          onMouseEnter={(e) => {
-            if (canSync) (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-primary)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.color = canSync ? "var(--t-text-secondary)" : "var(--t-text-dim)";
-          }}
-          title={t("layout.sync.syncNow")}
-        >
+    <div data-sync-provider={provider.id} className="px-3 py-2.5 space-y-2">
+      <SyncSectionHeader variant="dropdown" icon={provider.icon} label={provider.label} lang={providerLang(provider.id)} status={header}>
+        {toggle && (
+          <SyncHeaderButton onClick={() => onAction(toggle)} title={t(`layout.sync.${toggle.kind}`)}>
+            <Icon icon={toggle.kind === "pause" ? "lucide:pause" : "lucide:play"} width={10} />
+          </SyncHeaderButton>
+        )}
+        <SyncHeaderButton onClick={syncNow.run} disabled={syncNow.busy || !syncNow.available} faded={!syncNow.available} title={t("layout.sync.syncNow")}>
           <Icon icon="lucide:refresh-cw" width={10} />
-          {t("layout.sync.syncNow")}
-        </button>
-      </div>
+        </SyncHeaderButton>
+      </SyncSectionHeader>
 
-      {/* State body */}
-      {variant.kind === "locked" && (
+      {provider.availability === "locked" && (
         <button
-          onClick={variant.onSignIn}
+          onClick={act}
           className="w-full flex items-center gap-1.5 text-left"
           style={{ color: "var(--t-accent)" }}
           onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "0.75")}
@@ -122,83 +57,24 @@ function SyncSection({
         </button>
       )}
 
-      {variant.kind === "needs_upgrade" && (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs" style={{ color: "var(--t-text-dim)" }}>{t("layout.sync.requiresPro")}</span>
-          <button
-            onClick={variant.onUpgrade}
-            className="text-[10px] font-medium transition-opacity"
-            style={{ color: "var(--t-accent)" }}
-            onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "0.75")}
-            onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "1")}
-          >
-            {t("layout.sync.upgradeArrow")}
-          </button>
-        </div>
-      )}
+      {inactiveRow && provider.action && <SyncInlineAction onClick={act} label={t(inactiveRow.actionKey)} />}
 
-      {variant.kind === "disabled" && (
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5" style={{ color: "var(--t-text-dim)" }}>
-            <Icon icon="lucide:puzzle" width={11} />
-            <span className="text-xs">{t("layout.sync.pluginDisabled")}</span>
-          </div>
-          <button
-            onClick={variant.onEnable}
-            className="text-[10px] font-medium transition-opacity"
-            style={{ color: "var(--t-accent)" }}
-            onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "0.75")}
-            onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "1")}
-          >
-            {t("layout.sync.enableArrow")}
-          </button>
-        </div>
-      )}
-
-      {variant.kind === "misconfigured" && (
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5" style={{ color: "var(--t-status-warning, var(--t-text-dim))" }}>
-            <Icon icon="lucide:triangle-alert" width={11} style={{ color: "var(--t-status-error)" }} />
-            <span className="text-xs" style={{ color: "var(--t-status-error)" }}>{t("layout.sync.notConfigured")}</span>
-          </div>
-          <button
-            onClick={variant.onConfigure}
-            className="text-[10px] font-medium transition-opacity"
-            style={{ color: "var(--t-accent)" }}
-            onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "0.75")}
-            onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "1")}
-          >
-            {t("layout.sync.configureArrow")}
-          </button>
-        </div>
-      )}
-
-      {variant.kind === "active" && (() => {
-        const { lastSync, error, blobSizeBytes } = variant;
-        const { status } = sync;
-        const color = syncStatusColor(status);
-        return (
-          <>
-            <div className="flex items-center gap-1.5">
-              <SyncStatusIcon sync={sync} width={12} style={{ color }} />
-              <span className="text-xs" style={{ color }}>
-                {statusLabel(status, lastSync)}
-              </span>
+      {status && (
+        <>
+          {status.reason && (
+            <p className="text-[10px] leading-relaxed break-words" style={{ color: status.color }}>
+              {status.reason}
+            </p>
+          )}
+          {devices && <SyncInlineAction slug="show-devices" onClick={() => onAction(devices)} label={t("layout.sync.showDevices")} />}
+          {provider.state.blobSizeBytes !== null && (
+            <div className="flex items-center gap-1" style={{ color: "var(--t-text-muted)" }}>
+              <Icon icon="lucide:lock" width={10} />
+              <span className="text-[10px]">{t("layout.sync.encryptedBlob", { size: formatBytes(provider.state.blobSizeBytes) })}</span>
             </div>
-            {status === "error" && error && (
-              <p className="text-[10px] leading-relaxed" style={{ color: "var(--t-status-error)" }}>
-                {error}
-              </p>
-            )}
-            {blobSizeBytes !== null && (
-              <div className="flex items-center gap-1" style={{ color: "var(--t-text-muted)" }}>
-                <Icon icon="lucide:lock" width={10} />
-                <span className="text-[10px]">{t("layout.sync.encryptedBlob", { size: formatBytes(blobSizeBytes) })}</span>
-              </div>
-            )}
-          </>
-        );
-      })()}
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -217,45 +93,50 @@ function EntityCounts() {
   );
 }
 
+type SyncInstaller = Pick<ReturnType<typeof usePluginInstaller>, "busy" | "startInstall">;
+
+function MoreSyncProviders({ installer }: { installer: SyncInstaller }) {
+  const { t } = useTranslation();
+  const { available, appVersion } = useAvailableSyncProviders();
+  if (available.length === 0) return null;
+
+  return (
+    <div className="px-3 py-2.5 space-y-2" style={{ borderTop: "1px solid var(--t-border)" }}>
+      <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--t-text-dim)" }}>
+        {t("layout.sync.moreProviders")}
+      </span>
+      {available.map((plugin) => (
+        <AvailableSyncProviderRow
+          key={plugin.id}
+          compact
+          plugin={plugin}
+          appVersion={appVersion}
+          busy={installer.busy.has(plugin.id)}
+          onInstall={() => installer.startInstall(plugin)}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ─── Main dropdown ────────────────────────────────────────────────────────────
 
 interface SyncDropdownProps {
   anchorRef: React.RefObject<HTMLButtonElement | null>;
   open: boolean;
   onClose: () => void;
-  cloudActive: boolean;
-  gistPluginEnabled: boolean;
-  accountMode: string | null;
+  providers: SyncProviderView[];
+  installer: SyncInstaller;
 }
 
-export function SyncDropdown({ anchorRef, open, onClose, gistPluginEnabled, accountMode }: SyncDropdownProps) {
+export function SyncDropdown({ anchorRef, open, onClose, providers, installer }: SyncDropdownProps) {
   const { t } = useTranslation();
-  const openSettings = useUIStore((s) => s.openSettings);
-  const openCloudAuth = useUIStore((s) => s.openCloudAuth);
-  const isPro = useSubscriptionStore((s) => s.isPro);
-  const panelRef = useRef<HTMLDivElement>(null);
-  useClickOutside(panelRef, onClose, open);
+  const fade = useAnchoredPopover(open, onClose, anchorRef);
 
-  const [voltiusState, setVoltiusState] = useState(getSyncState);
-  useEffect(() => onSyncStateChange(() => setVoltiusState(getSyncState())), []);
+  if (!fade.mounted) return null;
 
-  const gistState = useGistSyncState();
-
-  if (!open) return null;
-
-  const isLoggedIn = accountMode === "server";
-
-  const voltiusVariant: SectionVariant = !isLoggedIn
-    ? { kind: "locked", onSignIn: () => { onClose(); openCloudAuth("signin"); } }
-    : !isPro
-    ? { kind: "needs_upgrade", onUpgrade: () => { onClose(); void openBillingCheckout("pro"); } }
-    : { kind: "active", status: voltiusState.status, lastSync: voltiusState.lastSync, error: voltiusState.error, blobSizeBytes: voltiusState.blobSizeBytes };
-
-  const gistVariant: SectionVariant = !gistPluginEnabled
-    ? { kind: "disabled", onEnable: () => { onClose(); openSettings("plugins"); } }
-    : !gistState.configured
-    ? { kind: "misconfigured", onConfigure: () => { onClose(); openSettings("plugins", "plugin-gist-sync:gist-sync-settings"); } }
-    : { kind: "active", status: gistState.status, lastSync: gistState.lastSync, error: gistState.error, blobSizeBytes: gistState.blobSizeBytes };
+  const onAction = (action: SyncProviderAction) => runSyncMenuAction(action, onClose);
+  const { cloud, others } = splitCloudProvider(providers);
 
   const anchor = anchorRef.current;
   const rect = anchor?.getBoundingClientRect();
@@ -264,18 +145,11 @@ export function SyncDropdown({ anchorRef, open, onClose, gistPluginEnabled, acco
 
   return (
     <div
-      ref={panelRef}
-      className="surface-float fixed z-50 w-64 overflow-hidden"
-      style={{
-        top,
-        right,
-      }}
+      ref={fade.panelRef}
+      className={`surface-float fixed z-50 w-76 overflow-hidden ${fade.className}`}
+      style={{ top, right, ...fade.style }}
     >
-      {/* Header */}
-      <div
-        className="flex items-center justify-between px-3 py-2"
-        style={{ borderBottom: "1px solid var(--t-border)" }}
-      >
+      <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: "1px solid var(--t-border)" }}>
         <span className="text-xs font-semibold" style={{ color: "var(--t-text-primary)" }}>
           {t("layout.sync.title")}
         </span>
@@ -290,28 +164,14 @@ export function SyncDropdown({ anchorRef, open, onClose, gistPluginEnabled, acco
         </button>
       </div>
 
-      {/* Voltius Sync section */}
-      <SyncSection
-        label={t("layout.sync.voltiusSync")}
-        methodIcon="lucide:cloud"
-        variant={voltiusVariant}
-        onSyncNow={() => syncNow(true)}
-      />
+      <div className="divide-y divide-(--t-border)">
+        {cloud && <SyncSection provider={cloud} onAction={onAction} />}
+        <LocalNetworkSection variant="dropdown" onClose={onClose} />
+        {others.map((provider) => <SyncSection key={provider.id} provider={provider} onAction={onAction} />)}
+      </div>
 
-      <div style={{ height: 1, background: "var(--t-border)" }} />
+      <MoreSyncProviders installer={installer} />
 
-      {/* Gist E2EE section */}
-      <SyncSection
-        label={t("layout.sync.gistE2ee")}
-        methodIcon="custom:github"
-        variant={gistVariant}
-        onSyncNow={async () => {
-          const gistApi = getExposedApi(GIST_SYNC_PLUGIN_ID) as GistSyncPublicApi | null;
-          await gistApi?.syncNow({ showProgress: false });
-        }}
-      />
-
-      {/* Entity counts */}
       <div style={{ borderTop: "1px solid var(--t-border)" }}>
         <EntityCounts />
       </div>

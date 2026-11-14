@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTeamStore } from "@/stores/teamStore";
 import type { TeamRole } from "@/stores/teamStore";
-import { useSubscriptionStore } from "@/stores/subscriptionStore";
-import { ColorPicker } from "@/components/theme-creator/ColorPicker";
+import { ColorSwatches } from "@/components/shared/ColorSwatches";
 import { type Permission, PERM_BITS, effectivePermissions } from "@/hooks/usePermission";
 import { PERMISSION_GROUPS, type PermissionGroupKey } from "@/services/permissions";
-import { permissionLabel } from "@/components/members/roleChips";
+import { permissionLabel, roleLabel } from "@/components/members/roleChips";
+import { CheckboxBox } from "@/components/shared/Checkbox";
+import { BusinessLockCard } from "@/components/shared/BusinessLockBanner";
+import { useBusinessLock } from "@/hooks/useBusinessLock";
 
 // ─── Permission metadata ──────────────────────────────────────────────────────
 
 // Maps the canonical group keys onto this screen's own (already-translated) i18n names.
 const GROUP_LABEL_KEY: Record<PermissionGroupKey, string> = {
+  administration: "administration",
   secrets: "dataAccess",
   vaultContent: "connectionManagement",
   team: "teamAdministration",
@@ -49,15 +51,7 @@ function PermissionRow({
       onMouseLeave={(e) => { if (!readOnly) (e.currentTarget as HTMLLabelElement).style.background = checked ? "rgba(var(--t-accent-rgb, 99,102,241), 0.08)" : "transparent"; }}
       onClick={() => { if (!readOnly) onToggle(bit); }}
     >
-      <div
-        className="shrink-0 w-4 h-4 rounded-sm flex items-center justify-center border transition-colors"
-        style={{
-          background: checked ? "var(--t-accent)" : "transparent",
-          borderColor: checked ? "var(--t-accent)" : "var(--t-border)",
-        }}
-      >
-        {checked && <Icon icon="lucide:check" width={10} className="text-white" />}
-      </div>
+      <CheckboxBox checked={checked} />
       <div className="flex-1 min-w-0">
         <span className="text-sm font-medium" style={{ color: "var(--t-text-primary)" }}>{tLabel}</span>
         <span className="text-xs ml-2" style={{ color: "var(--t-text-dim)" }}>{tDesc}</span>
@@ -101,13 +95,6 @@ function PermissionGrid({
 
 // ─── Role modal (create / edit) ───────────────────────────────────────────────
 
-const PRESET_COLORS = [
-  "#6366f1", "#8b5cf6", "#a78bfa",
-  "#3b82f6", "#60a5fa", "#14b8a6",
-  "#10b981", "#34d399", "#f59e0b",
-  "#ef4444", "#f87171", "#ec4899",
-];
-
 export function RoleModal({
   teamId,
   role,
@@ -120,7 +107,7 @@ export function RoleModal({
   const { t } = useTranslation();
   const { createRole, updateRole } = useTeamStore();
   const [name, setName] = useState(role?.name ?? "");
-  const [permissions, setPermissions] = useState(role?.permissions ?? 0);
+  const [permissions, setPermissions] = useState(role?.permissions ?? PERM_BITS.VIEW);
   const [color, setColor] = useState<string>(role?.color ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -199,34 +186,7 @@ export function RoleModal({
             <label className="block text-xs font-bold uppercase tracking-widest mb-2" style={{ color: "var(--t-text-dim)" }}>
               {t("settings.vaults.rolesPanel.colorLabel")}
             </label>
-            <div className="flex flex-wrap gap-2 items-center">
-              {PRESET_COLORS.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setColor(color === c ? "" : c)}
-                  className="w-6 h-6 rounded-full transition-all shrink-0"
-                  style={{
-                    background: c,
-                    outline: color === c ? `2px solid ${c}` : "2px solid transparent",
-                    outlineOffset: 2,
-                    opacity: color && color !== c ? 0.5 : 1,
-                  }}
-                  title={c}
-                />
-              ))}
-              <div className="flex items-center gap-1.5 ml-1">
-                <ColorPicker value={color || "#6366f1"} onChange={setColor} />
-                {color && (
-                  <button
-                    onClick={() => setColor("")}
-                    className="text-xs px-1.5 py-0.5 rounded-sm"
-                    style={{ color: "var(--t-text-dim)", background: "var(--t-bg-elevated)" }}
-                  >
-                    {t("settings.vaults.rolesPanel.clearColor")}
-                  </button>
-                )}
-              </div>
-            </div>
+            <ColorSwatches value={color} onChange={setColor} clearLabel={t("settings.vaults.rolesPanel.clearColor")} />
             {color && (
               <div className="mt-2 flex items-center gap-2">
                 <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full capitalize" style={{ color, background: `${color}1a` }}>
@@ -242,6 +202,7 @@ export function RoleModal({
             <label className="block text-xs font-bold uppercase tracking-widest mb-2" style={{ color: "var(--t-text-dim)" }}>
               {t("settings.vaults.rolesPanel.permissionsLabel")}
             </label>
+            <p className="text-xs text-(--t-text-dim) px-3 mb-2">{t("settings.vaults.rolesPanel.objectOverrideNote")}</p>
             <PermissionGrid value={permissions} onChange={setPermissions} />
           </div>
 
@@ -288,7 +249,7 @@ function BuiltinRoleCard({ name, permissions }: { name: string; permissions: num
         onClick={() => setExpanded((v) => !v)}
       >
         <Icon icon="lucide:lock" width={13} style={{ color: "var(--t-text-dim)" }} />
-        <span className="flex-1 text-sm font-medium capitalize" style={{ color: "var(--t-text-primary)" }}>{name}</span>
+        <span className="flex-1 text-sm font-medium capitalize" style={{ color: "var(--t-text-primary)" }}>{roleLabel(t, name)}</span>
         <span className="text-[10px] px-2 py-0.5 rounded-sm" style={{ background: "var(--t-bg-card)", color: "var(--t-text-dim)" }}>{t("settings.vaults.rolesPanel.builtinBadge")}</span>
         <Icon icon={expanded ? "lucide:chevron-up" : "lucide:chevron-down"} width={13} style={{ color: "var(--t-text-dim)" }} />
       </button>
@@ -307,12 +268,14 @@ function RoleCard({
   teamId,
   role,
   canEdit,
+  canDelete,
   dragHandleProps,
   isDragOver,
 }: {
   teamId: string;
   role: TeamRole;
   canEdit: boolean;
+  canDelete: boolean;
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>;
   isDragOver?: boolean;
 }) {
@@ -366,33 +329,33 @@ function RoleCard({
             <span className="flex-1 text-sm font-medium truncate" style={{ color: "var(--t-text-primary)" }}>{role.name}</span>
           </button>
           {canEdit && (
-            <>
-              <button
-                onClick={() => setEditing(true)}
-                className="p-1.5 rounded-lg transition-colors"
-                style={{ color: "var(--t-text-dim)" }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-primary)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-dim)"; }}
-                title={t("settings.vaults.rolesPanel.editRole")}
-              >
-                <Icon icon="lucide:pencil" width={13} />
-              </button>
-              <button
-                onClick={() => void handleDelete()}
-                disabled={deleting}
-                className="p-1.5 rounded-lg transition-colors"
-                style={{ color: confirmDelete ? "var(--t-status-error)" : "var(--t-text-dim)" }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "var(--t-status-error)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = confirmDelete ? "var(--t-status-error)" : "var(--t-text-dim)"; }}
-                onBlur={() => setConfirmDelete(false)}
-                title={confirmDelete ? t("settings.vaults.rolesPanel.clickToConfirm") : t("settings.vaults.rolesPanel.deleteRoleTitle")}
-              >
-                {deleting
-                  ? <Icon icon="lucide:loader-circle" width={13} className="animate-spin" />
-                  : <Icon icon={confirmDelete ? "lucide:triangle-alert" : "lucide:trash-2"} width={13} />
-                }
-              </button>
-            </>
+            <button
+              onClick={() => setEditing(true)}
+              className="p-1.5 rounded-lg transition-colors"
+              style={{ color: "var(--t-text-dim)" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-primary)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-dim)"; }}
+              title={t("settings.vaults.rolesPanel.editRole")}
+            >
+              <Icon icon="lucide:pencil" width={13} />
+            </button>
+          )}
+          {canDelete && (
+            <button
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+              className="p-1.5 rounded-lg transition-colors"
+              style={{ color: confirmDelete ? "var(--t-status-error)" : "var(--t-text-dim)" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "var(--t-status-error)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = confirmDelete ? "var(--t-status-error)" : "var(--t-text-dim)"; }}
+              onBlur={() => setConfirmDelete(false)}
+              title={confirmDelete ? t("settings.vaults.rolesPanel.clickToConfirm") : t("settings.vaults.rolesPanel.deleteRoleTitle")}
+            >
+              {deleting
+                ? <Icon icon="lucide:loader-circle" width={13} className="animate-spin" />
+                : <Icon icon={confirmDelete ? "lucide:triangle-alert" : "lucide:trash-2"} width={13} />
+              }
+            </button>
           )}
           <button onClick={() => setExpanded((v) => !v)}>
             <Icon icon={expanded ? "lucide:chevron-up" : "lucide:chevron-down"} width={13} style={{ color: "var(--t-text-dim)" }} />
@@ -416,7 +379,7 @@ function RoleCard({
 export function TeamRolesPanel({ teamId, myUserId }: { teamId: string; myUserId: string }) {
   const { t } = useTranslation();
   const { rolesByTeam, loadRoles, membersByTeam, loadMembers, updateRole } = useTeamStore();
-  const isBusiness = useSubscriptionStore((s) => s.isBusiness);
+  const { locked } = useBusinessLock(teamId);
   const [creating, setCreating] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropIdx, setDropIdx] = useState<number | null>(null);
@@ -428,8 +391,10 @@ export function TeamRolesPanel({ teamId, myUserId }: { teamId: string; myUserId:
   const myMember = members.find((m) => m.user_id === myUserId);
 
   const canEdit = myMember
-    ? (effectivePermissions(myMember, roles) & PERM_BITS.MANAGE_ROLES) !== 0
+    ? (effectivePermissions(myMember, roles, locked) & PERM_BITS.MANAGE_ROLES) !== 0
     : false;
+
+  const editable = canEdit && !locked;
 
   const builtinRoles = roles.filter((r) => r.is_builtin).sort((a, b) => a.position - b.position);
   const rawCustomRoles = roles.filter((r) => !r.is_builtin).sort((a, b) => a.position - b.position);
@@ -496,7 +461,7 @@ export function TeamRolesPanel({ teamId, myUserId }: { teamId: string; myUserId:
           <h4 className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--t-text-dim)" }}>
             {t("settings.vaults.rolesPanel.customRoles")}
           </h4>
-          {isBusiness && canEdit && (
+          {editable && (
             <button
               onClick={() => setCreating(true)}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors"
@@ -510,28 +475,8 @@ export function TeamRolesPanel({ teamId, myUserId }: { teamId: string; myUserId:
           )}
         </div>
 
-        {!isBusiness ? (
-          <div
-            className="rounded-xl p-4 flex flex-col items-center gap-3 text-center"
-            style={{ border: "1px solid var(--t-border)", background: "var(--t-bg-card)" }}
-          >
-            <Icon icon="lucide:lock" width={20} style={{ color: "var(--t-text-dim)" }} />
-            <div>
-              <p className="text-sm font-medium" style={{ color: "var(--t-text-primary)" }}>{t("settings.vaults.rolesPanel.businessFeature")}</p>
-              <p className="text-xs mt-1 max-w-[220px]" style={{ color: "var(--t-text-dim)" }}>
-                {t("settings.vaults.rolesPanel.businessFeatureDesc")}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void openUrl("https://voltius.app/#pricing")}
-              className="text-xs px-3 py-1.5 rounded-lg font-medium"
-              style={{ background: "var(--t-accent)", color: "#fff" }}
-            >
-              {t("settings.vaults.rolesPanel.upgradeBtn")}
-            </button>
-          </div>
-        ) : customRoles.length === 0 ? (
+        {locked && <BusinessLockCard teamId={teamId} body={t("shared.businessLock.rolesBody")} />}
+        {!locked && customRoles.length === 0 && (
           <div
             className="rounded-xl p-4 text-center"
             style={{ border: "1px dashed var(--t-border)" }}
@@ -541,16 +486,18 @@ export function TeamRolesPanel({ teamId, myUserId }: { teamId: string; myUserId:
               {canEdit ? t("settings.vaults.rolesPanel.noCustomRolesCanEdit") : t("settings.vaults.rolesPanel.noCustomRoles")}
             </p>
           </div>
-        ) : (
+        )}
+        {customRoles.length > 0 && (
           <div className="space-y-2">
             {customRoles.map((role, idx) => (
               <RoleCard
                 key={role.id}
                 teamId={teamId}
                 role={role}
-                canEdit={canEdit}
+                canEdit={editable}
+                canDelete={canEdit}
                 isDragOver={dropIdx === idx && dragIdx !== null && dragIdx !== idx}
-                dragHandleProps={canEdit ? {
+                dragHandleProps={editable ? {
                   draggable: true,
                   onDragStart: (e) => { e.stopPropagation(); handleDragStart(idx); },
                   onDragOver: (e) => handleDragOver(e, idx),

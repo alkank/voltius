@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
 import { useTeamStore } from "@/stores/teamStore";
 import { appFetch } from "@/services/http";
@@ -13,11 +13,13 @@ interface Props {
   teamId: string;
   pendingUser: { user_id: string; handle: string } | null;
   pendingRole: string;
+  pendingRoleIds?: string[];
+  pendingName?: string;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-export default function BuySeatsModal({ teamId, pendingUser, pendingRole, onClose, onSuccess }: Props) {
+export default function BuySeatsModal({ teamId, pendingUser, pendingRole, pendingRoleIds, pendingName, onClose, onSuccess }: Props) {
   const { t } = useTranslation();
   const { usedSeats, totalSeats } = useSubscriptionStore();
   const addMemberById = useTeamStore((s) => s.addMemberById);
@@ -51,7 +53,7 @@ export default function BuySeatsModal({ teamId, pendingUser, pendingRole, onClos
 
       // Add the pending user if there is one
       if (pendingUser) {
-        await addMemberById(teamId, pendingUser.user_id, pendingRole);
+        await addMemberById(teamId, pendingUser.user_id, pendingRole, pendingName, pendingRoleIds);
       }
 
       onSuccess();

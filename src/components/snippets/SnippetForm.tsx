@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { useAutosave } from "@/hooks/useAutosave";
+import { usePopoverFade } from "@/hooks/useDelayedUnmount";
+import { useFolderField } from "@/hooks/useFolderField";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
+import { useVaultScopedItems } from "@/hooks/useVaultScopedItems";
 import FolderSelector from "@/components/shared/FolderSelector";
 import TagSelector from "@/components/shared/TagSelector";
 import { useDefaultVaultId, resolveVaultIdForSave } from "@/hooks/useWritableVaultIds";
 import { PanelActionsMenu } from "@/components/shared/PanelActionsMenu";
 import { PinButton } from "@/components/shared/PinButton";
-import { useSnippetStore } from "@/stores/snippetStore";
+import { useSnippetStore, type SnippetDraft } from "@/stores/snippetStore";
 import { useTeamStore } from "@/stores/teamStore";
 import { useAllConnections } from "@/hooks/useAllConnections";
 import {
@@ -33,10 +36,16 @@ import { parseVariables } from "@/services/snippetParser";
 import { snippetScriptText } from "@/services/snippetSteps";
 import { StepListEditor } from "@/components/snippets/StepListEditor";
 import { RemotePathPickerPanel } from "@/components/snippets/RemotePathPickerPanel";
-import { VariableTextarea } from "@/components/snippets/VariableTextarea";
+import { SlideOver } from "@/components/shared/slideOver";
+import { ScriptEditor } from "@/components/snippets/ScriptEditor";
+import { searchMatcher } from "@/utils/search";
+import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 
 interface Props {
   initial?: Snippet;
+  /** Starting content for a new snippet; nothing is saved until it is edited or saved. */
+  draft?: SnippetDraft;
   onSubmit: (data: SnippetFormData) => void | Promise<void>;
   onClose: () => void;
   onDuplicate?: () => void;
@@ -44,7 +53,9 @@ interface Props {
   isDirtyRef?: React.MutableRefObject<boolean>;
 }
 
-export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete, isDirtyRef }: Props) {
+export const SnippetForm = withEditAccess("snippet", (p: Props) => p.initial, SnippetFormEditor);
+
+function SnippetFormEditor({ initial, draft, onSubmit, onClose, onDuplicate, onDelete, isDirtyRef, readOnly }: Props & EditAccessProps) {
   const { t } = useTranslation();
   const isNew = !initial;
   const pinSnippet = useSnippetStore((s) => s.pinSnippet);
@@ -52,7 +63,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   const pinSource = useEffectivePinSource(initial ?? { id: "", favorite: false }, "snippet");
   const isPinned = effPinned;
   const isTeamVault = useTeamStore((s) => initial ? s.teams.some((t) => t.id === initial.vault_id) : false);
-  const { folders, saveFolder } = useSnippetFolderStore();
+  const { folders: personalFolders, teamSnippetFolders, saveFolder } = useSnippetFolderStore();
   const defaultVaultId = useDefaultVaultId();
   const connections = useAllConnections();
   const allConnectionTags = useMemo(
@@ -60,10 +71,10 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
     [connections],
   );
 
-  const [name, setName]         = useState(initial?.name ?? "");
-  const [steps, setSteps]       = useState<SnippetStep[]>(initial?.steps ?? [{ kind: "script", content: "" }]);
+  const [name, setName]         = useState(initial?.name ?? draft?.name ?? "");
+  const [steps, setSteps]       = useState<SnippetStep[]>(initial?.steps ?? draft?.steps ?? [{ kind: "script", content: "" }]);
   const [description, setDesc]  = useState(initial?.description ?? "");
-  const [folderId, setFolderId] = useState<string | null>(initial?.folder_id ?? null);
+  const { folderId, setFolderId, keepSavedOnCancel } = useFolderField(initial?.folder_id);
   const [tags, setTags]         = useState<string[]>(initial?.tags ?? []);
   const [connTags, setConnTags] = useState<string[]>(initial?.only_for_connection_tags ?? []);
   const [connTagInput, setConnTagInput] = useState("");
@@ -73,6 +84,8 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   const [vaultId, setVaultId]   = useState(initial?.vault_id ?? defaultVaultId);
   const [remotePick, setRemotePick] = useState<{ index: number; field: "from_path" | "to_path"; isDir: boolean } | null>(null);
   const vaultTouched = useRef(false);
+  const [draftUnsaved, setDraftUnsaved] = useState(!!draft && !initial);
+  const folders = useVaultScopedItems(vaultId, personalFolders, teamSnippetFolders);
 
   // Single-script fast path: keep the plain textarea when the snippet is just one script step.
   const [forceSequence, setForceSequence] = useState(false);
@@ -100,8 +113,9 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   });
 
   const { schedule, markDirty: _markDirty, flushAndClose, flush, saveState } = useAutosave({
-    onSave: () => onSubmit(buildData()) ?? undefined,
+    onSave: () => saveNow(),
     canSave: () => steps.length > 0 && steps.some((s) => s.kind !== "script" || s.content.trim()),
+    readOnly,
   });
   const markDirty = useCallback(() => {
     if (isDirtyRef) isDirtyRef.current = true;
@@ -112,6 +126,11 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
   useEffect(() => schedule(), [name, steps, description, folderId, tags, connTags, distros, favorite, vaultId]);
 
   const handleClose = () => flushAndClose(onClose);
+
+  function saveNow() {
+    setDraftUnsaved(false);
+    return keepSavedOnCancel(onSubmit(buildData()));
+  }
 
   // ── Tag helpers — all call markDirty ──────────────────────────────────────
 
@@ -133,7 +152,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
 
   const panelItems = initial ? [
     ...(onDuplicate ? [{ label: t("snippets.card.duplicate"), icon: "lucide:copy", onClick: onDuplicate }] : []),
-    ...(onDelete ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => { flush(); onDelete(); }, shortcut: getShortcutHint("delete") }] : []),
+    ...(onDelete && !readOnly ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => { flush(); onDelete(); }, shortcut: getShortcutHint("delete") }] : []),
   ] : [];
 
   return (
@@ -143,11 +162,20 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
         icon="lucide:braces"
         // "Untitled snippet" is the persisted default name when left blank; kept in English until all creation sites are localized together (see i18n issue #14)
         title={isNew ? t("snippets.toolbar.newSnippet") : (name.trim() || "Untitled snippet")}
-        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => { vaultTouched.current = true; setVaultId(id); markDirty(); }} />}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => { vaultTouched.current = true; if (id !== vaultId) setFolderId(null); setVaultId(id); markDirty(); }} disabled={readOnly} />}
         onClose={handleClose}
         saveState={saveState}
         actions={
           <>
+            {draftUnsaved && !readOnly && (
+              <button
+                onClick={() => void saveNow()}
+                className="h-7 px-2.5 text-xs font-semibold rounded-lg"
+                style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
+              >
+                {t("common.action.save")}
+              </button>
+            )}
             {!isNew && <PinButton pinned={isPinned} onToggle={() => {
               if (!isTeamVault) {
                 pinSnippet(initial!.id, !isPinned).catch(() => {});
@@ -161,6 +189,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
       />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <ReadOnlyFields readOnly={readOnly} className="space-y-4">
         {/* ── General ── */}
         <FormSection label={t("snippets.form.generalSection")}>
           <div>
@@ -198,13 +227,12 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
                 onBrowseRemote={(index, field, isDir) => setRemotePick({ index, field, isDir })}
               />
             ) : (
-              <VariableTextarea
+              <ScriptEditor
                 value={content}
                 onChange={(v) => { markDirty(); setSteps([{ kind: "script", content: v }]); }}
-                rows={6}
                 // Sample shell command syntax, not prose UI copy — left untranslated like snippet body content
                 placeholder="echo Hello, {{name}}!"
-                style={{ minHeight: "7rem" }}
+                minHeight="7rem"
               />
             )}
 
@@ -232,9 +260,12 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
             {/* Syntax hint */}
             {!showStepList && (
               <p className="mt-1.5 text-xs leading-relaxed" style={{ color: "var(--t-text-dim)" }}>
-                {t("snippets.form.syntaxHintType")} <code className="font-mono bg-(--t-bg-elevated) px-1 rounded-sm" style={{ color: "var(--t-text)" }}>{"{{"}</code> {t("snippets.form.syntaxHintForAutocomplete")}
-                {" "}{t("snippets.form.syntaxHintCustomPrompts")} <code className="font-mono bg-(--t-bg-elevated) px-1 rounded-sm" style={{ color: "var(--t-text)" }}>{"{{name:type}}"}</code>
-                {" "}{t("snippets.form.syntaxHintTypesList")} <code className="font-mono bg-(--t-bg-elevated) px-1 rounded-sm" style={{ color: "var(--t-text)" }}>choice:a,b</code>
+                {/* The {{ … }} syntax goes in as values: literal braces in the string would be read as interpolation. */}
+                <Trans
+                  i18nKey="snippets.form.syntaxHint"
+                  values={{ open: "{{", prompt: "{{name:type}}", choice: "choice:a,b" }}
+                  components={{ code: <code className="font-mono bg-(--t-bg-elevated) px-1 rounded-sm" style={{ color: "var(--t-text)" }} /> }}
+                />
               </p>
             )}
           </div>
@@ -279,7 +310,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
               className="flex items-center gap-2 text-sm transition-colors"
               style={{ color: favorite ? "var(--t-accent)" : "var(--t-text-dim)" }}
             >
-              <Icon icon="lucide:star" width={15} />
+              <Icon icon="lucide:pin" width={15} />
               {favorite ? t("snippets.form.starred") : t("snippets.form.starThisSnippet")}
             </button>
           </div>
@@ -315,13 +346,12 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
             />
           </div>
         </FormSection>
+        </ReadOnlyFields>
+        {initial && <PermissionsSection objectId={initial.id} vaultId={initial.vault_id} type="snippet" />}
       </div>
     </PanelShell>
 
-      <div
-        className="absolute inset-0 transition-transform duration-200 ease-out border-l border-l-(--t-bg-terminal)"
-        style={{ transform: remotePick ? "translateX(0)" : "translateX(100%)" }}
-      >
+      <SlideOver open={!!remotePick} className="border-l border-l-(--t-bg-terminal)">
         {remotePick && (
           <RemotePathPickerPanel
             isDir={remotePick.isDir}
@@ -336,7 +366,7 @@ export function SnippetForm({ initial, onSubmit, onClose, onDuplicate, onDelete,
             }}
           />
         )}
-      </div>
+      </SlideOver>
     </div>
   );
 }
@@ -364,10 +394,10 @@ function AutocompleteTagInput({
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const filtered = suggestions.filter(
-    (s) => !tags.includes(s) && s.toLowerCase().includes(input.toLowerCase()),
-  );
+  const match = searchMatcher(input);
+  const filtered = suggestions.filter((s) => !tags.includes(s) && match(s));
   const showDropdown = open && filtered.length > 0;
+  const fade = usePopoverFade(showDropdown);
 
   return (
     <div ref={containerRef} className="relative">
@@ -411,10 +441,10 @@ function AutocompleteTagInput({
           }
         }}
       />
-      {showDropdown && (
+      {fade.mounted && (
         <div
-          className="absolute z-50 w-full mt-1 rounded-lg shadow-lg overflow-hidden"
-          style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}
+          className={`absolute z-50 w-full mt-1 rounded-lg shadow-lg overflow-hidden ${fade.className}`}
+          style={{ ...fade.style, background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}
         >
           {filtered.map((s) => (
             <button

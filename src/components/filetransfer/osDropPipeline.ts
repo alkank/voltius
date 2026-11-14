@@ -1,10 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
+import i18n from "@/i18n";
 import {
-  sftpUpload, sftpUploadDir, sftpUploadDirTar, sftpUploadBatchTar,
-  sftpExists, fsExists, fsCopy,
+  sftpUploadBatchTar, sftpDownloadBatchTar,
+  sftpExists, fsExists, pickLocalPath,
 } from "@/services/sftp";
+import { transferItem } from "@/services/sftpTransferCore";
 import { useTransferQueueStore } from "@/stores/transferQueueStore";
-import { tarUsable } from "./tarSupport";
+import { accelFor, tarMode } from "./tarSupport";
+import { joinPath } from "./moveTargetCore";
 import { type FileEntry } from "./SFTPTypes";
 
 export type UploadTarget = {
@@ -29,70 +32,97 @@ async function statOsPaths(paths: string[]): Promise<FileEntry[]> {
   return items;
 }
 
+export function batchLabel(files: FileEntry[]): string {
+  return files.length === 1 ? files[0].name : i18n.t("fileTransfer.common.itemsCount", { count: files.length });
+}
+
 async function uploadEntries(files: FileEntry[], target: UploadTarget): Promise<void> {
   const { runTransfer } = useTransferQueueStore.getState();
-  const dstBase = target.cwd.replace(/\/$/, "");
-  // Tar archives locally + extracts remotely, so both ends need tar; local targets use fsCopy.
-  const useTar = !target.isLocal && target.sftpId ? await tarUsable([target.sftpId], true) : false;
+  if (!target.isLocal && !target.sftpId) return;
+  const mode = !target.isLocal && target.sftpId ? await tarMode([target.sftpId]) : "off";
+  const useTar = mode === "tar";
 
   if (useTar && target.sftpId && files.length > 1) {
     const sftpId = target.sftpId;
-    const label = `${files.length} items`;
-    await runTransfer(label, "→", (tid) =>
-      sftpUploadBatchTar({ sftpId, localPaths: files.map((f) => f.path), remoteDir: dstBase, transferId: tid }),
+    await runTransfer(batchLabel(files), "→", (tid) =>
+      sftpUploadBatchTar({ sftpId, localPaths: files.map((f) => f.path), remoteDir: target.cwd, transferId: tid }),
       target.onRefresh,
-      true,
+      "tar",
     );
     return;
   }
 
   for (const file of files) {
-    const destPath = `${dstBase}/${file.name}`;
-    if (target.isLocal) {
-      await runTransfer(file.name, "→", (tid) => fsCopy(file.path, destPath, tid), target.onRefresh);
-    } else if (target.sftpId) {
-      const sftpId = target.sftpId;
-      await runTransfer(file.name, "→", (tid) => file.isDir
-        ? (useTar
-            ? sftpUploadDirTar({ sftpId, localPath: file.path, remotePath: destPath, transferId: tid })
-            : sftpUploadDir({ sftpId, localPath: file.path, remotePath: destPath, transferId: tid }))
-        : sftpUpload({ sftpId, localPath: file.path, remotePath: destPath, transferId: tid }),
-        target.onRefresh,
-        file.isDir && useTar,
-      );
-    }
+    await runTransfer(file.name, "→", (tid) => transferItem({
+      from: "local",
+      to: target.isLocal ? "local" : "remote",
+      dstSftpId: target.sftpId ?? undefined,
+      srcPath: file.path,
+      dstPath: joinPath(target.cwd, file.name),
+      isDir: file.isDir,
+      useTar,
+      transferId: tid,
+    }), target.onRefresh, accelFor(mode, file.isDir));
+  }
+}
+
+/** Ask for a local folder, then queue the download of `files` into it. */
+export async function downloadToPickedFolder(files: FileEntry[], sftpId: string): Promise<void> {
+  const dstDir = await pickLocalPath({ directory: true, title: i18n.t("terminal.sftp.downloadDialogTitle") });
+  if (dstDir) await downloadToLocal(files, sftpId, dstDir);
+}
+
+export async function downloadToLocal(files: FileEntry[], sftpId: string, localDir: string): Promise<void> {
+  const { runTransfer } = useTransferQueueStore.getState();
+  const mode = await tarMode([sftpId]);
+  const useTar = mode === "tar";
+
+  if (useTar && files.length > 1) {
+    await runTransfer(batchLabel(files), "←", (tid) =>
+      sftpDownloadBatchTar({ sftpId, remotePaths: files.map((f) => f.path), localDir, transferId: tid }), undefined, "tar");
+    return;
+  }
+
+  for (const file of files) {
+    await runTransfer(file.name, "←", (tid) => transferItem({
+      from: "remote",
+      to: "local",
+      srcSftpId: sftpId,
+      srcPath: file.path,
+      dstPath: joinPath(localDir, file.name),
+      isDir: file.isDir,
+      useTar,
+      transferId: tid,
+    }), undefined, accelFor(mode, file.isDir));
   }
 }
 
 /**
- * Run conflict detection for an upload then either prompt the user (via the
+ * Run conflict detection for an upload into `cwd`, then either prompt the user (via the
  * global pending dialog) or execute directly when there are no conflicts.
  */
-export async function triggerUpload(items: FileEntry[], target: UploadTarget): Promise<void> {
+export async function queueAfterConflicts(
+  items: FileEntry[], cwd: string, exists: (path: string) => Promise<boolean>, execute: (files: FileEntry[]) => void,
+): Promise<void> {
   if (items.length === 0) return;
-  const dstBase = target.cwd.replace(/\/$/, "");
   const conflicts = (
-    await Promise.all(items.map(async (f) => {
-      const dstPath = `${dstBase}/${f.name}`;
-      const exists = target.isLocal ? await fsExists(dstPath) : await sftpExists(target.sftpId!, dstPath);
-      return exists ? f : null;
-    }))
+    await Promise.all(items.map(async (f) => (await exists(joinPath(cwd, f.name)) ? f : null)))
   ).filter((f): f is FileEntry => f !== null);
 
   const conflictPaths = new Set(conflicts.map((f) => f.path));
   const toTransfer = items.filter((f) => !conflictPaths.has(f.path));
 
   if (conflicts.length > 0) {
-    useTransferQueueStore.getState().setPending({
-      conflicts,
-      toTransfer,
-      totalConflicts: conflicts.length,
-      execute: (files) => void uploadEntries(files, target),
-    });
+    useTransferQueueStore.getState().setPending({ conflicts, toTransfer, totalConflicts: conflicts.length, execute });
     return;
   }
+  execute(items);
+}
 
-  void uploadEntries(items, target);
+export async function triggerUpload(items: FileEntry[], target: UploadTarget): Promise<void> {
+  await queueAfterConflicts(items, target.cwd,
+    (p) => (target.isLocal ? fsExists(p) : sftpExists(target.sftpId!, p)),
+    (files) => void uploadEntries(files, target));
 }
 
 /** Entry point for OS-originated drops (Tauri onDragDropEvent). */

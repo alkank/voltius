@@ -8,18 +8,20 @@ import { collectSequenceVars, resolveLeafSteps, leafTemplateText } from "./snipp
 import { buildDynamicContext } from "./snippetRunCore";
 import { parseVariables } from "./snippetParser";
 import { resolveSftpIdForTarget, type RunTarget } from "./sftpTarget";
-import { snippetInject } from "./snippets";
+import { snippetInject } from "./snippetInject";
 import { readClipboard } from "@/utils/clipboard";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useConnectionStore } from "@/stores/connectionStore";
+import { allConnections } from "@/stores/connectionStore";
 import { useNotificationStore } from "@/stores/notificationStore";
+import type { ToastSeverity } from "@/plugins/api";
 import { useUIStore } from "@/stores/uiStore";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { waitForConnectedSessionIds } from "@/components/shared/sessionPickerTargets";
 import i18n from "@/i18n";
 import type { Snippet, Connection, TerminalSession } from "@/types";
 import type { ParsedVariable, DynamicContext } from "./snippetParser";
+import { isFileOnlyProtocol } from "@/utils/connectionType";
 
 type TransferStep = Extract<LeafStep, { kind: "transfer" }>;
 
@@ -196,7 +198,7 @@ export interface TerminalConnectDeps {
  * When a sequence has script steps, saved-host targets need a live terminal.
  * Connect them on the fly (via `connectMany`), wait for them to reach a terminal
  * session, and rewrite each into a `{ kind: "session" }` target. Hosts that fail
- * to connect (or have no terminal, e.g. FTP) become `{ kind: "failed" }`.
+ * to connect (or have no terminal, e.g. FTP or WebDAV) become `{ kind: "failed" }`.
  * Existing session targets pass through untouched.
  *
  * `openedSessionIds` are the freshly-connected sessions, for the caller to
@@ -208,7 +210,7 @@ export async function resolveTerminalTargets(
 ): Promise<{ resolutions: TerminalResolution[]; openedSessionIds: string[] }> {
   const connectable = targets.filter(
     (t): t is Extract<RunTarget, { kind: "connection" }> =>
-      t.kind === "connection" && t.connection.connection_type !== "ftp",
+      t.kind === "connection" && !isFileOnlyProtocol(t.connection),
   );
   if (connectable.length === 0) {
     return {
@@ -269,8 +271,7 @@ export function buildTargetContext(target: RunTarget, clipboard = ""): DynamicCo
   }
   if (target.context) return { ...target.context, clipboard };
   const sess = useSessionStore.getState().sessions.find((s) => s.id === target.sessionId);
-  const conns = useConnectionStore.getState().connections;
-  return buildDynamicContext(sess, conns, clipboard);
+  return buildDynamicContext(sess, allConnections(), clipboard);
 }
 
 async function prepareTarget(target: RunTarget, steps: LeafStep[]): Promise<PreparedTarget> {
@@ -500,13 +501,18 @@ export function buildSummaryMessage(result: SequenceRunResult): { message: strin
   };
 }
 
-export function reportSequenceResult(result: SequenceRunResult): void {
-  const { message, severity } = buildSummaryMessage(result);
+/** Toast attributed to Snippets, named in the current app language. */
+export function notifySnippets(message: string, severity: ToastSeverity, duration = 8000): void {
   useNotificationStore.getState().addToast({
-    source: { kind: "plugin", id: "snippets", name: "Snippets" },
+    source: { kind: "plugin", id: "snippets", name: i18n.t("layout.nav.snippets") },
     type: "toast",
     message,
     severity,
-    duration: severity === "success" ? 4000 : 8000,
+    duration,
   });
+}
+
+export function reportSequenceResult(result: SequenceRunResult): void {
+  const { message, severity } = buildSummaryMessage(result);
+  notifySnippets(message, severity, severity === "success" ? 4000 : 8000);
 }

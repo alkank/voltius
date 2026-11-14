@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { useNotificationStore } from "@/stores/notificationStore";
+import { useAppLockStore } from "@/stores/appLockStore";
 import { ProgressToast } from "./ProgressToast";
 import type { ToastEntry } from "@/stores/notificationStore";
+import { useIsMobile } from "@/utils/platform";
+import MobileSnackbarHost from "@/components/mobile/MobileSnackbar";
 
 type TimerInfo = { id: ReturnType<typeof setTimeout>; remaining: number; startedAt: number; original: number };
 
@@ -132,8 +135,17 @@ function RegularToast({
 }
 
 export function NotificationToastContainer() {
+  const locked = useAppLockStore((s) => s.kind !== null);
+  const mobile = useIsMobile();
+  if (locked) return null;
+  // Phones: plain toasts are M3 snackbars (one at a time, above the bottom chrome).
+  return mobile ? <><MobileSnackbarHost /><ToastStack only="progress" /></> : <ToastStack />;
+}
+
+function ToastStack({ only }: { only?: ToastEntry["type"] }) {
   const { t } = useTranslation();
-  const toasts = useNotificationStore((s) => s.toasts);
+  const all = useNotificationStore((s) => s.toasts);
+  const toasts = useMemo(() => (only ? all.filter((x) => x.type === only) : all), [all, only]);
   const dismissToast = useNotificationStore((s) => s.dismissToast);
   const updateToast = useNotificationStore((s) => s.updateToast);
   const timers = useRef<Map<string, TimerInfo>>(new Map());
@@ -221,7 +233,7 @@ export function NotificationToastContainer() {
     for (const toast of toasts) {
       if (toast.type === "progress" && toast.finished && toast.finishedSeverity !== "error") {
         if (!timers.current.has(toast.id)) {
-          scheduleTimer(toast.id, 2000);
+          scheduleTimer(toast.id, toast.duration > 0 ? toast.duration : 2000);
         }
       }
     }

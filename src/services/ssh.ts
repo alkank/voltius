@@ -1,5 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import type { ProxySpec } from "@/services/proxy";
+import { onTerminalClosed, onTerminalOutput } from "@/services/terminalOutput";
+import type { KnockSpec } from "@/services/portKnock";
+import { currentTerminalColors, type TerminalColors } from "@/utils/terminalColors";
 
 export interface JumpHostConnect {
   host: string;
@@ -29,6 +33,7 @@ export async function sshConnect(params: {
   keepaliveIntervalSecs: number;
   keepaliveMax: number;
   persist?: boolean;
+  detachedTtlSecs?: number | null;
   restore?: boolean;
   /** Re-attach/join an existing multiplexer session; never creates one.
    * Rejects with SESSION_ENDED when the session is gone on the host. */
@@ -38,6 +43,8 @@ export async function sshConnect(params: {
   /** Directory the shell starts in. First connect only — a reconnect must not
    * move a session the user has since navigated elsewhere. */
   initialCwd?: string;
+  proxy?: ProxySpec | null;
+  knock?: KnockSpec | null;
 }): Promise<void> {
   return invoke("ssh_connect", {
     sessionId: params.sessionId,
@@ -58,11 +65,15 @@ export async function sshConnect(params: {
     keepaliveIntervalSecs: params.keepaliveIntervalSecs,
     keepaliveMax: params.keepaliveMax,
     persist: params.persist ?? null,
+    detachedTtlSecs: params.detachedTtlSecs ?? null,
     restore: params.restore ?? null,
     attachOnly: params.attachOnly ?? null,
     cols: params.cols ?? null,
     rows: params.rows ?? null,
     initialCwd: params.initialCwd ?? null,
+    proxy: params.proxy ?? null,
+    knock: params.knock ?? null,
+    terminalColors: currentTerminalColors(),
   });
 }
 
@@ -122,63 +133,75 @@ export interface SshExecResult {
   exit_code: number | null;
 }
 
-export async function sshExecCommand(params: {
+/** A host reached by a one-shot connection (no PTY, no jump hosts). */
+export interface OneShotTarget {
   host: string;
   port: number;
   username: string;
   password?: string;
   privateKey?: string;
   passphrase?: string;
-  command: string;
-}): Promise<SshExecResult> {
-  return invoke("ssh_exec_command", {
-    host: params.host,
-    port: params.port,
-    username: params.username,
-    password: params.password ?? null,
-    privateKey: params.privateKey ?? null,
-    passphrase: params.passphrase ?? null,
-    command: params.command,
-  });
+  legacyAlgorithms?: boolean;
+  proxy?: ProxySpec | null;
+  knock?: KnockSpec | null;
 }
 
-export async function sshKillPersistent(params: {
-  host: string;
-  port: number;
-  username: string;
-  password?: string;
-  privateKey?: string;
-  passphrase?: string;
-  sessionId: string;
-}): Promise<boolean> {
-  return invoke("ssh_kill_persistent", {
-    host: params.host,
-    port: params.port,
-    username: params.username,
-    password: params.password ?? null,
-    privateKey: params.privateKey ?? null,
-    passphrase: params.passphrase ?? null,
-    sessionId: params.sessionId,
-  });
+function oneShotTarget(t: OneShotTarget) {
+  return {
+    host: t.host,
+    port: t.port,
+    username: t.username,
+    password: t.password ?? null,
+    privateKey: t.privateKey ?? null,
+    passphrase: t.passphrase ?? null,
+    legacyAlgorithms: t.legacyAlgorithms ?? false,
+    proxy: t.proxy ?? null,
+    knock: t.knock ?? null,
+  };
+}
+
+export async function sshExecCommand(params: OneShotTarget & { command: string }): Promise<SshExecResult> {
+  return invoke("ssh_exec_command", { target: oneShotTarget(params), command: params.command });
+}
+
+export async function sshKillPersistent(params: OneShotTarget & { sessionId: string }): Promise<boolean> {
+  return invoke("ssh_kill_persistent", { target: oneShotTarget(params), sessionId: params.sessionId });
+}
+
+export async function sshDetectDistroDirect(target: OneShotTarget): Promise<string> {
+  return invoke("ssh_detect_distro_direct", { target: oneShotTarget(target) });
 }
 
 export async function onSshOutput(
   sessionId: string,
   callback: (data: Uint8Array) => void,
 ): Promise<UnlistenFn> {
-  return listen<number[]>(`ssh-output-${sessionId}`, (event) => {
-    callback(new Uint8Array(event.payload));
-  });
+  return onTerminalOutput(sessionId, false, callback);
 }
 
-/** `remoteExit` is true when the far side sent an exit-status/exit-signal
- * before closing — the remote command ended on its own, it was not a drop. */
+/** `remoteExit` is true when the session ended on the host (the shell exited, and
+ * for a persistent session its multiplexer session is gone) — not a drop or detach. */
 export async function onSshClosed(
   sessionId: string,
   callback: (remoteExit: boolean) => void,
 ): Promise<UnlistenFn> {
-  return listen<boolean>(`ssh-closed-${sessionId}`, (event) => {
-    callback(event.payload === true);
+  return onTerminalClosed(sessionId, false, callback);
+}
+
+export async function sshSetOutputPaused(sessionId: string, paused: boolean): Promise<void> {
+  return invoke("ssh_set_output_paused", { sessionId, paused });
+}
+
+export async function sshSetTerminalColors(sessionId: string, colors: TerminalColors): Promise<void> {
+  return invoke("ssh_set_terminal_colors", { sessionId, colors });
+}
+
+export async function onSshMuxMode(
+  sessionId: string,
+  callback: (mode: { control: boolean; tmux: string }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ control: boolean; tmux: string }>(`ssh-mux-mode-${sessionId}`, (event) => {
+    callback(event.payload);
   });
 }
 

@@ -8,25 +8,6 @@
     "filterBar": {
       "placeholder": "Filtrele…"
     },
-    "header": {
-      "syncTooltip": "Eşitleme: {{status}}",
-      "syncStatus": {
-        "idle": "Beklemede",
-        "syncing": "Eşitleniyor",
-        "success": "Eşitlendi",
-        "error": "Hata",
-        "offline": "Çevrimdışı"
-      }
-    },
-    "remoteSessions": {
-      "title": "Diğer cihazlarda canlı",
-      "relativeTime": {
-        "justNow": "az önce",
-        "minutesAgo": "{{count}} dk önce",
-        "hoursAgo": "{{count}} sa önce",
-        "daysAgo": "{{count}} gün önce"
-      }
-    },
     "snippets": {
       "searchPlaceholder": "Kod parçacıklarında ara",
       "noMatches": "Eşleşme yok",
@@ -37,7 +18,6 @@
       "newFolderTitle": "Yeni klasör"
     },
     "terminalGestures": {
-      "selectAll": "Tümü",
       "paste": "Yapıştır"
     },
     "terminalTopBar": {
@@ -46,11 +26,7 @@
       "panelsAriaLabel": "Paneller"
     },
     "panelItems": {
-      "sftp": "SFTP",
-      "docker": "Docker",
-      "metrics": "Ölçümler",
-      "processes": "İşlemler",
-      "proxmox": "Proxmox"
+      "sftp": "SFTP"
     },
     "morePages": {
       "keychain": "Anahtar zinciri",
@@ -64,15 +40,7 @@
       "email": "E-posta",
       "notSignedIn": "Oturum açılmadı",
       "plan": "Plan",
-      "cloudSync": "Bulut eşitleme",
       "off": "Kapalı",
-      "proTrial": "Pro deneme — {{days}} gün kaldı",
-      "tier": {
-        "free": "Ücretsiz",
-        "pro": "Pro",
-        "teams": "Teams",
-        "business": "Business"
-      },
       "cancelsOn": "{{date}} tarihinde iptal edilecek. O zamana kadar erişiminiz devam eder.",
       "periodEnd": "dönem sonu",
       "renewsOn": "Yenilenme tarihi: {{date}}.",
@@ -80,16 +48,16 @@
       "seats": "Lisanslar",
       "seatsUsed": "{{used}} / {{total}} kullanılıyor",
       "upgradeToPro": "Pro'ya yükselt",
-      "upgradeToTeams": "Teams'e yükselt",
+      "upgradeToTeams": "Teams'i {{days}} gün ücretsiz dene",
+      "teamsTrialNote": "Kart gerekir · deneme süresince ücret alınmaz",
       "manageBilling": "Faturalandırmayı yönet",
       "viewAllPlans": "Tüm planları gör",
-      "signInToSync": "Eşitlemek için oturum açın",
+      "signInToSync": "Voltius'ta oturum açın",
       "signOutConfirm": "Oturum kapatılsın mı? Şifreli kasanız bu cihazdan kaldırılır ve yeniden oturum açtığınızda tekrar eşitlenir.",
       "signOut": "Oturumu kapat"
     },
     "more": {
-      "settings": "Ayarlar",
-      "planLabel": "{{tier}} planı"
+      "settings": "Ayarlar"
     },
     "host": {
       "newTitle": "Yeni sunucu",
@@ -106,7 +74,10 @@
       "identitiesHeader": "KİMLİKLER",
       "addedOn": "eklenme: {{date}}",
       "noSearchMatches": "Aramanızla eşleşen bir şey yok",
-      "empty": "Anahtar zinciri boş"
+      "empty": "Anahtar zinciri boş",
+      "generateKey": "SSH anahtarı oluştur",
+      "importKey": "SSH anahtarı içe aktar",
+      "newIdentity": "Yeni kimlik"
     },
     "knownHostsScreen": {
       "filterPlaceholder": "Sunucuları filtrele…",
@@ -124,15 +95,25 @@
       "filterPlaceholder": "Kuralları filtrele…",
       "summary": "{{total}} toplam · {{active}} etkin",
       "noSearchMatches": "Aramanızla eşleşen kural yok",
-      "empty": "Henüz port yönlendirme kuralı yok",
-      "newRuleLabel": "Yeni kural"
+      "empty": "Henüz port yönlendirme kuralı yok"
     },
     "snippetEdit": {
       "editTitle": "Kod parçacığını düzenle",
       "newTitle": "Yeni kod parçacığı",
       "namePlaceholder": "Kod parçacığı adı",
       "contentPlaceholder": "echo hello",
-      "delete": "Kod parçacığını sil"
+      "delete": "Kod parçacığını sil",
+      "nameLabel": "Ad",
+      "contentLabel": "Betik"
+    },
+    "editForm": {
+      "required": "Zorunlu",
+      "incompleteTitle": "Kaydetmeden çıkılsın mı?",
+      "incompleteBody": "Zorunlu bir alan boş, bu yüzden son değişiklikleriniz henüz kaydedilemiyor.",
+      "unsavedTitle": "Değişiklikler atılsın mı?",
+      "unsavedBody": "Bu snippet'teki değişiklikler kaydedilmedi.",
+      "keepEditing": "Düzenlemeye devam et",
+      "discard": "At"
     },
     "snippetsScreen": {
       "newSnippetLabel": "Yeni kod parçacığı"
@@ -142,6 +123,7 @@
       "pickHost": "Bir sunucu seçin"
     },
     "sftp": {
+      "transferFailed": "Aktarım başarısız",
       "chooseHost": "Bir sunucu seçin",
       "hidden": "Gizli",
       "visible": "Görünür",
@@ -174,12 +156,20 @@
       "batchDeleteTitle_other": "{{count}} öğe silinsin mi?",
       "newFileOption": "Yeni dosya",
       "folderNamePlaceholder": "Klasör adı",
-      "fileNamePlaceholder": "Dosya adı"
+      "fileNamePlaceholder": "Dosya adı",
+      "selectAll": "Tümünü seç",
+      "onePane": "Tek panel",
+      "twoPanes": "İki panel",
+      "moreActions": "Diğer işlemler",
+      "itemActions": "{{name}} için işlemler"
     },
     "folders": {
       "home": "Ana sayfa"
     },
     "sheets": {
+      "newSession": {
+        "noHosts": "Sunucu yok"
+      },
       "shared": {
         "moveToVault": "Kasaya taşı",
         "copyToVault": "Kasaya kopyala",
@@ -191,7 +181,6 @@
         "confirmDeleteBody": "{{name}} kalıcı olarak silinsin mi? Bu işlem geri alınamaz."
       },
       "folderActions": {
-        "renameTitle": "Klasörü yeniden adlandır",
         "deleteTitle": "Klasör silinsin mi?",
         "deleteBody": "{{name}} ve içindeki her şey silinsin mi? Bu işlem geri alınamaz."
       },
@@ -200,8 +189,6 @@
         "openFiles": "Dosyaları aç",
         "copyAddress": "Adresi kopyala",
         "copiedAddress": "Kopyalandı: {{host}}",
-        "enableCloudSync": "Bulut eşitlemeyi etkinleştir",
-        "disableCloudSync": "Bulut eşitlemeyi devre dışı bırak",
         "enableReachabilityCheck": "Erişilebilirlik denetimini etkinleştir",
         "disableReachabilityCheck": "Erişilebilirlik denetimini devre dışı bırak"
       },
@@ -249,6 +236,53 @@
       "vaultSwitcher": {
         "newVault": "Yeni kasa",
         "namePlaceholder": "Kasa adı"
+      }
+    },
+    "shortcuts": {
+      "hostGone": "Bu sunucu artık yok. Kısayolu kaldırıldı."
+    },
+    "share": {
+      "action": "Paylaş",
+      "publicKey": "Genel anahtarı paylaş",
+      "failed": "Paylaşım menüsü açılamadı",
+      "downloadFailed": "Paylaşılacak dosya indirilemedi",
+      "largeTitle": "{{size}} paylaşılsın mı?",
+      "largeBody": "Dosyalar önce bu telefona indirilir, ardından seçtiğiniz uygulamaya aktarılır.",
+      "tooLong": "Metin olarak paylaşmak için çok uzun"
+    },
+    "vaultSettings": {
+      "title": "Kasa ayarları",
+      "gone": "Bu kasa artık bu cihazda yok.",
+      "openFor": "{{name}} ayarları",
+      "nameRequired": "Kasanın bir adı olmalı.",
+      "nameReadOnly": "Yalnızca kasa yöneticileri yeniden adlandırabilir.",
+      "kindTeam": "Ekip kasası",
+      "kindPrivate": "Özel kasa",
+      "sections": {
+        "general": "Genel",
+        "people": "Kişiler",
+        "danger": "Tehlikeli bölge"
+      },
+      "rows": {
+        "name": "Ad",
+        "share": "Paylaş ve davet et",
+        "members": "Üyeler",
+        "roles": "Roller",
+        "security": "Güvenlik politikası",
+        "makePrivate": "Özel yap",
+        "delete": "Kasayı sil",
+        "leave": "Kasadan ayrıl"
+      },
+      "summaries": {
+        "share": "Kişileri davet edin ve katılma bağlantılarını yönetin",
+        "members_one": "{{count}} üye",
+        "members_other": "{{count}} üye",
+        "roles": "Her rolün neler yapabileceği",
+        "security": "Üyeler için kilit ve oturum kuralları",
+        "makePrivate": "Diğer herkesi çıkarın ve özel bir kopya tutun",
+        "delete": "Kasayı ve içindeki her şeyi siler",
+        "deleteTeam": "Tüm üyeler için siler",
+        "leave": "Bu kasaya erişiminizi kaldırın"
       }
     }
   }

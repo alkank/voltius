@@ -1,7 +1,11 @@
 use super::{get_backend, RemoteFile};
-use crate::known_hosts::KnownHostsStore;
+use crate::error::AppError;
+use crate::knock::KnockSpec;
+use crate::known_hosts::{ConflictPrompt, KnownHostsStore, PendingConflicts};
+use crate::proxy::ProxySpec;
+use crate::sftp::attrs::{owners, AttrChange, OwnerInfo};
 use crate::sftp::SftpManager;
-use crate::ssh::client::JumpHostConnect;
+use crate::ssh::client::{HopRoute, JumpHostConnect};
 use crate::ssh::session::SessionManager;
 use std::sync::Arc;
 use tauri::{AppHandle, State};
@@ -15,6 +19,13 @@ pub async fn sftp_cancel_transfer(
     transfer_id: String,
 ) -> Result<(), String> {
     sftp_state.cancel_transfer(&transfer_id).await;
+    Ok(())
+}
+
+/// Mark a transfer about to start as a retry, so folder copies skip files already landed.
+#[tauri::command]
+pub async fn sftp_mark_resume(transfer_id: String) -> Result<(), String> {
+    super::resume::mark_resume(&transfer_id);
     Ok(())
 }
 
@@ -34,6 +45,10 @@ pub async fn sftp_connect(
     jump_hosts: Option<Vec<JumpHostConnect>>,
     keepalive_interval_secs: u64,
     keepalive_max: usize,
+    legacy_algorithms: Option<bool>,
+    proxy: Option<ProxySpec>,
+    relink: Option<String>,
+    knock: Option<KnockSpec>,
 ) -> Result<String, String> {
     sftp_state
         .connect(
@@ -49,6 +64,9 @@ pub async fn sftp_connect(
             Arc::clone(&*known_hosts),
             keepalive_interval_secs,
             keepalive_max,
+            legacy_algorithms.unwrap_or(false),
+            HopRoute { proxy, knock },
+            relink.as_deref(),
         )
         .await
 }
@@ -79,6 +97,40 @@ pub async fn ftp_connect(
         .await
 }
 
+/// `interactive`: the caller shows the certificate-conflict dialog for `connect_id`.
+#[tauri::command]
+pub async fn webdav_connect(
+    app: AppHandle,
+    sftp_state: State<'_, SftpManager>,
+    known_hosts: State<'_, Arc<KnownHostsStore>>,
+    pending: State<'_, Arc<PendingConflicts>>,
+    connect_id: String,
+    url: String,
+    username: String,
+    password: Option<String>,
+    proxy: Option<ProxySpec>,
+    interactive: bool,
+) -> Result<String, AppError> {
+    let prompt = interactive.then(|| {
+        ConflictPrompt::via_app(
+            app,
+            "sftp-host-key-conflict",
+            connect_id,
+            Arc::clone(&*pending),
+        )
+    });
+    sftp_state
+        .connect_webdav(
+            &url,
+            &username,
+            password.as_deref().unwrap_or_default(),
+            proxy,
+            Arc::clone(&*known_hosts),
+            prompt,
+        )
+        .await
+}
+
 #[tauri::command]
 pub async fn sftp_close(sftp_state: State<'_, SftpManager>, sftp_id: String) -> Result<(), String> {
     sftp_state.close(&sftp_id).await;
@@ -104,7 +156,7 @@ pub async fn sftp_list_dir(
     sftp_state: State<'_, SftpManager>,
     sftp_id: String,
     path: String,
-) -> Result<Vec<RemoteFile>, String> {
+) -> Result<Vec<RemoteFile>, AppError> {
     get_backend(&sftp_state, &sftp_id)
         .await?
         .list_dir(&path)
@@ -116,7 +168,7 @@ pub async fn sftp_canonicalize(
     sftp_state: State<'_, SftpManager>,
     sftp_id: String,
     path: String,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     get_backend(&sftp_state, &sftp_id)
         .await?
         .canonicalize(&path)
@@ -128,7 +180,7 @@ pub async fn sftp_mkdir(
     sftp_state: State<'_, SftpManager>,
     sftp_id: String,
     path: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     get_backend(&sftp_state, &sftp_id).await?.mkdir(&path).await
 }
 
@@ -137,7 +189,7 @@ pub async fn sftp_touch(
     sftp_state: State<'_, SftpManager>,
     sftp_id: String,
     path: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     get_backend(&sftp_state, &sftp_id).await?.touch(&path).await
 }
 
@@ -147,7 +199,7 @@ pub async fn sftp_rename(
     sftp_id: String,
     from: String,
     to: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     get_backend(&sftp_state, &sftp_id)
         .await?
         .rename(&from, &to)
@@ -159,9 +211,37 @@ pub async fn sftp_delete(
     sftp_state: State<'_, SftpManager>,
     sftp_id: String,
     path: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     get_backend(&sftp_state, &sftp_id)
         .await?
         .delete(&path)
+        .await
+}
+
+// ── Attributes ────────────────────────────────────────────────────────────────
+
+/// Owner and group of each path, or None when the host has no POSIX shell to ask.
+#[tauri::command]
+pub async fn sftp_owners(
+    sftp_state: State<'_, SftpManager>,
+    sftp_id: String,
+    paths: Vec<String>,
+) -> Result<Option<Vec<OwnerInfo>>, AppError> {
+    let backend = get_backend(&sftp_state, &sftp_id).await?;
+    Ok(owners(&*backend, &paths).await)
+}
+
+#[tauri::command]
+pub async fn sftp_set_attrs(
+    sftp_state: State<'_, SftpManager>,
+    sftp_id: String,
+    change: AttrChange,
+) -> Result<(), AppError> {
+    if change.paths.is_empty() {
+        return Ok(());
+    }
+    get_backend(&sftp_state, &sftp_id)
+        .await?
+        .set_attrs(&change)
         .await
 }

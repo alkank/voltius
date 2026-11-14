@@ -1,17 +1,29 @@
 import { create } from "zustand";
 import type { Connection, ConnectionFormData } from "@/types";
 import * as api from "@/services/connections";
-import { scheduleSync } from "@/services/sync";
-import { isServerMode } from "@/services/account";
-import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
+import { syncAfterEdit } from "@/stores/syncAfterEdit";
 import { useHistoryStore } from "@/stores/historyStore";
-import { pushCreateHistory, pushDeleteHistory } from "@/stores/recreateHistory";
+import { pushCreateHistory, pushDeleteHistory, pushUpdateHistory, pushTeamDeleteHistory } from "@/stores/recreateHistory";
 import { isTeamVaultId, findTeamEntry, setTeamMapEntry, clearTeamMapEntry, upsertInTeamMap, removeFromTeamMap, applyVaultTransition, saveStampedTeamObject } from "@/stores/teamVaultMap";
 import { reportAuditMutation } from "@/services/auditMutations";
 import { removeTeamVaultObject, saveTeamVaultObject } from "@/services/teamObjectPersistence";
+import { rulesSourceOf } from "@/services/ruleSetIntent";
 import { classifyVaultTransition, migrateVaultObject } from "@/services/teamVaultMigration";
 import { withPin } from "@/stores/withPin";
+import { retagPersonal } from "@/stores/retagPersonal";
+import { managedOwnedOf } from "@/stores/sshConfigStore";
+import { keepOwned } from "@/services/sshConfig/hostFields";
 import { useTeamObjectPrefsStore } from "@/stores/teamObjectPrefsStore";
+
+/** "linux" is detection's fallback for an unrecognised OS, so it never replaces a saved distro. */
+export function detectionChangesDistro(saved: string | undefined, detected: string): boolean {
+  return saved !== detected && !(saved && detected === "linux");
+}
+
+/** A user-picked icon. One equal to the distro was copied from it (older builds did), so it follows the distro. */
+export function iconIsOverride(c: Pick<Connection, "icon" | "distro">): boolean {
+  return !!c.icon && c.icon !== c.distro;
+}
 
 /**
  * Canonical Connection → ConnectionFormData mapper. Exhaustive against every
@@ -30,11 +42,51 @@ export function connectionToFormData(c: Connection): ConnectionFormData {
     pre_snippet_id: c.pre_snippet_id, post_snippet_id: c.post_snippet_id, ask_vars_each_time: c.ask_vars_each_time,
     terminal_encoding: c.terminal_encoding, distro: c.distro, icon: c.icon, pinned: c.pinned,
     ping_disabled: c.ping_disabled, shell_integration: c.shell_integration,
-    keepalive_preset: c.keepalive_preset,
+    keepalive_preset: c.keepalive_preset, persist_session: c.persist_session, proxy: c.proxy,
     connection_type: c.connection_type, serial_port: c.serial_port, serial_baud: c.serial_baud,
     serial_data_bits: c.serial_data_bits, serial_parity: c.serial_parity, serial_stop_bits: c.serial_stop_bits,
     serial_flow_control: c.serial_flow_control, serial_auto_reconnect: c.serial_auto_reconnect, ftp_secure: c.ftp_secure,
+    webdav_url: c.webdav_url,
     notes: c.notes,
+    port_knock: c.port_knock,
+  };
+}
+
+// Only the listed `?? prev?.x` fields and record bookkeeping fall back to
+// `prev`; every other field comes from `data` alone, so an omitted key stays absent.
+export function connectionFromForm(
+  data: ConnectionFormData,
+  base: { id: string; now: string; prev?: Connection; pinned?: boolean },
+): Connection {
+  const { id, now, prev } = base;
+  return {
+    ...data,
+    id,
+    name: data.name,
+    host: data.host ?? prev?.host ?? "",
+    port: data.port ?? prev?.port ?? 0,
+    username: data.username ?? prev?.username ?? "",
+    auth_type: data.auth_type ?? prev?.auth_type ?? "password",
+    tags: data.tags ?? prev?.tags ?? [],
+    vault_id: data.vault_id ?? prev?.vault_id ?? "personal",
+    distro: data.distro ?? prev?.distro,
+    icon: data.icon === "" ? undefined : (data.icon ?? prev?.icon),
+    pinned: base.pinned ?? data.pinned,
+    connection_type: data.connection_type ?? prev?.connection_type,
+    serial_port: data.serial_port ?? prev?.serial_port,
+    serial_baud: data.serial_baud ?? prev?.serial_baud,
+    serial_data_bits: data.serial_data_bits ?? prev?.serial_data_bits,
+    serial_parity: data.serial_parity ?? prev?.serial_parity,
+    serial_stop_bits: data.serial_stop_bits ?? prev?.serial_stop_bits,
+    serial_flow_control: data.serial_flow_control ?? prev?.serial_flow_control,
+    serial_auto_reconnect: data.serial_auto_reconnect ?? prev?.serial_auto_reconnect,
+    ftp_secure: data.ftp_secure ?? prev?.ftp_secure,
+    webdav_url: data.webdav_url ?? prev?.webdav_url,
+    created_at: prev?.created_at ?? now,
+    last_used_at: prev?.last_used_at ?? null,
+    deleted_at: prev?.deleted_at,
+    updated_at: now,
+    clocks: prev ? { ...prev.clocks, updated_at: now } : { created_at: now, updated_at: now },
   };
 }
 
@@ -50,7 +102,7 @@ interface ConnectionStore {
   saveConnection: (data: ConnectionFormData) => Promise<Connection>;
   updateConnection: (id: string, data: ConnectionFormData) => Promise<void>;
   deleteConnection: (id: string) => Promise<void>;
-  setDistro: (id: string, distro: string) => Promise<void>;
+  setDistro: (id: string, distro: string, opts?: { detected?: boolean }) => Promise<void>;
   setLastUsed: (id: string) => Promise<void>;
   renameTag: (oldName: string, newName: string) => Promise<void>;
   deleteTag: (name: string) => Promise<void>;
@@ -78,51 +130,9 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   saveConnection: async (data) => {
     if (isTeamVaultId(data.vault_id)) {
       const now = new Date().toISOString();
-      const conn: Connection = {
-        id: crypto.randomUUID(),
-        name: data.name,
-        host: data.host ?? "",
-        port: data.port ?? 0,
-        username: data.username ?? "",
-        auth_type: data.auth_type ?? "password",
-        tags: data.tags ?? [],
-        identity_id: data.identity_id,
-        key_id: data.key_id,
-        folder_id: data.folder_id,
-        vault_id: data.vault_id,
-        jump_hosts: data.jump_hosts,
-        env_vars: data.env_vars,
-        agent_forwarding: data.agent_forwarding,
-        legacy_algorithms: data.legacy_algorithms,
-        pre_command: data.pre_command,
-        post_command: data.post_command,
-        pre_snippet_id: data.pre_snippet_id,
-        post_snippet_id: data.post_snippet_id,
-        ask_vars_each_time: data.ask_vars_each_time,
-        terminal_encoding: data.terminal_encoding,
-        distro: data.distro,
-        icon: data.icon,
-        pinned: data.pinned,
-        ping_disabled: data.ping_disabled,
-        shell_integration: data.shell_integration,
-        keepalive_preset: data.keepalive_preset,
-        connection_type: data.connection_type,
-        serial_port: data.serial_port,
-        serial_baud: data.serial_baud,
-        serial_data_bits: data.serial_data_bits,
-        serial_parity: data.serial_parity,
-        serial_stop_bits: data.serial_stop_bits,
-        serial_flow_control: data.serial_flow_control,
-        serial_auto_reconnect: data.serial_auto_reconnect,
-        ftp_secure: data.ftp_secure,
-        notes: data.notes,
-        created_at: now,
-        updated_at: now,
-        last_used_at: null,
-        clocks: { created_at: now, updated_at: now },
-      };
+      const conn = connectionFromForm(data, { id: crypto.randomUUID(), now });
       const vaultId = data.vault_id!;
-      await saveTeamVaultObject(vaultId, "connection", conn);
+      await saveTeamVaultObject(vaultId, "connection", conn, { rulesFrom: rulesSourceOf(data) });
       set((s) => ({ teamConnections: upsertInTeamMap(s.teamConnections, vaultId, conn) }));
       reportAuditMutation("connection", "created", { id: conn.id, name: conn.name ?? conn.host, vault_id: conn.vault_id });
       pushCreateHistory({
@@ -138,8 +148,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     const conn = await api.saveConnection(data);
     const connections = await api.listConnections();
     set({ connections });
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isTypeSynced("connection")) scheduleSync(); });
+    syncAfterEdit("connection");
     reportAuditMutation("connection", "created", { id: conn.id, name: conn.name ?? conn.host, vault_id: conn.vault_id });
     pushCreateHistory({
       label: `Created connection "${data.name ?? data.host}"`,
@@ -151,53 +160,15 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     return conn;
   },
 
-  updateConnection: async (id, data) => {
+  updateConnection: async (id, input) => {
+    const existing = findAnyConnection(id);
+    const data = existing ? keepOwned(existing, input, managedOwnedOf(id)) : input;
     const teamEntry = findTeamEntry(get().teamConnections, id);
     if (teamEntry) {
       const now = new Date().toISOString();
       const prev = teamEntry.item;
       const payload = withPin(data, prev);
-      const updated: Connection = {
-        ...prev,
-        name: data.name,
-        host: data.host ?? prev.host,
-        port: data.port ?? prev.port,
-        username: data.username ?? prev.username,
-        auth_type: data.auth_type ?? prev.auth_type,
-        tags: data.tags ?? prev.tags,
-        identity_id: data.identity_id,
-        key_id: data.key_id,
-        folder_id: data.folder_id,
-        vault_id: data.vault_id ?? prev.vault_id,
-        jump_hosts: data.jump_hosts,
-        env_vars: data.env_vars,
-        agent_forwarding: data.agent_forwarding,
-        legacy_algorithms: data.legacy_algorithms,
-        pre_command: data.pre_command,
-        post_command: data.post_command,
-        pre_snippet_id: data.pre_snippet_id,
-        post_snippet_id: data.post_snippet_id,
-        ask_vars_each_time: data.ask_vars_each_time,
-        terminal_encoding: data.terminal_encoding,
-        distro: data.distro ?? prev.distro,
-        icon: data.icon ?? prev.icon,
-        pinned: payload.pinned,
-        connection_type: data.connection_type ?? prev.connection_type,
-        serial_port: data.serial_port ?? prev.serial_port,
-        serial_baud: data.serial_baud ?? prev.serial_baud,
-        serial_data_bits: data.serial_data_bits ?? prev.serial_data_bits,
-        serial_parity: data.serial_parity ?? prev.serial_parity,
-        serial_stop_bits: data.serial_stop_bits ?? prev.serial_stop_bits,
-        serial_flow_control: data.serial_flow_control ?? prev.serial_flow_control,
-        serial_auto_reconnect: data.serial_auto_reconnect ?? prev.serial_auto_reconnect,
-        ftp_secure: data.ftp_secure ?? prev.ftp_secure,
-        notes: data.notes,
-        ping_disabled: data.ping_disabled,
-        shell_integration: data.shell_integration,
-        keepalive_preset: data.keepalive_preset,
-        updated_at: now,
-        clocks: { ...prev.clocks, updated_at: now },
-      };
+      const updated = connectionFromForm(data, { id, now, prev, pinned: payload.pinned });
       const { teamId } = teamEntry;
       const migrated = await migrateVaultObject({
         previousVaultId: teamId,
@@ -216,12 +187,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         return connections ? { connections, teamConnections: next } : { teamConnections: next };
       });
       reportAuditMutation("connection", "updated", { id: updated.id, name: updated.name ?? updated.host, vault_id: updated.vault_id });
-      const prevData: ConnectionFormData = connectionToFormData(prev);
-      useHistoryStore.getState().push({
-        label: `Updated connection "${prev.name ?? prev.host}"`,
-        undo: async () => { await useConnectionStore.getState().updateConnection(id, prevData); },
-        redo: async () => { await useConnectionStore.getState().updateConnection(id, data); },
-      });
+      recordConnectionUpdate(prev, data);
       return;
     }
 
@@ -229,47 +195,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     const payload = prev ? withPin(data, prev) : data;
     const now = new Date().toISOString();
     const item: Connection = prev
-      ? {
-          ...prev,
-          name: data.name,
-          host: data.host ?? prev.host,
-          port: data.port ?? prev.port,
-          username: data.username ?? prev.username,
-          auth_type: data.auth_type ?? prev.auth_type,
-          tags: data.tags ?? prev.tags,
-          identity_id: data.identity_id,
-          key_id: data.key_id,
-          folder_id: data.folder_id,
-          vault_id: data.vault_id ?? prev.vault_id,
-          jump_hosts: data.jump_hosts,
-          env_vars: data.env_vars,
-          agent_forwarding: data.agent_forwarding,
-          legacy_algorithms: data.legacy_algorithms,
-          pre_command: data.pre_command,
-          post_command: data.post_command,
-          pre_snippet_id: data.pre_snippet_id,
-          post_snippet_id: data.post_snippet_id,
-          ask_vars_each_time: data.ask_vars_each_time,
-          terminal_encoding: data.terminal_encoding,
-          distro: data.distro ?? prev.distro,
-          icon: data.icon ?? prev.icon,
-          pinned: payload.pinned,
-          connection_type: data.connection_type ?? prev.connection_type,
-          serial_port: data.serial_port ?? prev.serial_port,
-          serial_baud: data.serial_baud ?? prev.serial_baud,
-          serial_data_bits: data.serial_data_bits ?? prev.serial_data_bits,
-          serial_parity: data.serial_parity ?? prev.serial_parity,
-          serial_stop_bits: data.serial_stop_bits ?? prev.serial_stop_bits,
-          serial_flow_control: data.serial_flow_control ?? prev.serial_flow_control,
-          serial_auto_reconnect: data.serial_auto_reconnect ?? prev.serial_auto_reconnect,
-        ftp_secure: data.ftp_secure ?? prev.ftp_secure,
-          notes: data.notes,
-          ping_disabled: data.ping_disabled,
-          shell_integration: data.shell_integration,
-          keepalive_preset: data.keepalive_preset,
-          updated_at: now,
-          clocks: { ...prev.clocks, updated_at: now },
-        }
+      ? connectionFromForm(data, { id, now, prev, pinned: payload.pinned })
       : ({ id, vault_id: data.vault_id } as Connection);
     const updated = await migrateVaultObject({
       previousVaultId: prev?.vault_id,
@@ -290,17 +216,9 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       connections,
       teamConnections: applyVaultTransition(s.teamConnections, transition, id, updated, stayTeamId),
     }));
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isObjectSynced(id, "connection")) scheduleSync(); });
+    syncAfterEdit("connection", id);
     if (prev) reportAuditMutation("connection", "updated", { id, name: data.name ?? prev.name ?? prev.host, vault_id: data.vault_id ?? prev.vault_id });
-    if (prev) {
-      const prevData: ConnectionFormData = connectionToFormData(prev);
-      useHistoryStore.getState().push({
-        label: `Updated connection "${prev.name ?? prev.host}"`,
-        undo: async () => { await useConnectionStore.getState().updateConnection(id, prevData); },
-        redo: async () => { await useConnectionStore.getState().updateConnection(id, data); },
-      });
-    }
+    if (prev) recordConnectionUpdate(prev, data);
   },
 
   deleteConnection: async (id) => {
@@ -310,12 +228,15 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       await removeTeamVaultObject(teamId, id);
       set((s) => ({ teamConnections: removeFromTeamMap(s.teamConnections, teamId, id) }));
       reportAuditMutation("connection", "deleted", { id: prev.id, name: prev.name ?? prev.host, vault_id: prev.vault_id });
-      const prevData: ConnectionFormData = connectionToFormData(prev);
-      pushDeleteHistory({
+      pushTeamDeleteHistory({
         label: `Deleted connection "${prev.name ?? prev.host}"`,
-        id,
-        data: prevData,
-        create: (d) => useConnectionStore.getState().saveConnection(d),
+        teamId,
+        type: "connection",
+        item: prev,
+        putBack: (c) => {
+          set((s) => ({ teamConnections: upsertInTeamMap(s.teamConnections, teamId, c) }));
+          reportAuditMutation("connection", "created", { id: c.id, name: c.name ?? c.host, vault_id: c.vault_id });
+        },
         remove: (cid) => useConnectionStore.getState().deleteConnection(cid),
       });
       return;
@@ -325,8 +246,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     await api.deleteConnection(id);
     const connections = await api.listConnections();
     set({ connections });
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isObjectSynced(id, "connection")) scheduleSync(); });
+    syncAfterEdit("connection", id);
     if (prev) reportAuditMutation("connection", "deleted", { id: prev.id, name: prev.name ?? prev.host, vault_id: prev.vault_id });
     if (prev) {
       const prevData: ConnectionFormData = connectionToFormData(prev);
@@ -340,30 +260,22 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     }
   },
 
-  setDistro: async (id, distro) => {
+  setDistro: async (id, distro, opts) => {
     const teamEntry = findTeamEntry(get().teamConnections, id);
+    const prev = teamEntry?.item ?? get().connections.find((c) => c.id === id);
+    if (opts?.detected && !detectionChangesDistro(prev?.distro, distro)) return;
+    const clearIcon = !!prev?.icon && !iconIsOverride(prev);
+    const patch: Partial<Connection> = clearIcon ? { distro, icon: undefined } : { distro };
     if (teamEntry) {
-      const { teamId, item: prev } = teamEntry;
-      const updated = await saveStampedTeamObject(teamId, "connection", prev, { distro });
-      set((s) => ({ teamConnections: upsertInTeamMap(s.teamConnections, teamId, updated) }));
-      const prevDistro = prev.distro ?? "";
-      useHistoryStore.getState().push({
-        label: `Changed distro for "${prev.name ?? prev.host}"`,
-        undo: async () => { await useConnectionStore.getState().setDistro(id, prevDistro); },
-        redo: async () => { await useConnectionStore.getState().setDistro(id, distro); },
-      });
-      return;
+      const updated = await saveStampedTeamObject(teamEntry.teamId, "connection", teamEntry.item, patch);
+      set((s) => ({ teamConnections: upsertInTeamMap(s.teamConnections, teamEntry.teamId, updated) }));
+    } else {
+      await api.setConnectionDistro(id, distro, clearIcon);
+      set((s) => ({
+        connections: s.connections.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      }));
+      syncAfterEdit("connection", id);
     }
-
-    const prev = get().connections.find((c) => c.id === id);
-    await api.setConnectionDistro(id, distro);
-    set((s) => ({
-      connections: s.connections.map((c) =>
-        c.id === id ? { ...c, distro } : c,
-      ),
-    }));
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isObjectSynced(id, "connection")) scheduleSync(); });
     if (prev) {
       const prevDistro = prev.distro ?? "";
       useHistoryStore.getState().push({
@@ -391,44 +303,11 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         c.id === id ? { ...c, last_used_at: now } : c,
       ),
     }));
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isObjectSynced(id, "connection")) scheduleSync(); });
+    syncAfterEdit("connection", id);
   },
 
   renameTag: async (oldName, newName) => {
-    // Personal connections
-    const toUpdate = get().connections.filter((c) => c.tags.includes(oldName));
-    await Promise.all(
-      toUpdate.map((c) =>
-        api.updateConnection(c.id, {
-          ...connectionToFormData(c),
-          tags: c.tags.map((t) => (t === oldName ? newName : t)),
-        }),
-      ),
-    );
-    const connections = await api.listConnections();
-    set({ connections });
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isTypeSynced("connection")) scheduleSync(); });
-
-    // Team connections
-    const now = new Date().toISOString();
-    const updatedTeamMap: Record<string, Connection[]> = {};
-    const affectedTeams = new Set<string>();
-    for (const [teamId, conns] of Object.entries(get().teamConnections)) {
-      const updated = conns.map((c) => {
-        if (!c.tags.includes(oldName)) return c;
-        affectedTeams.add(teamId);
-        return { ...c, tags: c.tags.map((t) => (t === oldName ? newName : t)), updated_at: now };
-      });
-      updatedTeamMap[teamId] = updated;
-    }
-    if (affectedTeams.size > 0) {
-      for (const teamId of affectedTeams) {
-        await Promise.all((updatedTeamMap[teamId] ?? []).map((c) => saveTeamVaultObject(teamId, "connection", c)));
-      }
-      set({ teamConnections: updatedTeamMap });
-    }
+    await retagConnections(oldName, (tags) => tags.map((t) => (t === oldName ? newName : t)));
 
     useHistoryStore.getState().push({
       label: `Renamed tag "${oldName}" to "${newName}"`,
@@ -438,40 +317,8 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   },
 
   deleteTag: async (name) => {
-    // Personal connections
-    const toUpdate = get().connections.filter((c) => c.tags.includes(name));
-    const prevTagsById = new Map(toUpdate.map((c) => [c.id, c.tags]));
-    await Promise.all(
-      toUpdate.map((c) =>
-        api.updateConnection(c.id, {
-          ...connectionToFormData(c),
-          tags: c.tags.filter((t) => t !== name),
-        }),
-      ),
-    );
-    const connections = await api.listConnections();
-    set({ connections });
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isTypeSynced("connection")) scheduleSync(); });
-
-    // Team connections
-    const now = new Date().toISOString();
-    const updatedTeamMap: Record<string, Connection[]> = {};
-    const affectedTeams = new Set<string>();
-    for (const [teamId, conns] of Object.entries(get().teamConnections)) {
-      const updated = conns.map((c) => {
-        if (!c.tags.includes(name)) return c;
-        affectedTeams.add(teamId);
-        return { ...c, tags: c.tags.filter((t) => t !== name), updated_at: now };
-      });
-      updatedTeamMap[teamId] = updated;
-    }
-    if (affectedTeams.size > 0) {
-      for (const teamId of affectedTeams) {
-        await Promise.all((updatedTeamMap[teamId] ?? []).map((c) => saveTeamVaultObject(teamId, "connection", c)));
-      }
-      set({ teamConnections: updatedTeamMap });
-    }
+    const retagged = await retagConnections(name, (tags) => tags.filter((t) => t !== name));
+    const prevTagsById = new Map(retagged.map((c) => [c.id, c.tags]));
 
     useHistoryStore.getState().push({
       label: `Deleted tag "${name}"`,
@@ -501,8 +348,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     const nextPinned = pinned ?? false;
     await api.updateConnection(id, { ...connectionToFormData(conn), pinned: nextPinned });
     set((s) => ({ connections: s.connections.map((c) => c.id === id ? { ...c, pinned: nextPinned } : c) }));
-    const prefs = useSyncPrefsStore.getState();
-    isServerMode().then((s) => { if (s && prefs.isObjectSynced(id, "connection")) scheduleSync(); });
+    syncAfterEdit("connection", id);
   },
 
   pinConnectionForTeam: async (id, pinned) => {
@@ -513,3 +359,55 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     set((s) => ({ teamConnections: upsertInTeamMap(s.teamConnections, teamId, updated) }));
   },
 }));
+
+/** Personal and in-memory team connections — the non-React counterpart of `useAllConnections`. */
+export function allConnections(): Connection[] {
+  const { connections, teamConnections } = useConnectionStore.getState();
+  return [...connections, ...Object.values(teamConnections).flat()];
+}
+
+export function findAnyConnection(id: string): Connection | undefined {
+  return allConnections().find((c) => c.id === id);
+}
+
+// Returns the personal connections as they were before the rewrite.
+async function retagConnections(tag: string, rewrite: (tags: string[]) => string[]): Promise<Connection[]> {
+  const personal = await retagPersonal(useConnectionStore.getState().connections, connectionToFormData, api.updateConnection, tag, rewrite);
+  useConnectionStore.setState({ connections: await api.listConnections() });
+  syncAfterEdit("connection");
+
+  const team = Object.entries(useConnectionStore.getState().teamConnections).flatMap(([teamId, conns]) =>
+    conns.filter((c) => c.tags.includes(tag)).map((c) => ({ teamId, id: c.id })),
+  );
+  await Promise.all(team.map(({ teamId, id }) => retagTeamConnection(teamId, id, tag, rewrite)));
+  return personal;
+}
+
+async function retagTeamConnection(
+  teamId: string,
+  id: string,
+  tag: string,
+  rewrite: (tags: string[]) => string[],
+): Promise<void> {
+  const current = () => useConnectionStore.getState().teamConnections[teamId]?.find((c) => c.id === id);
+  for (let c = current(); c?.tags.includes(tag); c = current()) {
+    const updated = await saveStampedTeamObject(teamId, "connection", c, { tags: rewrite(c.tags) });
+    const now = current();
+    if (!now) return;
+    // Edited while the save was in flight: retag that copy rather than revert it.
+    if (now.updated_at !== c.updated_at) continue;
+    useConnectionStore.setState((s) => ({ teamConnections: upsertInTeamMap(s.teamConnections, teamId, updated) }));
+    return;
+  }
+}
+
+function recordConnectionUpdate(prev: Connection, data: ConnectionFormData): void {
+  pushUpdateHistory({
+    label: `Updated connection "${prev.name ?? prev.host}"`,
+    kind: "connection",
+    id: prev.id,
+    before: connectionToFormData(prev),
+    after: data,
+    update: (id, d) => useConnectionStore.getState().updateConnection(id, d),
+  });
+}

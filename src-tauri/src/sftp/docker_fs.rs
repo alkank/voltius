@@ -9,330 +9,94 @@
 //! user data. Listing/parsing assumes filenames contain no tab or newline
 //! characters (acceptable for a file manager).
 
-use crate::commands::sftp::{pump_chunks, RemoteFile, TransferProgress};
+use crate::commands::sftp::editor::read_limit;
+use crate::commands::sftp::resume::endpoint::{Endpoint, Listed, Reader, Stat, Writer};
+use crate::commands::sftp::resume::pipe::piped;
+use crate::commands::sftp::TarProbe;
+use crate::commands::sftp::{sort_listing, RemoteFile};
+use crate::error::AppError;
 use crate::sftp::backend::FileBackend;
+use crate::sftp::link::{ssh_answers, wait_for_link};
 use crate::ssh::client::SshClient;
-use crate::ssh::live_cells::read_cell;
-use crate::ssh::session::SessionHandle;
+use crate::ssh::exec::{drain_channel, exit_error, open_exec, run_captured, sh_c, Captured};
+use crate::ssh::live_cells::{read_cell, Cell};
 use async_trait::async_trait;
-use russh::client::Handle;
-use russh::ChannelMsg;
-use std::path::Path;
-use std::process::Stdio;
-use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use russh::client::{Handle, Handler};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
+use tokio::io::AsyncWriteExt;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-/// Single-quote a string for the host POSIX shell.
-fn q(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
-
-/// Drain a russh channel until it ends: stdout goes to `out`, stderr is
-/// collected, and the exit status is returned alongside it — turning that into
-/// an error message is the caller's business, because each caller words it
-/// differently. `progress` is `(app, transfer_id, total)` for the callers that
-/// stream a transfer; with `token` set, a cancellation between messages aborts
-/// the drain.
-///
-/// The status is `None` when the channel ended without one, which every caller
-/// must treat as a failure: reporting a missing status as exit 0 is how a
-/// deleted path used to look like a successful command.
-///
-/// `Eof` is never a stopping point — the exit status follows it — and `Close`
-/// only stops the drain once the status has actually arrived, because russh can
-/// deliver the two in either order.
-async fn drain_channel<W: AsyncWrite + Unpin>(
-    channel: &mut russh::Channel<russh::client::Msg>,
-    out: &mut W,
-    progress: Option<(&AppHandle, &str, u64)>,
-    token: Option<&CancellationToken>,
-) -> Result<(Option<i32>, Vec<u8>), String> {
-    let mut transferred = 0u64;
-    let mut err = Vec::new();
-    let mut code = None;
-    loop {
-        if token.is_some_and(|t| t.is_cancelled()) {
-            return Err("Transfer cancelled".into());
-        }
-        match channel.wait().await {
-            Some(ChannelMsg::Data { data }) => {
-                out.write_all(&data)
-                    .await
-                    .map_err(|e| format!("Write error: {e}"))?;
-                transferred += data.len() as u64;
-                if let Some((app, transfer_id, total)) = progress {
-                    let _ = app.emit(
-                        &format!("sftp-progress-{transfer_id}"),
-                        TransferProgress { transferred, total },
-                    );
-                }
-            }
-            Some(ChannelMsg::ExtendedData { data, .. }) => err.extend_from_slice(&data),
-            Some(ChannelMsg::ExitStatus { exit_status }) => code = Some(exit_status as i32),
-            Some(ChannelMsg::Close) if code.is_some() => break,
-            None => break,
-            _ => {}
-        }
-    }
-    Ok((code, err))
-}
-
-/// The message a non-zero — or missing — exit status deserves, or `None` when
-/// the command succeeded. `stderr` is used when it says anything.
-fn exit_error(label: &str, code: Option<i32>, stderr: &str) -> Option<String> {
-    match code {
-        Some(0) => None,
-        _ => Some(format!("{label}: {}", exit_detail(code, stderr))),
-    }
-}
-
-fn exit_detail(code: Option<i32>, stderr: &str) -> String {
-    let stderr = stderr.trim();
-    if !stderr.is_empty() {
-        return stderr.to_string();
-    }
-    match code {
-        Some(c) => format!("exit {c}"),
-        None => "no exit status".to_string(),
-    }
-}
-
-fn parent_of(path: &str) -> &str {
-    let trimmed = path.trim_end_matches('/');
-    match trimmed.rfind('/') {
-        Some(0) => "/",
-        Some(i) => &trimmed[..i],
-        None => ".",
-    }
-}
-
-fn basename_of(path: &str) -> &str {
-    let trimmed = path.trim_end_matches('/');
-    trimmed
-        .rfind('/')
-        .map(|i| &trimmed[i + 1..])
-        .unwrap_or(trimmed)
-}
-
-#[derive(Clone)]
-pub struct DockerFs {
+pub struct DockerFs<H: Handler = SshClient> {
     /// Live handle of the host session, so exec channels are opened on whatever
     /// connection the terminal currently has rather than the one present when
     /// the panel was first opened.
-    handle: SessionHandle,
-    container_id: String,
+    handle: Cell<Arc<Handle<H>>>,
+    /// Knows the container's `docker exec -i <id>` prefix, which every command runs under.
+    tar: Arc<TarProbe<H>>,
+    /// The connection the latest transfer stream was opened on.
+    streaming_on: Arc<StdMutex<Weak<Handle<H>>>>,
+    closed: CancellationToken,
+}
+
+impl<H: Handler> Clone for DockerFs<H> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: Arc::clone(&self.handle),
+            tar: Arc::clone(&self.tar),
+            streaming_on: Arc::clone(&self.streaming_on),
+            closed: self.closed.clone(),
+        }
+    }
 }
 
 impl DockerFs {
-    pub fn new(handle: SessionHandle, container_id: String) -> Self {
+    pub fn new(handle: Cell<Arc<Handle<SshClient>>>, inside: String) -> Self {
         Self {
+            tar: Arc::new(TarProbe::new(Arc::clone(&handle), Some(inside))),
             handle,
-            container_id,
+            streaming_on: Arc::default(),
+            closed: CancellationToken::new(),
         }
     }
+}
 
-    fn ssh(&self) -> Arc<Handle<SshClient>> {
+impl<H: Handler> DockerFs<H> {
+    fn ssh(&self) -> Arc<Handle<H>> {
         read_cell(&self.handle)
+    }
+
+    fn stream_ssh(&self) -> Arc<Handle<H>> {
+        let ssh = self.ssh();
+        *self.streaming_on.lock().unwrap() = Arc::downgrade(&ssh);
+        ssh
     }
 
     /// Build a `docker exec -i <cid> sh -c '<script>' x <arg…>` command string.
     fn dexec(&self, script: &str, args: &[&str]) -> String {
-        let mut cmd = format!(
-            "docker exec -i {cid} sh -c {script} x",
-            cid = q(&self.container_id),
-            script = q(script),
-        );
-        for a in args {
-            cmd.push(' ');
-            cmd.push_str(&q(a));
-        }
-        cmd
+        self.tar.run_in(&sh_c(script, args))
     }
 
-    /// Open a channel on the live host session and start `cmd` on it.
-    async fn exec_channel(&self, cmd: &str) -> Result<russh::Channel<russh::client::Msg>, String> {
-        let channel = self
-            .ssh()
-            .channel_open_session()
-            .await
-            .map_err(|e| format!("channel error: {e}"))?;
-        channel
-            .exec(true, cmd)
-            .await
-            .map_err(|e| format!("exec error: {e}"))?;
-        Ok(channel)
+    /// Run a command on the host, capturing raw stdout, stderr, and exit status.
+    async fn run_bytes(&self, cmd: &str) -> Result<(Vec<u8>, String, Option<i32>), String> {
+        let c = run_captured(&self.ssh(), cmd).await?;
+        Ok((c.stdout, c.stderr, c.code))
     }
 
-    /// Run a command on the host, capturing stdout, stderr, and exit status.
+    /// `run_bytes` with stdout as text.
     async fn run(&self, cmd: &str) -> Result<(String, String, Option<i32>), String> {
-        let mut channel = self.exec_channel(cmd).await?;
-        let mut out = Vec::new();
-        let (code, err) = drain_channel(&mut channel, &mut out, None, None).await?;
-        Ok((
-            String::from_utf8_lossy(&out).into_owned(),
-            String::from_utf8_lossy(&err).into_owned(),
-            code,
-        ))
+        let (out, err, code) = self.run_bytes(cmd).await?;
+        Ok((String::from_utf8_lossy(&out).into_owned(), err, code))
     }
 
-    async fn simple(&self, script: &str, args: &[&str], label: &str) -> Result<(), String> {
+    async fn simple(&self, script: &str, args: &[&str], label: &str) -> Result<(), AppError> {
         let (_out, err, code) = self.run(&self.dexec(script, args)).await?;
-        match exit_error(label, code, &err) {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        Ok(exit_error(label, code, &err)?)
     }
 
-    /// Wait for a streaming-upload command to finish and report any error.
-    /// The channel produces no stdout here, so it drains into a sink.
-    async fn drain_exit(
-        &self,
-        channel: &mut russh::Channel<russh::client::Msg>,
-        label: &str,
-    ) -> Result<(), String> {
-        let (code, err) = drain_channel(channel, &mut tokio::io::sink(), None, None).await?;
-        match exit_error(
-            &format!("{label} failed"),
-            code,
-            &String::from_utf8_lossy(&err),
-        ) {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
-    }
-
-    /// Spawn a local `tar` producer and stream its stdout into a container command's stdin.
-    async fn tar_into_container(
-        &self,
-        app: &AppHandle,
-        tar_args: &[&str],
-        remote_cmd: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        let mut tar_cmd = tokio::process::Command::new("tar");
-        tar_cmd
-            .args(tar_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        crate::commands::win_proc::prevent_visible_child_window(&mut tar_cmd);
-        let mut child = tar_cmd.spawn().map_err(|e| format!("tar not found: {e}"))?;
-        let mut tar_out = child.stdout.take().ok_or("tar stdout unavailable")?;
-
-        let mut channel = self.exec_channel(remote_cmd).await?;
-        let mut writer = channel.make_writer();
-
-        let mut transferred = 0u64;
-        // Any failure, cancellation included, must reap the local tar first.
-        if let Err(e) = pump_chunks(
-            app,
-            &mut tar_out,
-            &mut writer,
-            transfer_id,
-            token,
-            &mut transferred,
-            0,
-        )
-        .await
-        {
-            let _ = child.kill().await;
-            return Err(e);
-        }
-        writer.flush().await.ok();
-        drop(writer);
-        channel.eof().await.ok();
-
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| format!("tar wait error: {e}"))?;
-        if !status.success() {
-            return Err("Local tar archiving failed".into());
-        }
-        self.drain_exit(&mut channel, "upload").await
-    }
-
-    /// Run a container `tar` producer and stream its stdout into a local `tar` extractor.
-    async fn tar_from_container(
-        &self,
-        app: &AppHandle,
-        remote_cmd: &str,
-        local_dir: &str,
-        tar_args: &[&str],
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        tokio::fs::create_dir_all(local_dir)
-            .await
-            .map_err(|e| format!("Cannot create local dir: {e}"))?;
-
-        let mut tar_cmd = tokio::process::Command::new("tar");
-        tar_cmd
-            .args(tar_args)
-            .stdin(Stdio::piped())
-            .stderr(Stdio::piped());
-        crate::commands::win_proc::prevent_visible_child_window(&mut tar_cmd);
-        let mut child = tar_cmd.spawn().map_err(|e| format!("tar not found: {e}"))?;
-        let mut tar_in = child.stdin.take().ok_or("tar stdin unavailable")?;
-
-        let mut channel = self.exec_channel(remote_cmd).await?;
-
-        // Any failure, cancellation included, must reap the local tar first.
-        let drained = drain_channel(
-            &mut channel,
-            &mut tar_in,
-            Some((app, transfer_id, 0)),
-            Some(token),
-        )
-        .await;
-        let (code, err) = match drained {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = child.kill().await;
-                return Err(e);
-            }
-        };
-        drop(tar_in); // close stdin so local tar finishes
-        let status = child
-            .wait()
-            .await
-            .map_err(|e| format!("tar wait error: {e}"))?;
-        if let Some(e) = exit_error("download failed", code, &String::from_utf8_lossy(&err)) {
-            return Err(e);
-        }
-        if !status.success() {
-            return Err("Local tar extraction failed".into());
-        }
-        Ok(())
-    }
-}
-
-/// The docker-exec backend implements every `FileBackend` operation
-/// directly; the private helpers above are the shell plumbing they share.
-#[async_trait]
-impl FileBackend for DockerFs {
-    // ── Browse ──────────────────────────────────────────────────────────────
-
-    async fn canonicalize(&self, path: &str) -> Result<String, String> {
-        // readlink -f resolves "." and relative paths to an absolute path; fall
-        // back to `cd && pwd` for shells whose readlink lacks -f.
-        let script = "readlink -f \"$1\" 2>/dev/null || { cd \"$1\" 2>/dev/null && pwd; }";
-        let (out, err, code) = self.run(&self.dexec(script, &[path])).await?;
-        let resolved = out.trim();
-        if code != Some(0) || resolved.is_empty() {
-            return Err(if err.trim().is_empty() {
-                format!("Cannot resolve path: {path}")
-            } else {
-                err.trim().to_string()
-            });
-        }
-        Ok(resolved.to_string())
-    }
-
-    async fn list_dir(&self, path: &str) -> Result<Vec<RemoteFile>, String> {
+    async fn listing(&self, path: &str) -> Result<Vec<RemoteFile>, AppError> {
         // For each entry emit: is_symlink \t is_dir \t size \t mtime \t mode \t name
+        // (mtime `-` when stat can't read it, so a 0 is always a real date).
         // `./$e` everywhere so filenames beginning with '-' aren't parsed as test flags.
         let script = "cd \"$1\" || exit 3; \
              for e in * .*; do \
@@ -342,7 +106,7 @@ impl FileBackend for DockerFs {
                if [ -L \"./$e\" ]; then L=1; else L=0; fi; \
                if [ -d \"./$e\" ]; then D=1; else D=0; fi; \
                S=$(stat -c %s \"./$e\" 2>/dev/null || echo 0); \
-               M=$(stat -c %Y \"./$e\" 2>/dev/null || echo 0); \
+               M=$(stat -c %Y \"./$e\" 2>/dev/null || echo -); \
                P=$(stat -c %a \"./$e\" 2>/dev/null || echo 0); \
                printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$L\" \"$D\" \"$S\" \"$M\" \"$P\" \"$e\"; \
              done";
@@ -355,7 +119,8 @@ impl FileBackend for DockerFs {
                 } else {
                     err.trim().to_string()
                 }
-            ));
+            )
+            .into());
         }
         let base = path.trim_end_matches('/');
         let mut files: Vec<RemoteFile> = Vec::new();
@@ -385,16 +150,47 @@ impl FileBackend for DockerFs {
                 size: s.parse().unwrap_or(0),
                 is_dir: d == "1",
                 is_symlink: l == "1",
-                modified: m.parse::<u64>().ok().filter(|&t| t > 0),
+                modified: m.parse::<u64>().ok(),
                 permissions: u32::from_str_radix(p.trim(), 8).ok(),
             });
         }
-        files.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
         Ok(files)
+    }
+}
+
+/// Every operation is a short shell command in the container; transfers go
+/// through the copy engine over this backend's `Endpoint`.
+#[async_trait]
+impl FileBackend for DockerFs {
+    fn tar_probe(&self) -> Option<&TarProbe> {
+        Some(&self.tar)
+    }
+
+    // ── Browse ──────────────────────────────────────────────────────────────
+
+    async fn run_sh(&self, script: &str, args: &[&str]) -> Result<Captured, String> {
+        run_captured(&self.ssh(), &self.dexec(script, args)).await
+    }
+
+    async fn canonicalize(&self, path: &str) -> Result<String, AppError> {
+        // readlink -f resolves "." and relative paths to an absolute path; fall
+        // back to `cd && pwd` for shells whose readlink lacks -f.
+        let script = "readlink -f \"$1\" 2>/dev/null || { cd \"$1\" 2>/dev/null && pwd; }";
+        let (out, err, code) = self.run(&self.dexec(script, &[path])).await?;
+        let resolved = out.trim();
+        if code != Some(0) || resolved.is_empty() {
+            return Err(if err.trim().is_empty() {
+                format!("Cannot resolve path: {path}")
+            } else {
+                err.trim().to_string()
+            }
+            .into());
+        }
+        Ok(resolved.to_string())
+    }
+
+    async fn list_dir(&self, path: &str) -> Result<Vec<RemoteFile>, AppError> {
+        Ok(for_the_panel(self.listing(path).await?))
     }
 
     /// Returns Some(is_dir) if path exists, None if it doesn't.
@@ -409,26 +205,24 @@ impl FileBackend for DockerFs {
         if code == Some(7) {
             return Ok(None);
         }
-        if let Some(e) = exit_error("stat failed", code, &err) {
-            return Err(e);
-        }
+        exit_error("stat failed", code, &err)?;
         Ok(Some(out.trim() == "d"))
     }
 
-    async fn mkdir(&self, path: &str) -> Result<(), String> {
+    async fn mkdir(&self, path: &str) -> Result<(), AppError> {
         self.simple("mkdir \"$1\"", &[path], "mkdir failed").await
     }
 
-    async fn touch(&self, path: &str) -> Result<(), String> {
+    async fn touch(&self, path: &str) -> Result<(), AppError> {
         self.simple("touch \"$1\"", &[path], "touch failed").await
     }
 
-    async fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+    async fn rename(&self, from: &str, to: &str) -> Result<(), AppError> {
         self.simple("mv \"$1\" \"$2\"", &[from, to], "rename failed")
             .await
     }
 
-    async fn delete(&self, path: &str) -> Result<(), String> {
+    async fn delete(&self, path: &str) -> Result<(), AppError> {
         self.simple("rm -rf \"$1\"", &[path], "delete failed").await
     }
 
@@ -441,265 +235,345 @@ impl FileBackend for DockerFs {
             .unwrap_or(0)
     }
 
-    async fn read_file(&self, path: &str) -> Result<Vec<u8>, String> {
-        let (out, err, code) = self.run(&self.dexec("base64 \"$1\"", &[path])).await?;
-        if let Some(e) = exit_error("read failed", code, &err) {
-            return Err(e);
-        }
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD
-            .decode(out.trim().replace('\n', ""))
-            .map_err(|e| format!("decode failed: {e}"))
+    async fn read_file(&self, path: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
+        // `head -c` stops at the limit inside the container, so an endless file
+        // (`/dev/zero`) is cut off there rather than streamed here without end.
+        // The channel carries raw bytes, so no base64 round trip is needed.
+        let limit = read_limit(max_bytes).to_string();
+        let script = self.dexec("head -c \"$2\" \"$1\"", &[path, &limit]);
+        let (out, err, code) = self.run_bytes(&script).await?;
+        exit_error("read failed", code, &err).map(|()| out)
     }
 
     async fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
-        let cmd = self.dexec("cat > \"$1\"", &[path]);
-        let mut channel = self.exec_channel(&cmd).await?;
-        let mut writer = channel.make_writer();
-        writer
-            .write_all(content.as_bytes())
+        let mut w = self.open_write(path, 0, content.len() as u64).await?;
+        w.write_all(content.as_bytes())
             .await
             .map_err(|e| format!("Write error: {e}"))?;
-        writer.flush().await.ok();
-        drop(writer);
-        channel.eof().await.ok();
-        self.drain_exit(&mut channel, "write").await
+        w.shutdown().await.map_err(|e| format!("write failed: {e}"))
     }
 
-    // ── Single file transfer ──────────────────────────────────────────────────
-
-    async fn upload_file(
-        &self,
-        app: &AppHandle,
-        local_path: &str,
-        remote_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        let mut local = tokio::fs::File::open(local_path)
-            .await
-            .map_err(|e| format!("Cannot open local file: {e}"))?;
-        let total = local.metadata().await.map(|m| m.len()).unwrap_or(0);
-
-        let cmd = self.dexec("cat > \"$1\"", &[remote_path]);
-        let mut channel = self.exec_channel(&cmd).await?;
-        let mut writer = channel.make_writer();
-
-        let mut transferred = 0u64;
-        pump_chunks(
-            app,
-            &mut local,
-            &mut writer,
-            transfer_id,
-            token,
-            &mut transferred,
-            total,
-        )
-        .await?;
-        writer.flush().await.ok();
-        drop(writer);
-        channel.eof().await.ok();
-        self.drain_exit(&mut channel, "upload").await
+    fn endpoint(&self) -> Arc<dyn Endpoint> {
+        Arc::new(self.clone())
     }
 
-    async fn download_file(
-        &self,
-        app: &AppHandle,
-        remote_path: &str,
-        local_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        let total = self.file_size(remote_path).await;
-        if let Some(parent) = Path::new(local_path).parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| format!("Cannot create local dir: {e}"))?;
-        }
-        let mut local = tokio::fs::File::create(local_path)
-            .await
-            .map_err(|e| format!("Cannot create local file: {e}"))?;
-
-        let cmd = self.dexec("cat \"$1\"", &[remote_path]);
-        let mut channel = self.exec_channel(&cmd).await?;
-
-        let (code, err) = drain_channel(
-            &mut channel,
-            &mut local,
-            Some((app, transfer_id, total)),
-            Some(token),
-        )
-        .await?;
-        local.flush().await.ok();
-        if let Some(e) = exit_error("download failed", code, &String::from_utf8_lossy(&err)) {
-            return Err(e);
-        }
-        Ok(())
-    }
-
-    // ── Directory / batch transfer (tar streaming) ─────────────────────────────
-
-    /// Upload a local directory: `tar -c` locally → pipe into the container,
-    /// where `tar -x --strip-components=1` lands the directory's contents in
-    /// `remote_path` (mirrors the SFTP `*_dir_tar` semantics).
-    async fn upload_dir(
-        &self,
-        app: &AppHandle,
-        local_path: &str,
-        remote_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        let parent = Path::new(local_path)
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or(".");
-        let base = Path::new(local_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        let remote_script = "mkdir -p \"$1\" && tar -C \"$1\" --strip-components=1 -xzf -";
-        self.tar_into_container(
-            app,
-            &["-C", parent, "-czf", "-", base],
-            &self.dexec(remote_script, &[remote_path]),
-            transfer_id,
-            token,
-        )
-        .await
-    }
-
-    /// Upload several local items that share a parent directory into `remote_dir`.
-    async fn upload_batch(
-        &self,
-        app: &AppHandle,
-        local_paths: &[String],
-        remote_dir: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        if local_paths.is_empty() {
-            return Ok(());
-        }
-        let parent = Path::new(&local_paths[0])
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or(".");
-        let mut args: Vec<&str> = vec!["-C", parent, "-czf", "-"];
-        for p in local_paths {
-            if let Some(name) = Path::new(p).file_name().and_then(|n| n.to_str()) {
-                args.push(name);
-            }
-        }
-        let remote_script = "mkdir -p \"$1\" && tar -C \"$1\" -xzf -";
-        self.tar_into_container(
-            app,
-            &args,
-            &self.dexec(remote_script, &[remote_dir]),
-            transfer_id,
-            token,
-        )
-        .await
-    }
-
-    /// Download a container directory: `tar -c` in the container → pipe to local
-    /// `tar -x --strip-components=1` so the directory's contents land in `local_path`.
-    async fn download_dir(
-        &self,
-        app: &AppHandle,
-        remote_path: &str,
-        local_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        let parent = parent_of(remote_path).to_string();
-        let base = basename_of(remote_path).to_string();
-        let remote_cmd = self.dexec("tar -C \"$1\" -czf - \"$2\"", &[&parent, &base]);
-        self.tar_from_container(
-            app,
-            &remote_cmd,
-            local_path,
-            &["-C", local_path, "--strip-components=1", "-xzf", "-"],
-            transfer_id,
-            token,
-        )
-        .await
-    }
-
-    /// Download several container items that share a parent into `local_dir`.
-    async fn download_batch(
-        &self,
-        app: &AppHandle,
-        remote_paths: &[String],
-        local_dir: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        if remote_paths.is_empty() {
-            return Ok(());
-        }
-        let parent = parent_of(&remote_paths[0]).to_string();
-        // sh -c 'cd "$1"; shift; tar -czf - "$@"' x <parent> <base…>
-        let mut args: Vec<&str> = vec![&parent];
-        let basenames: Vec<String> = remote_paths
-            .iter()
-            .map(|p| basename_of(p).to_string())
-            .collect();
-        for b in &basenames {
-            args.push(b);
-        }
-        let remote_cmd = self.dexec("cd \"$1\" || exit 3; shift; tar -czf - \"$@\"", &args);
-        self.tar_from_container(
-            app,
-            &remote_cmd,
-            local_dir,
-            &["-C", local_dir, "-xzf", "-"],
-            transfer_id,
-            token,
-        )
-        .await
+    async fn close(&self) {
+        self.closed.cancel();
     }
 }
 
-#[cfg(test)]
+/// The panel has always shown an epoch-0 date as blank; the engine wants it exact.
+fn for_the_panel(mut files: Vec<RemoteFile>) -> Vec<RemoteFile> {
+    for f in &mut files {
+        f.modified = f.modified.filter(|&t| t > 0);
+    }
+    sort_listing(&mut files);
+    files
+}
+
+fn parse_stat(out: &str) -> Option<Stat> {
+    let mut f = out.split_whitespace();
+    let is_dir = f.next()? == "d";
+    let size = f.next()?.parse().ok()?;
+    let mtime = f.next()?.parse().ok();
+    let mode = f.next().and_then(|m| u32::from_str_radix(m, 8).ok());
+    Some(Stat {
+        size,
+        mtime,
+        is_dir,
+        mode,
+    })
+}
+
+#[async_trait]
+impl<H: Handler + 'static> Endpoint for DockerFs<H> {
+    fn is_local(&self) -> bool {
+        false
+    }
+
+    async fn stat(&self, path: &str) -> Result<Option<Stat>, AppError> {
+        let script = "[ -e \"$1\" ] || exit 7; \
+             if [ -d \"$1\" ]; then printf 'd '; else printf 'f '; fi; \
+             stat -L -c '%s %Y %a' \"$1\"";
+        let (out, err, code) = self.run(&self.dexec(script, &[path])).await?;
+        if code == Some(7) {
+            return Ok(None);
+        }
+        exit_error("stat failed", code, &err)?;
+        parse_stat(&out)
+            .map(Some)
+            .ok_or_else(|| format!("stat failed: unexpected answer {out:?}").into())
+    }
+
+    async fn list(&self, dir: &str) -> Result<Vec<Listed>, AppError> {
+        Ok(self
+            .listing(dir)
+            .await?
+            .into_iter()
+            .map(Listed::from)
+            .collect())
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<(), AppError> {
+        self.simple("mkdir -p \"$1\"", &[path], "mkdir failed")
+            .await
+    }
+
+    async fn open_read(&self, path: &str, offset: u64) -> Result<Reader, AppError> {
+        let from = (offset + 1).to_string();
+        let cmd = self.dexec("tail -c +\"$2\" \"$1\"", &[path, &from]);
+        let ssh = self.stream_ssh();
+        Ok(Box::new(piped(|mut tx, cancel| async move {
+            let mut channel = open_exec(&ssh, &cmd).await?;
+            let (code, err) = drain_channel(&mut channel, &mut tx, None, Some(&cancel)).await?;
+            Ok(exit_error(
+                "read failed",
+                code,
+                &String::from_utf8_lossy(&err),
+            )?)
+        })))
+    }
+
+    async fn open_write(&self, path: &str, offset: u64, _len: u64) -> Result<Writer, AppError> {
+        let script = if offset == 0 {
+            "cat > \"$1\""
+        } else {
+            "cat >> \"$1\""
+        };
+        let cmd = self.dexec(script, &[path]);
+        let ssh = self.stream_ssh();
+        Ok(Box::new(piped(|mut rx, cancel| async move {
+            let mut channel = open_exec(&ssh, &cmd).await?;
+            let mut writer = channel.make_writer();
+            tokio::select! {
+                copied = tokio::io::copy(&mut rx, &mut writer) => copied?,
+                _ = cancel.cancelled() => return Err(crate::sftp::TRANSFER_CANCELLED.into()),
+            };
+            writer.flush().await?;
+            drop(writer);
+            let _ = channel.eof().await;
+            let (code, err) =
+                drain_channel(&mut channel, &mut tokio::io::sink(), None, Some(&cancel)).await?;
+            Ok(exit_error(
+                "write failed",
+                code,
+                &String::from_utf8_lossy(&err),
+            )?)
+        })))
+    }
+
+    async fn rename(&self, from: &str, to: &str) -> Result<(), AppError> {
+        self.simple("mv \"$1\" \"$2\"", &[from, to], "rename failed")
+            .await
+    }
+
+    async fn remove(&self, path: &str) -> Result<(), AppError> {
+        self.simple("rm -f \"$1\"", &[path], "remove failed").await
+    }
+
+    async fn set_mtime(&self, path: &str, mtime: u64) -> Result<(), AppError> {
+        let at = format!("@{mtime}");
+        self.simple("touch -c -d \"$2\" \"$1\"", &[path, &at], "touch failed")
+            .await
+    }
+
+    async fn set_mode(&self, path: &str, mode: u32) -> Result<(), AppError> {
+        let mode = format!("{:o}", mode & 0o7777);
+        self.simple("chmod \"$2\" \"$1\"", &[path, &mode], "chmod failed")
+            .await
+    }
+
+    async fn resolve(&self, path: &str) -> Result<String, AppError> {
+        let script = "[ -L \"$1\" ] && readlink -f \"$1\"";
+        let (out, _, code) = self.run(&self.dexec(script, &[path])).await?;
+        let resolved = out.trim();
+        Ok(if code == Some(0) && !resolved.is_empty() {
+            resolved.to_string()
+        } else {
+            path.to_string()
+        })
+    }
+
+    async fn hash(
+        &self,
+        path: &str,
+        token: &CancellationToken,
+    ) -> Result<Option<String>, AppError> {
+        self.tar.hash(path, token, self.link_dead()).await
+    }
+
+    /// A stream on a connection the terminal has since replaced is as good as cut.
+    fn link_lost(&self) -> bool {
+        let current = self.ssh();
+        match self.streaming_on.lock().unwrap().upgrade() {
+            Some(used) => used.is_closed() || !Arc::ptr_eq(&used, &current),
+            None => current.is_closed(),
+        }
+    }
+
+    async fn link_dead(&self) -> bool {
+        self.link_lost() || !ssh_answers(&self.ssh()).await
+    }
+
+    async fn wait_for_link(
+        &self,
+        token: &CancellationToken,
+        deadline: Instant,
+    ) -> Result<(), AppError> {
+        let alive = || async { ssh_answers(&self.ssh()).await };
+        wait_for_link(alive, token, &self.closed, deadline).await
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::commands::sftp::resume::copy_one;
+    use crate::commands::sftp::resume::endpoint::LocalFs;
+    use crate::commands::sftp::resume::engine_tests::{noise, s};
+    use crate::port_forward::test_ssh::TestClient;
+    use crate::sftp::backend::test_tree::Recorder;
+    use crate::ssh::live_cells::own_cell;
+    use crate::ssh::test_proc_server::{proc_server, ProcOptions};
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
 
-    #[test]
-    fn only_exit_zero_is_a_success() {
-        assert_eq!(exit_error("delete failed", Some(0), ""), None);
+    /// A "container" that is the test host itself: `env` runs each command as is.
+    async fn docker_fs(opts: ProcOptions) -> DockerFs<TestClient> {
+        let (handle, _) = proc_server(opts).await;
+        let handle = own_cell(handle);
+        DockerFs {
+            tar: Arc::new(TarProbe::new(Arc::clone(&handle), Some("env".into()))),
+            handle,
+            streaming_on: Arc::default(),
+            closed: CancellationToken::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_endpoint_round_trips_at_offsets_stats_and_hashes() {
+        let fs = docker_fs(ProcOptions::default()).await;
+        let d = tempfile::tempdir().unwrap();
+        let f = format!("{}/it's x", d.path().display());
+        let mut w = fs.open_write(&f, 0, 5).await.unwrap();
+        w.write_all(b"hello").await.unwrap();
+        w.shutdown().await.unwrap();
+        let mut w = fs.open_write(&f, 5, 3).await.unwrap();
+        w.write_all(b"LO!").await.unwrap();
+        w.shutdown().await.unwrap();
+        let mut got = String::new();
+        let mut r = fs.open_read(&f, 2).await.unwrap();
+        r.read_to_string(&mut got).await.unwrap();
+        assert_eq!(got, "lloLO!");
+
+        fs.set_mtime(&f, 1_000_000).await.unwrap();
+        fs.set_mode(&f, 0o640).await.unwrap();
+        let st = Endpoint::stat(&fs, &f).await.unwrap().unwrap();
         assert_eq!(
-            exit_error("delete failed", Some(1), ""),
-            Some("delete failed: exit 1".to_string())
+            (st.size, st.mtime, st.is_dir, st.mode),
+            (8, Some(1_000_000), false, Some(0o640))
         );
+        assert!(
+            Endpoint::stat(&fs, &d.path().to_string_lossy())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_dir
+        );
+        assert_eq!(
+            Endpoint::stat(&fs, &format!("{f}.nope")).await.unwrap(),
+            None
+        );
+        let names: Vec<_> = fs
+            .list(&d.path().to_string_lossy())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|l| l.name)
+            .collect();
+        assert_eq!(names, ["it's x"]);
+        let token = CancellationToken::new();
+        let hashed = fs.hash(&f, &token).await.unwrap();
+        assert!(hashed.is_some());
+        assert_eq!(hashed, LocalFs.hash(&f, &token).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_reports_why() {
+        let fs = docker_fs(ProcOptions::default()).await;
+        let mut r = fs.open_read("/no/such/file", 0).await.unwrap();
+        let e = r.read_to_end(&mut Vec::new()).await.unwrap_err();
+        assert!(e.to_string().contains("read failed"), "{e}");
     }
 
     #[test]
-    fn a_missing_exit_status_is_a_failure_not_a_success() {
-        assert_eq!(
-            exit_error("stat failed", None, ""),
-            Some("stat failed: no exit status".to_string())
+    fn a_stat_keeps_a_real_0_mtime_and_reads_an_unreadable_one_as_unknown() {
+        assert_eq!(parse_stat("f 3 0 644").unwrap().mtime, Some(0));
+        let unreadable = parse_stat("f 3 ? 644").unwrap();
+        assert_eq!((unreadable.size, unreadable.mtime), (3, None));
+    }
+
+    #[tokio::test]
+    async fn an_epoch_0_file_lists_as_0_to_the_engine_and_blank_in_the_panel() {
+        let fs = docker_fs(ProcOptions::default()).await;
+        let d = tempfile::tempdir().unwrap();
+        let f = std::fs::File::create(d.path().join("old")).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH).unwrap();
+        let dir = d.path().to_string_lossy().into_owned();
+        let listed = Endpoint::list(&fs, &dir).await.unwrap();
+        assert_eq!(listed[0].stat.unwrap().mtime, Some(0));
+        let shown = for_the_panel(fs.listing(&dir).await.unwrap());
+        assert_eq!(shown[0].modified, None);
+    }
+
+    fn relink_after(fs: &DockerFs<TestClient>, delay: Duration) -> tokio::task::JoinHandle<()> {
+        let handle = Arc::clone(&fs.handle);
+        tokio::spawn(async move {
+            while ssh_answers(&read_cell::<Arc<Handle<TestClient>>>(&handle)).await {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            tokio::time::sleep(delay).await;
+            let (fresh, _) = proc_server(ProcOptions::default()).await;
+            *handle.write().unwrap() = fresh;
+        })
+    }
+
+    async fn cut_mid_file(upload: bool) {
+        let fs = docker_fs(ProcOptions {
+            drop_after_bytes: Some(3_000_000),
+            ..Default::default()
+        })
+        .await;
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let data = noise(8_000_000);
+        std::fs::write(a.path().join("v"), &data).unwrap();
+        let relink = relink_after(&fs, Duration::from_millis(200));
+        let rec = Recorder::default();
+        let (src, dst) = (s(&a.path().join("v")), s(&b.path().join("v")));
+        let token = CancellationToken::new();
+        let copied = if upload {
+            copy_one(&rec, &LocalFs, &src, &fs, &dst, "t", &token).await
+        } else {
+            copy_one(&rec, &fs, &src, &LocalFs, &dst, "t", &token).await
+        };
+        copied.unwrap();
+        relink.await.unwrap();
+        assert_eq!(std::fs::read(b.path().join("v")).unwrap(), data);
+        assert!(
+            rec.last("sftp-resumed-t").unwrap()["offset"]
+                .as_u64()
+                .unwrap()
+                > 0
         );
     }
 
-    #[test]
-    fn stderr_wins_over_the_bare_exit_code() {
-        assert_eq!(
-            exit_error("read failed", Some(2), "  No such file\n"),
-            Some("read failed: No such file".to_string())
-        );
-        assert_eq!(
-            exit_error("read failed", None, "container is not running\n"),
-            Some("read failed: container is not running".to_string())
-        );
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_upload_cut_mid_file_resumes_byte_identical() {
+        cut_mid_file(true).await;
     }
 
-    #[test]
-    fn parent_and_basename_split_a_remote_path() {
-        assert_eq!(parent_of("/srv/data/logs"), "/srv/data");
-        assert_eq!(parent_of("/logs"), "/");
-        assert_eq!(parent_of("logs"), ".");
-        assert_eq!(basename_of("/srv/data/logs/"), "logs");
-        assert_eq!(basename_of("logs"), "logs");
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_download_cut_mid_file_resumes_byte_identical() {
+        cut_mid_file(false).await;
     }
 }

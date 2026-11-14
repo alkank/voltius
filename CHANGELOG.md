@@ -7,6 +7,807 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.72.0] - 2026-11-13
+
+### Added
+
+- Settings has a search field that finds every setting across sections, on desktop and mobile. Results are ranked by how well they match, the UI language and English both match, and one typo is tolerated. `/` or Ctrl/Cmd+F focuses it (#870, #872)
+- A Changed view in Settings lists every setting that differs from its default, with live controls, per-row reset with Undo, and Reset all. Every settings row now shows the changed dot and a reset (#870)
+- OmniSearch finds every setting: each on/off setting is a quick toggle, and any other setting opens Settings filtered to it (#870)
+- Sign-up and Add account have a "Have an invitation link?" field. Paste a team invitation link to register with the invited email, even on a server with registration closed (#871)
+
+### Changed
+
+- Terminal scrollback defaults to 10,000 lines. A saved 50,000 (the old default) moves to 10,000 once; other values are kept (#870)
+
+## [0.71.0] - 2026-11-13
+
+### Added
+
+- Settings › Appearance has a Time format setting: Automatic (follows the app language), 12-hour or 24-hour. It applies to every time the app shows (sync menu, audit logs, SFTP dates, vault backups, theme schedule) and syncs to your other devices (#865)
+
+### Fixed
+
+- On mobile, the two-key buttons in the terminal extra-keys row show their alternate in a bubble above the key when held or swiped up, and send it on release. Holding an arrow sends its alternate instead of repeating (#866)
+
+## [0.70.0] - 2026-11-13
+
+### Added
+
+- Members › Security now shows a Vault key health card: the team key version, whether a new key is due after someone left, how many items still use an older key, and how this device's last try went. Items stuck on an older key are listed with the reason, and an item that can't be decrypted, or is left over from a deleted item, can be removed so the vault can get a new key again. Retry now runs the existing rotation on demand. Available on every team plan (#796)
+- Settings › Account lists the devices signed in to your cloud account, with the platform, when each signed in and when it was last active. You can sign out one device, every other device, or everywhere; a signed-out device loses server access at once and is asked to sign in again, and its local data is kept. `voltius-cli sessions` lists and signs out devices from the command line, and CLI sign-ins are tagged. Needs the matching server update (#794)
+- Cloud sync now reports a partial sync instead of a clean one when another device's copy couldn't be downloaded or read: the sync icon turns amber, the sync menu says how many devices failed, and Settings › Sync lists each of your devices with what went wrong and what to do. Retry downloads a device's copy again, including one that couldn't be decrypted, and Remove deletes a device's copy from the server. `voltius-cli sync status` prints the same results (#795)
+
+## [0.69.1] - 2026-11-12
+
+### Fixed
+
+- Switching between a vault page and a terminal tab, and between vault pages, no longer lags: the History panel mounts its first 50 commands and renders more as you scroll, and the terminal behind a vault page stops resizing to the vault layout and redrawing its minimap (#861)
+
+## [0.69.0] - 2026-11-12
+
+### Added
+
+- Lock a tab to keep it from being closed by accident: its close button becomes a lock, and Ctrl/Cmd+W, middle-click, the tab menu, "Close all" on a host and "Disconnect all" leave it open (the lock wiggles, and bulk closes say how many locked tabs were kept). Click the lock to unlock. In a split, each pane locks on its own. Typing `exit` still closes the tab. Plugins and AI agents get a `tab_locked` error instead of closing it. Lock from the tab menu, the pane menu, the command palette, or a long-press on a terminal chip on mobile (#859)
+- Pin a tab to keep it first in the tab bar as a compact icon. Pinned tabs never join a host group. Lock and pin are kept on this device across restarts and are not synced (#859)
+- "Pin session list" in the tab menu is now "Show in side panel" (#859)
+- Settings › Appearance and the Themes side panel now list marketplace themes you don't have yet, with a Get button that installs and applies one in a click. Installed theme-only plugins can be removed from the same place, and "Browse all in marketplace" opens Plugins on the `theme` tag. Get and Remove are greyed with a reason when a policy, the app version or the platform rules them out (#853)
+- Owners can invite a new teammate directly as Owner, from Members and from a vault's share sheet. Every Owner invite asks for confirmation first; the primary owner and billing do not change. Other roles see the Owner choice greyed out (#847)
+- Team audit events are queued on the device and retried until the server accepts them, so a network drop or server error no longer leaves a gap in the team's audit trail (#852)
+- While the live sync connection is open, Voltius checks the server about every 10 minutes, and refetches only the team vaults that changed (#855, #858)
+
+### Fixed
+
+- Locked tabs: "Disconnect all" now counts only the tabs it will close and says how many locked tabs stay open, or that nothing can be disconnected when every tab is locked. Ctrl/Cmd+W on a locked tab grouped under a host briefly shows a lock on the host's tab. The lock wiggles again on every refused close, and a pin is saved right away. A plugin or AI agent closing a serial session now waits until the port is released, so reopening it straight away no longer fails as busy (#860)
+- Switching tabs and opening the right side panel no longer lag while the History panel holds a long history: rows no longer re-render on every tab switch, and rows out of view skip layout (#857)
+- The terminal minimap no longer redraws in background tabs, and resamples a terminal with streaming output at most five times a second instead of on every frame, cutting idle CPU use (#857)
+- After sleep, a Wi-Fi drop or a reconnect, team vaults now pick up a teammate's edits made in the meantime instead of waiting for an app restart (#856)
+- One failed sync request no longer closes a live sync connection that is still receiving heartbeats (#782)
+- Requests that find the session expired now share one token refresh, so a burst of them no longer trips the sign-in rate limit for that network (#848)
+- Signing up through an invitation that is no longer valid now says you were not added to that team, including after "Add another account" (#849, #850)
+- The share sheet's email invite button names the address it sends to (#851)
+
+## [0.68.0] - 2026-11-11
+
+### Added
+
+- On macOS, Voltius reads a configuration profile pushed by an MDM (Jamf, Intune, Kandji, Mosyle) as machine policy, with the same keys as Android and iOS: `policy`, `server_url`, `server_allow_other` and `enrollment_token`. Only device profiles count. Where the profile and `policy.json` both set a key, the profile wins, and `voltius-cli policy check` warns about the overlap. The Free plan row now reads "Managed configuration (MDM)" (#842)
+- On a machine enrolled through its machine policy, the enrolling team's policy now applies whichever account is active: signed out, offline accounts, accounts on other servers and accounts outside the team. Voltius keeps it on the device, so it also applies at startup without a connection. Rotate and Revoke in the Members share sheet now say what happens to enrolled devices (#845)
+
+### Fixed
+
+- On macOS, Ctrl key combinations now reach the terminal (Ctrl+C, D, Z, R, L, V, K, F, …). App shortcuts moved to Cmd: Cmd+C / Cmd+V copy and paste in the terminal, Cmd+K opens the palette, Cmd+W closes a tab, and Settings shows them as Cmd. Ctrl+Tab, Ctrl+Space and Ctrl+Option+D stay on Ctrl because macOS uses the Cmd versions. On Linux and Windows, holding the Super/Windows key no longer triggers a Ctrl shortcut (#843)
+
+## [0.67.1] - 2026-11-10
+
+### Added
+
+- Machine policy: IT can lock Voltius settings on a computer with a policy file (`/etc/voltius/policy.json` on Linux, `%ProgramData%\Voltius\policy.json` on Windows, `/Library/Application Support/Voltius/policy.json` on macOS), written by hand, by Ansible or with `voltius-cli`. Locked settings show "Managed by your organization" and can't be changed in the app, the command palette or over MCP. The file can also hold defaults, which apply once and stay changeable. Free on every plan (#757)
+- `voltius-cli` ships with the desktop app, and Homebrew and the Windows installers put it on PATH. Besides the policy file, it sets settings (`config get|set|import`), plugins (`plugins list|install|enable|disable|remove`) and the sync server, so a machine can be set up before anyone signs in. A policy can install plugins, force them on or off, or forbid installing more (#757)
+- On Android and iOS, Voltius reads the managed configuration your company's MDM pushes (Android Enterprise managed configurations, Apple Managed App Configuration) as the phone's machine policy, with the keys `enrollment_token`, `server_url`, `server_allow_other` and `policy`. Problems with the configuration are reported back to the MDM console. Free on every plan (#757)
+- Team policy (Business): a team admin imports a policy.json-format document in Members › Security › Device policy, and every member's Voltius applies it while that team account is active. It can only tighten a machine policy, and locked settings show "Managed by" with the team name. The existing lock policy becomes two keys of this document (#757)
+- Enrolment tokens (Business): a team admin creates one company-wide token in a team vault's share sheet › Links › Device enrolment, with allowed email domains, admin approval or both, and approves or denies people waiting in Members › Join requests. IT can run `voltius-cli enroll <token>` on each machine, and people can sign in to their company from the first launch screen, an enrol link or a token pasted into the command palette. Join requests waiting for approval show their status in notifications (#757)
+- `voltius-cli login` signs in to a Voltius account from a terminal, with a two-step or recovery code when the account uses one, so IT can set up a machine without opening the app. `voltius-cli whoami` shows who is signed in (`--json` for scripts) and `voltius-cli logout` signs out and removes this account's data from the device. Accounts that sign in with a passkey finish in the app (#757)
+- On Windows, Voltius only trusts a machine policy file written by `voltius-cli` as Administrator or SYSTEM. A file copied into `%ProgramData%\Voltius` by hand, or a policy folder a standard user could write to, is ignored until you re-import it with `voltius-cli policy import --replace` (#757)
+- A machine policy can now lock every setting it accepts: language, proxy, terminal shell, cursor style, keyword highlight rules, SFTP refresh interval, keepalive, detached session lifetime and theme location. It can also limit a setting to a range instead, such as a session lifetime of at most 24 hours or a choice of English and French. Settings shows "Managed by your organization" or the allowed range, and greys out choices outside it. Admin keyword rules are added above the user's own. `voltius-cli policy set` takes `--min`, `--max` and `--allow` (#757)
+- Remember master password (Settings › Account › Session security), on by default. Turn it off and Voltius never keeps your master password in the system keychain and asks for it at launch (#771)
+- Favorite commands: star a command in the History panel to keep it in a Favorites group above Recent. Favorites have no size limit, survive Clear all, and sync to your devices with your snippets. Click the host name under a command to show only that host's history (#823)
+- First launch now leads to a first connection: with no hosts, the home page shows an address field (`user@host` connects right away, an invite code joins), New Host, and an import of your `~/.ssh/config` hosts when it has any. Account creation shows the password, warns that a master password can't be recovered, and asks for at least 8 characters (#759)
+- Once you have hosts, the top of the home page is one connect field: `user@host[:port]` connects, an invite link or code joins, and anything else opens Ctrl+K search with your text (#763)
+- On phones, the terminal's ⋮ menu now also opens History, Notes and Proxmox (#824)
+- Drag the left edge of the terminal's right side panel to resize it, from 300 to 560 px. Double-click the edge to reset it (#821)
+
+### Changed
+
+- A machine policy can no longer lock `appSettings.plugins.overrides`. Such an entry is now reported as an error and ignored; use `plugins.enabled` and `plugins.disabled` instead. As a default it still works (#757)
+- Command history keeps a line only once the terminal has echoed it back, so what you type at password prompts (`sudo`, `su`, `passwd`, key passphrases) is never saved. Tab-completed, arrow-edited and Ctrl+R lines are no longer recorded either. A new Command history switch in Settings › Terminal turns recording off and deletes what was saved (#769)
+- The Plan card lists only what each plan adds. Free now lists the command line, machine policy and mobile managed configuration (#757)
+- The command palette shows clearly which row Enter will run, and host rows show `user@host`. Ordinary words are no longer taken for invite codes and ranked first; a failed join shows an error (#760)
+- The home page works from the keyboard, host cards share one layout, and the live Team Sessions card shows who is sharing and since when (#762, #774)
+- Secondary text now reaches WCAG AA contrast in every built-in theme; in Nord and Tokyo Night it was close to invisible. In Voltius Light, fields and switched-off toggles stand out from cards, and every placeholder uses the theme's dim text colour (#761, #809)
+- Context menus and dropdowns fade in and out (#829)
+- Tauri 2.12.5: a slow file load no longer freezes every window (#755)
+
+### Fixed
+
+- Settings › Appearance and Settings › Terminal now use the same card background as the other Settings pages. Their cards had a different colour, most visible in light themes
+- Dragging to select text over split tmux panes stays inside the pane you started in, and links wrapped across lines open whole (#835)
+- On iOS and Android, signing out or deleting the account now returns to the welcome screen; the app used to keep showing the old account until restarted (#831)
+- Android: the app now loads on devices with 16 KB memory pages (#833)
+- A sync that fails with a server error now retries on its own (5 s, backing off to 5 min) instead of waiting for the next edit. A server answering with errors is no longer reported as synced (#780)
+- Teammates no longer lose sight of your open team-vault terminal after your connection to the server drops and comes back (#791)
+- AI agent file tools reopen an SFTP connection that died instead of failing until restart, and report it as lost (#766)
+- A server that offers only SHA-1 algorithms now says to turn on Legacy Algorithms for that host, with a button that does it and reconnects, instead of a raw "No common Kex algorithm" error (#764)
+- Quick connect understands IPv6 addresses and rejects invalid ports
+- New hosts, folders and snippets are created in the folder you are browsing, and in that folder's vault. Every page shows the same empty-folder message (#776, #816)
+- Members: inviting with several roles gives every role, not just the first; undoing a bulk role change only touches the members it changed; a partly failed bulk removal says so and keeps undo; a failed invitation email shows a warning
+- A team removed from your account while a removal event was missed is now cleaned up on the next team list refresh, so its secrets don't stay on the device (#785, #790)
+- Windows: uninstalling the NSIS build forgets its install folder, so a later MSI install no longer goes into the old per-user folder
+
+### Security
+
+- russh 0.65.0, pageant 0.2.5 and zip 9.2 for security advisories. Windows updates are now extracted with zip 9.2, and Tauri 2.12.5 binds channel payloads to the window that created them (GHSA-w28w-mhc8-qvjv) (#754, #755)
+
+## [0.66.0] - 2026-10-31
+
+### Changed
+
+- Cloud sync is much faster. Devices whose data hasn't changed since the last sync are skipped, and the rest download in parallel and merge in one step, so the first sync after launch no longer takes up to a minute (#749)
+- Voltius Cloud now sits above Local network in the sync menu and the Android sync sheet. Plugin sync providers (Gist, Cloudflare, S3) stay below Local network (#750)
+
+### Fixed
+
+- A sync requested while another was running is no longer dropped. It now runs right after the current one, so a remote change or local edit no longer waits for the next sync (#749)
+
+## [0.65.0] - 2026-10-31
+
+### Added
+
+- Local network sync: your devices now sync directly with each other on the same network, with no server in the path and no internet needed. It is free on every plan and on by default. Devices signed into the same account find each other automatically; installs without an account pair once by comparing a 6-digit code. Beyond the Wi-Fi, devices also reach each other over Tailscale, private IPv6 and addresses they remember. The sync menu and the Android sync sheet show each nearby device, with pause and Forget (#729, #730, #731, #737, #741, #742)
+- My devices: your own Voltius computers appear in the SFTP host picker, so you can browse and move files between them like any other host, on the same network or over Tailscale. Files never go through Voltius servers. A computer shares only the folders you pick in Settings › Devices › File access (off by default, optionally read-only), and asks before a device's first access. Android can browse your computers but can't be browsed yet. Needs a Voltius account (#735, #739)
+- Team and Business seat members now get their team's plan everywhere in the app, including cloud sync. Every plan display (title bar, Settings › Account, sharing and limit popups) reads the same, for example "Teams · through your seat in Acme" (#740)
+- Persistent sessions now close on their own once no device has been attached for a set time, but only when nothing is running in them. Set it in Settings › Hosts › "Close idle detached sessions" (on by default, 24 h). Works on Linux hosts with tmux 3.2 or newer; other hosts keep their sessions as before (#736)
+- Ctrl+K search suggests catalogue plugins you haven't installed yet; picking one opens it in Settings › Plugins › Browse. The `m>` Marketplace category now lists every installable plugin (#744)
+- On Android, you can upload files to any SFTP host through the system file picker, or drag them in from another app in split screen (#735)
+
+### Changed
+
+- Sync menu sections have a new header: the section icon is tinted by status (grey idle or paused, accent syncing, green synced, amber blocked), with the status line under the name. The menu is wider, so device names and status are no longer cut off (#745)
+- Sync wording now says which sync stops: when a plan ends, cloud sync pauses and devices on the same network keep syncing. The cloud provider is now called "Voltius Cloud", and per-item toggles read "Sync to my devices" / "Keep on this device only" (#746)
+- Text on accent-coloured buttons now uses a contrast-checked colour, so it stays readable on every theme (#746)
+
+### Fixed
+
+- After a Voltius server outage, sync now recovers on its own within 30 s instead of waiting up to 5 minutes or for a manual Sync (#727, #728)
+- Cancelling an SFTP transfer right after starting it now always stops it; a cancel sent before the transfer had started used to be lost. On Android, cancelling an upload also stops copying the file (#732, #733, #738)
+- On Android, picker sheets in settings and forms show the name of their setting instead of "Select" (#736)
+
+## [0.64.1] - 2026-10-28
+
+### Added
+
+- On Android, the Snippets screen has a Community tab, as on desktop: browse and search the community catalogue, open a pack to choose which snippets to install, and install them into the current vault (#725)
+
+### Fixed
+
+- In the community snippet list, the author and snippet count are no longer cut off when the description is long (#725)
+
+## [0.64.0] - 2026-10-28
+
+### Added
+
+- Snippet scripts are now syntax-highlighted everywhere they appear: snippet cards and lists, community packs, Ctrl+K search, the terminal snippets panel and the snippet chooser. The snippet editor is now a code editor and still autocompletes `{{variables}}`. Voltius detects the language from the script: shell by default, PowerShell when the script clearly uses PowerShell, and a shebang always decides (#720)
+
+### Fixed
+
+- In bash, when a command's output doesn't end with a newline (for example a `curl` that returns JSON), the prompt now starts on a new line. Before, the prompt was drawn after the output and recalling history with Up/Down garbled the line (#716, #719)
+- The Windows installer and `voltius.exe` now show "Voltius" as the publisher and include a copyright notice (#718)
+
+## [0.63.1] - 2026-10-24
+
+### Changed
+
+- On Android, every search field (Snippets, Keychain, Known Hosts, Logs, Port Forwarding, the host and snippet pickers, Processes) now uses the same rounded search bar as Hosts (#710)
+- The Android app is now built with R8, which shrinks and optimizes its code (#712)
+
+### Fixed
+
+- On Android, unlocking no longer fails with "Keychain read error" after reinstalling the app, for example when moving from the GitHub APK to the Google Play build. Android restored the old keychain file, which the new install can't decrypt; Voltius now sets it aside and opens a fresh one, and the keychain is no longer included in Android backups or device transfers (#713)
+- The session type badge no longer overflows the pane header and the drag preview
+
+## [0.63.0] - 2026-10-23
+
+### Added
+
+- You can delete your Voltius account from the app: Settings → Account on desktop, and the Account page on Android. You confirm by typing your email. Your cloud account, encrypted vault and sync data are deleted, any subscription is cancelled, and this device is signed out. If you are the billing owner of a team that has another Owner, they take the team over; if you are its only Owner and it still has members, you are asked to make someone else an Owner first. You can also request deletion at voltius.app/delete-account (#705)
+- Portuguese, in three variants: Portuguese, Brazilian Portuguese and European Portuguese. Thanks to @heliopereira (#706, #707)
+
+### Changed
+
+- The macOS app is now signed with an Apple Developer ID and notarized by Apple, so it opens without a security warning. After updating, macOS asks once for access to the keychain (#704)
+
+## [0.62.0] - 2026-10-22
+
+### Added
+
+- Sessions running on your other devices now appear on Android as the same cards as on desktop, with the device, how long ago it was active, and the working directory. Long-press a card to join the session or kill it. Killing waits 5 seconds and can be undone (#702)
+- On Android, opening or leaving a folder in Hosts, Snippets, Keychain, Port Forwarding and SFTP now slides the new level in from the side, instead of switching instantly (#703)
+
+## [0.61.1] - 2026-10-22
+
+### Added
+
+- The Android app now feels like a native app. It draws edge to edge around the status bar, notch and navigation bar, and the layout makes room for the keyboard. The system bar icons follow the Voltius theme, and launch shows a navy splash with the bolt instead of a white flash. Text follows the system font size, and the page no longer zooms, overscrolls or flashes on tap like a website (#666–#669, #673)
+- Back on Android no longer quits the app. One Back gesture works across pages, settings and sheets, with predictive back previews. Back on the home screen sends Voltius to the background, and SSH sessions stay connected there (#670–#672)
+- Material motion and touch feedback on Android: page push and pop transitions, a Material 3 navigation bar that fades between tabs, ripples and pressed states, haptic feedback, and bottom sheets you can drag from anywhere and fling to dismiss (#675, #676, #679–#682, #697)
+- Redesigned Android screens. Hosts has a large title, a pill-shaped search field, long-press actions and an extended + button. All tap targets are at least 48 dp. Settings use Material lists, and notifications open in a bottom sheet (#684, #687, #689, #690)
+- The Android terminal has 48 dp extra keys with swipe-up alternates. Swipe to switch sessions, and pick a host or local shell for a new session (#685)
+- Android SFTP uses a single pane with a selection mode and pull to refresh. Errors appear as snackbars with Retry (#683, #686)
+- On Android, Host, Key, Identity and port-forwarding forms save as you type, with no Save button. Back asks before discarding a form that can't be saved yet (#688)
+- A Vault settings page on Android lets you rename a vault and manage sharing, members, roles and security from the phone (#701)
+- Material You colors from your wallpaper, a themed app icon and launcher shortcuts to recent hosts on Android (#691–#693)
+- Share SFTP files, public keys and snippets through the Android share sheet. The tunnel notification lists active forwards and has a Stop tunnels action (#694, #695)
+
+### Fixed
+
+- Selection, link hover and mouse reports landed on the wrong cell in the terminal when UI scale wasn't 100% (#677)
+- Turning on the MCP server on desktop synced the setting to Android, which then opened an MCP socket that no client could use. The MCP server is now off on Android, and the Integrations settings are hidden there (#699)
+- Refined Czech translations (#696)
+- The Docker, Gist Sync, Monitoring, Process Manager and Proxmox plugins are rebuilt with the updated bundler and move to new patch versions. They work the same. 0.61.0 was never published because of this
+
+## [0.60.0] - 2026-10-19
+
+### Added
+
+- Teams can have several owners. Owners can grant or remove the Owner role in a member's roles, after a confirmation, and a co-owner can be removed or leave on their own. The team's creator is the primary owner, the account billing sits on, and must hand that over with **Make primary owner** on another Owner before leaving. On the cloud only the primary owner can hand it over, and the new primary owner's own subscription pays from then on; on a self-hosted server any Owner can. Servers without multi-owner support keep a single owner (#652)
+- Native text selection in the Android terminal. Long-press text for the system's handles, magnifier and Copy menu, including across scrollback and with the keyboard up. Soft-wrapped lines copy without a line break, and a long-press on blank space still offers Paste (#656)
+- Closing the last terminal returns you to the page you were on, instead of always Hosts. Hosts, Snippets, Keychain and Port Forwarding also reopen the folder you left open (#654)
+
+### Fixed
+
+- Switching between saved accounts no longer changes the interface language. The language now stays on the device by default, like the preferred shell and the proxy. This means it no longer reaches your other devices either, so a new install now starts in your system language when Voltius supports it, and in English otherwise. To sync it again, turn on sync for **Language** in **Settings → Appearance** (#653)
+- A host kept its old OS logo after its OS changed. The OS is now detected again on every SSH connect, an icon you picked yourself stays, and Windows and MikroTik RouterOS hosts are recognised with their own icons (#655)
+- Shell integration and session persistence sent POSIX shell commands to MikroTik RouterOS hosts, which typed them into the RouterOS CLI. They are now skipped there, as on Windows
+
+## [0.59.0] - 2026-10-18
+
+### Added
+
+- Hold Volume Down as Ctrl in the Android terminal. Turn on **Use Volume Down as Ctrl** in **Settings → Terminal** (off by default): while the terminal has the keyboard, Volume Down + C sends Ctrl+C and the volume doesn't change. It combines with the on-screen Alt key. Outside the terminal the button changes the volume as usual (#648)
+
+### Fixed
+
+- On self-hosted servers, the invite panel read "1 used · 2 available · 3 total" for an owner with no seat cap and offered Buy seats. Without billing it now reads "1 used · unlimited", and a cap the operator set is still shown and enforced. Buy seats, Manage billing, View all plans and the subscription status are hidden, and reaching the seat limit asks you to contact the server administrator (#649)
+
+## [0.58.0] - 2026-10-16
+
+### Added
+
+- Import hosts and keys from `~/.ssh/config` through the new OpenSSH source in **Import/Export**. It follows `Include` lines, wildcards included, as long as the paths are inside `~/.ssh`, and brings in the keys named by `IdentityFile`. A preview lets you pick the vault and lists what can't be imported: patterns, `Match` blocks and `ProxyCommand` hosts. Keys start unchecked when the destination is a team vault. On first run on desktop, the notification centre offers a one-time import
+- Keep hosts in step with `~/.ssh/config`. This is opt-in and desktop only: turn it on in **Settings → Hosts → ~/.ssh/config** after a preview of every alias. The sync owns only the fields the config sets (address, port, user, key and jump hosts), and a host's name, notes and everything else stay yours. Synced hosts carry a badge, and their editor shows a "Managed by ~/.ssh/config" banner with Detach. A host is deleted only when no device still has its alias
+- Host pickers open with the five most recently used hosts at the top. This covers the SFTP host picker, the key's "Add to host", and snippet targets and remote paths (#643)
+
+### Changed
+
+- "Specific connections" in a port forwarding rule now uses the shared host picker, with a filter, folders and recent hosts. Selected hosts show as chips (#644)
+
+### Removed
+
+- The SSH Config Sync plugin, which renamed hand-edited hosts back on every sync. Its hosts lose the `ssh-config` tag and are otherwise unchanged. If you had its sync on, a notice links to the new built-in sync
+
+### Fixed
+
+- A host's status dot turned red after a single failed probe, for example right after waking from sleep. A host now shows as down only after probes have failed for 15 seconds, and turns green again on the first success (#646)
+- Import/Export menu rows were squashed to 23 px, and the submenu closed as you moved onto it. On mobile, Import/Export now opens from **More**, where it had no entry point before
+
+## [0.57.0] - 2026-10-14
+
+### Added
+
+- Change the master password on a signed-in device without typing the current one. "Forgot it? Confirm with …" in the change-password dialog lets the system confirm it's you (Windows Hello, Touch ID, polkit, or the Android unlock prompt). The server still checks your second factor (#629)
+- The sync server emails you when your master password changes (VoltiusApp/server#112)
+- Paste an image into an SSH session. When the clipboard holds an image and no text, pasting (Ctrl+V, Ctrl+Shift+V, right-click, or Cmd+V on macOS) uploads it to the host under `~/.cache/voltius/pastes` and types its path, so tools on the host such as Claude Code can attach a screenshot. Pasted files are owner-only and removed after 7 days. A toast shows progress with Cancel, Retry on failure, and "Delete from host" once done. Turn it off in **Settings → Terminal** (#630, by @ghecko)
+- Images opened from the SFTP panel or page now show in the editor tab instead of "Binary file — can't edit": PNG, JPEG, GIF, WebP, BMP, ICO, AVIF and SVG, with Fit/100%, zoom, pan, copy and download. Files over 25 MB ask before loading (#634)
+- Port forwarding on Android. The Port Forwarding screen lists the session's active forwards, auto-detected ones included, and the terminal's panel row opens it. Tunnels keep running while Voltius is in the background, with a "N ports forwarded" notification that opens the screen (#637)
+
+### Changed
+
+- A single click opens a vault folder card; Ctrl/Cmd/Shift-click selects it. SFTP folders still open with a double click
+
+### Fixed
+
+- Accounts linked from a local vault, or migrated, had a different team identity on each device, and a master password change could cut a device off from its team vaults. The identity is now stored with the account and survives password changes and linked devices. A device left on the old password after a change made elsewhere opens again at sign-in, and biometric unlock picks up the new password
+- In a Proxmox LXC tab opened with `pct exec`, the Docker panel, process manager, metrics and system info showed, and acted on, the Proxmox host instead of the container. They now run inside the LXC (#642)
+- Stopping an auto-forwarded port lasted only until the host's last terminal closed or the app restarted. Stopped ports are now remembered per connection on this device (#632)
+- Under tmux with mouse tracking (for example, a pane running Claude Code), the next mouse move cleared a fresh selection, so copy-on-select, Ctrl+Shift+C and search prefill got nothing (#631)
+- Ctrl+S in an SFTP editor tab with no loaded text (a binary file, or one still loading) saved an empty file over the original (#634)
+- Opening a `voltius://` link crashed the Android app (#637)
+- The app's own notifications carried a "[Voltius]" tag. Only plugin notifications show a tag now (#635)
+
+## [0.56.0] - 2026-10-12
+
+### Added
+
+- Keyword highlighting in the terminal. Words such as `error`, `warning` and `ok` are coloured in command output, in the theme's ANSI colours. It applies to output marked by shell integration. Rules are editable in **Settings → Terminal** and sync across devices (#317)
+- A server that cannot be reached shows as its own state: a grey cloud labelled "Can't reach server", with the reason in the sync menu, the tooltip and **Settings → Sync**, instead of a red sync error. Background syncs wait and run when the server is back (#619)
+- Pause and resume sync from the sync menu, next to "Sync now" (#619)
+- On Android, the header sync icon opens a sheet with each provider's status, the reason for a failure, "Sync now" and pause/resume. The icon stays visible while sync is paused, and the cloud sync row on the account page opens the same sheet (#619)
+- Removing a saved account asks for confirmation. Signing out asks when this device holds the only copy of the account's data or may be ahead of the server (#622)
+
+### Fixed
+
+- Switching accounts deleted the outgoing account's local data and relied on the sync server to bring it back, so an account with no server copy lost its hosts. Each saved account's data now stays on the device across a switch, and switching works without the server (#622)
+
+## [0.55.0] - 2026-10-11
+
+### Added
+
+- Passkeys as a second factor for cloud accounts, free on every plan. An account can hold an authenticator app, passkeys, or both, managed in **Settings → Account**. Voltius opens your browser to create or use a passkey (fingerprint, face, device PIN or a security key) and picks up from there. Sign-in and the master password change offer "Use a passkey" beside the code field. The master password is still required: a passkey replaces the six-digit code, not the password. Self-hosted servers offer passkeys once updated (`ghcr.io/voltiusapp/voltius-server:sha-e87034d` or newer) and given a `WEBAUTHN_RP_ID` (VoltiusApp/server#106)
+- "Pause sync on this device" in **Settings → Sync**. A paused device stops background sync with the server until you resume; "Sync now" still works. Team vaults stop updating and do not load at launch while paused (#619)
+
+### Changed
+
+- Two-factor settings list each factor separately. Adding a second factor or removing one asks for the master password and proof of a factor you already hold, and removing the last one says it turns two-factor off (VoltiusApp/server#106)
+
+### Fixed
+
+- With the server out of reach, Voltius retried every 5 seconds forever and the sync status flipped between syncing and error. It now waits longer between attempts, up to 5 minutes, and tries again at once when the network returns or the app comes back to the foreground (#619)
+
+## [0.54.0] - 2026-10-11
+
+### Added
+
+- Two-factor sign-in for cloud accounts, optional and free on every plan. Turn it on in **Settings → Account**: scan the QR code with an authenticator app, confirm a code, and save the ten recovery codes. Signing in on a new device then asks for a code after the master password; unlocking does not. Self-hosted servers offer it once updated and given a `TOTP_ENC_KEY` (#615)
+- Themes can set the colour of selected text. The theme creator has a "Selected Text" row under Terminal Base; themes that leave it unset look as before (#317)
+
+### Changed
+
+- When the server ends this device's session (password changed on another device, two-factor turned on), Voltius says so and offers to sign in again, instead of silently no longer syncing (#615)
+- Unlocking a cloud vault no longer signs in to the server again while its session is still valid (#615)
+
+## [0.53.1] - 2026-10-11
+
+### Changed
+
+- Port Forwarding: the "Active session forwards" header folds the host cards away, so a host with many detected ports no longer pushes saved rules off the page. The header keeps the host count, tunnel total and an error count when a forward failed (#610)
+
+### Fixed
+
+- Team vaults: a secret the server refused is no longer shown as saved. The editor goes back to what the server holds (#608)
+- Team vaults: a secret that could not reach the server (offline, timeout, server error) stays usable and is sent again until it lands, instead of vanishing at the next vault load (#611)
+- Team vaults: saving a port-knock sequence against a server too old to store it now says the server needs an update, and the knock panel explains why instead of offering ports (#608)
+- A secret that fails to save during a connect prompt, import, paste, duplicate, copy to vault, undo or plugin key creation shows an error instead of failing silently (#611)
+- Creating a host, key or identity whose secret fails to save no longer creates the object again on every autosave (#613)
+- A card's "more options" menu stays whole near the bottom of the window, and the terminal status bar menu in the top pane of a split (#610)
+
+## [0.53.0] - 2026-10-10
+
+### Added
+
+- Local forwards and SOCKS proxies can be shared with other devices. A rule's new **Who can connect** choice listens on this computer only, on the whole network, or on one address such as `192.168.1.2` (#607)
+- The rule editor shows one line saying where a rule's traffic goes, with the matching `ssh` command to copy
+
+### Changed
+
+- The port forwarding rule editor is laid out as the route traffic takes: your computer, the SSH server, the service. "Apply to" now sits in the SSH server box
+- PuTTY imports keep the address each tunnel listens on
+
+### Fixed
+
+- A port forwarding rule that cannot start says why on its row, in the rules page, the terminal's Ports panel and on mobile, instead of failing silently
+
+## [0.52.1] - 2026-10-09
+
+### Fixed
+
+- Windows: the app no longer freezes when WSL stops responding. WSL detection now gives up after a few seconds, and the rest of the app (vaults, SSH, SFTP) keeps working without the WSL shell (#605)
+
+## [0.52.0] - 2026-10-09
+
+### Added
+
+- Press F2 to rename the selected folder, host, key, identity, snippet, port-forwarding rule or SFTP file in place. The shortcut can be remapped (#600)
+
+### Changed
+
+- Edit uses the pencil icon everywhere, and Rename has its own text-cursor icon in the SFTP, folder, session, split-tab and vault menus (#599)
+
+### Fixed
+
+- New folders get a default name in the app's language (#602)
+- Corrected Czech wording and terminology (#601)
+- Long plugin names in the settings sidebar wrap onto a second line instead of being cut off (#604)
+
+## [0.51.1] - 2026-10-09
+
+### Fixed
+
+- App lock now applies at launch: force-closing the app and reopening it after the auto-lock time (or any launch with Immediately) locks instead of signing straight back in. A local account with no saved secrets can no longer be unlocked with any password (#593)
+- Typing `exit` in a PowerShell, cmd or WSL tab on Windows now closes the tab (#594)
+- Cancelling an SFTP upload also removes leftover partial files from earlier versions of the same file (#596)
+- When a transfer fails after a lost connection, the queue says Retry will resume where it stopped only for destinations that support it (local, SFTP, Docker, and WebDAV/FTP once resume is confirmed) (#597)
+
+## [0.51.0] - 2026-10-09
+
+### Added
+
+- Org-enforced lock policy: Business team admins can set a maximum auto-lock time and require Lock vault for every member, owner and admins included. Set it from Members → Security or "Security policy…" in the vault menu (#581)
+- On Android, unlocking with system authentication binds the vault key to the device hardware, so the keychain holds only a blob the OS releases after a live fingerprint or screen-lock check (#591)
+- Port forwarding: choose Local tunnel, Remote tunnel or Dynamic SOCKS proxy straight from the New Rule menu, the right-click menu or the mobile Add sheet (#589)
+
+### Changed
+
+- Terminal output streams as raw bytes over one IPC channel per session instead of JSON events per listener (#580)
+- Hidden terminals stop working in the background: only visible terminals refit on window resize, hidden status bars stop their uptime timers and System Metrics streams, and a tab switch re-renders only the two tabs involved (#582, #583, #590)
+- Smaller, faster startup: devicon icons are subset at build time, and non-English locales, CodeMirror and the mobile UI load on demand (#584)
+- The app ships one crypto backend: aws-lc-rs is gone, and ring handles SSH ciphers and HTTPS (#585)
+
+### Fixed
+
+- SSH tabs on hosts without tmux or screen reconnect after a dropped connection instead of closing (#586)
+- Old terminal tabs no longer go blank: live WebGL contexts are capped, at up to 14 on desktop and 8 on Android (#576, #578)
+- SFTP and FTP list symlinks to folders as folders. Deleting a link to a folder over FTP no longer deletes the files inside the folder it points to (#577, #579)
+- App lock fails closed when its marker can't be written or read. With auto-lock set to Immediately, Android no longer shows the unlocked terminal in recents. On Android, logging out now wipes the old account's connections and lock marker (#570)
+- Signing out drops the previous account's team lock policy, and the Security panel is hidden for teams you can't manage (#587)
+
+### Security
+
+- rustls bumped to 0.23.45 for GHSA-2mjx-qc3c-rqvc (unencrypted TLS 1.3 handshake messages were accepted) (#575)
+
+## [0.50.1] - 2026-10-07
+
+### Added
+
+- Port knocking: a host can send a TCP/UDP knock sequence, through its proxy if it has one, before every SSH connect. Set it up in the host's Port Knocking panel; the sequence is stored as a secret and syncs with the connection (#550)
+- App lock: lock Voltius by hand, after an idle timeout, or immediately on leaving the app, and unlock with system authentication (Touch ID or login password on macOS, Windows Hello, polkit on Linux, biometrics on Android). The lock survives a restart, and MCP tool calls are refused while locked (#510)
+- Invite-link shared terminals are end-to-end encrypted: the host wraps the session key for each admitted guest instead of uploading it to the server (#521)
+- docker exec, FTP and WebDAV transfers resume after a dropped connection, like SFTP ones, and FTP and WebDAV panes can copy to and from SFTP panes (#552)
+- Czech localization, machine-drafted and awaiting native-speaker review (#346)
+- MCP agents can rename the panes and split tabs they opened (`pane_rename`, `tab_rename`) (#542)
+
+### Changed
+
+- Deciding whether to send a folder as one tar stream takes one listing per directory instead of one request per file (#494)
+
+### Fixed
+
+- SSH Config Sync asks each account before importing ~/.ssh/config, instead of importing into whichever account is signed in. Accounts that already sync hosts keep syncing (#557)
+- One public key the vault refuses (such as a `->` in its comment) no longer stops SSH Config Sync: that host is skipped and an error toast says why (#532)
+- `exit` closes the tab instead of reconnecting on RouterOS, and on persistent sessions to Windows or dropbear hosts (#538)
+- Overwriting a file over FTP or WebDAV keeps its permissions, and on Nextcloud/ownCloud its id, shares and versions (#562)
+- A folder transfer stuck on a half-open link resumes file by file instead of hanging (#495)
+- SFTP in docker exec, nsenter and Proxmox `pct exec` sessions runs tar, compress/extract and chmod/chown inside the container instead of on the host, and verifies resumed files (#492)
+- A folder upload containing a symlink to a parent folder no longer copies the tree over and over (#543)
+- Folder uploads report entries whose metadata can't be read, such as dangling symlinks, instead of silently leaving them out (#541)
+- A file from a server that reports no modification time is no longer dated 1970 (#556)
+- A folder copy whose link dropped while creating folders resumes instead of failing (#548)
+- An upload no longer keeps failing after a dropped link left a hidden `.voltius-old` copy next to the file (#547)
+- Resumed transfers check the sha256 of paths containing a backslash or newline (#546)
+- Reopening an SFTP channel after a drop can no longer hang, or move a terminal onto another connection (#497, #496)
+- Folder cards count items in nested subfolders (#551)
+- The local shell list shows each shell once and includes PowerShell (`pwsh`) and Homebrew shells (#545)
+- A submenu that opens to the left no longer covers its parent menu (#540)
+- The vault header shows your actual command palette shortcut instead of ⌘K (#536)
+- A session that just connected no longer shows a negative uptime (#534)
+- The SFTP Size column is wide enough for KB sizes by default (#530)
+- The Permissions dialog title shows the whole filename (#527)
+- Every settings section uses the full panel width (#525)
+- The Import/Export header buttons stay on one line (#523)
+
+## [0.49.1] - 2026-10-06
+
+### Fixed
+
+- The Proxmox panel shows each LXC's memory instead of 0M (#519)
+- The Proxmox panel's Restart button restarts an LXC (`pct reboot`) instead of failing with an unknown-command error (#508)
+- The Processes panel's kill buttons and memory column fit inside the side panel instead of needing a sideways scroll (#509)
+- A shared-terminal guest's keystrokes, and fast typing on a busy machine, reach the shell in the order they were typed (#518)
+- A shared-terminal guest holding control reads "You have control" instead of "Watching" (#516)
+- No control toasts on top of the shared-terminal bar's own Grant / Deny or "You have control"; they still show when that terminal is not on screen (#515)
+- Snippet choice variables and plugin dropdown settings use the app's themed dropdown instead of a white system list on Linux (#517)
+- The SFTP queue's "Resumed at" badge is an icon with a hover card, so it no longer overlaps the transfer status (#504)
+- On mobile, the terminal's left margin uses the theme's background color (#502)
+
+## [0.49.0] - 2026-10-05
+
+### Added
+
+- SFTP uploads, downloads and remote-to-remote copies, for both files and folders, survive a dropped connection. They wait up to 5 minutes for the session to come back and continue from where they stopped. A cut-off copy never replaces the real file, and a resumed file is checked end to end before it lands. The queue shows "Waiting for connection…" and where a transfer resumed (#487)
+
+### Fixed
+
+- Retrying an SFTP transfer after the session reconnects resumes it instead of failing with "session not found" (#487)
+- A folder transfer no longer falls back to file by file for the rest of the connection just because the first tar check got no answer (refused channel, timeout or reconnect). The host is asked again (#478)
+- The custom color popover in the folder and role appearance pickers no longer closes the picker when you click inside it (#484)
+- The SFTP tab in the right panel no longer scrolls sideways or shows a white square in its corner (#486)
+
+## [0.48.0] - 2026-10-04
+
+### Added
+
+- Folders can have an icon and a color. They show on folder cards, in the terminal Snippets panel and in the SFTP host pickers, sync between devices, and carry through export and import (#471)
+- Change file permissions and owner in local panes on Linux and macOS, and in WSL folders on Windows. The Permissions column shows there too (#467)
+- ZOC Terminal import can auto-extract hosts from the installed app, including from a data folder moved to a custom location (#458, #460)
+- Every grid and list card has a ⋯ button that opens its menu, so edit and delete no longer depend on hover (#473)
+- Member cards show an edit button, and a member's name saves as you type (#466)
+
+### Changed
+
+- Folder transfers stream over SSH instead of building a temporary archive, so copying a large folder no longer fails on a host with a small `/tmp`. Hosts that cannot stream tar copy file by file, and the transfer says why (#468)
+- One click model on every vault tab: a click selects (and follows in the open side panel), double-click or Enter opens or connects, E edits. Pinned hosts and snippets appear once, under Pinned. Snippet and member list rows fit on one line (#475)
+- Pinned snippets show the pin icon, like hosts and folders (#473)
+- Card grids share one size scale, section headers and empty states across tabs, and snippet folders follow the grid/list toggle (#474, #466)
+- Self-hosted: update the server together with the app (`ghcr.io/voltiusapp/voltius-server:sha-3501f2a` or newer)
+
+### Fixed
+
+- macOS: after an update, the keychain asks once instead of once per item. This release asks one last time per item while it merges them into one; choose "Always Allow" (#469)
+- When your email address cannot receive mail, the verification banner says so and offers to change it instead of resending (#463)
+- Rule names show in full in the port forwarding grid (#472)
+- An empty vault shows its empty state and add button on Hosts and Snippets (#472)
+- The Logs table columns line up with their headers (#472)
+- Dragging files between SFTP panes no longer selects text (#464)
+- A member name edit is no longer lost when the panel closes from a click on empty space (#466)
+
+### Security
+
+- In a shared terminal, the host now ignores input from guests who don't hold control. Before, a guest without control could type into the host's session (#465)
+
+## [0.47.0] - 2026-10-03
+
+### Added
+
+- Import hosts from PuTTY, ZOC Terminal and SecureCRT (#453, #15, #456)
+- WebDAV hosts in the file browser (Nextcloud, ownCloud, Synology, TrueNAS, Apache, nginx, rclone): browse, upload, download, rename, delete and edit files. Self-signed certificates are pinned the way SSH host keys are, and a changed certificate asks before connecting (#442)
+- Change a remote file's permissions and owner from the SFTP right-click menu, or from the long-press sheet on mobile (#439)
+- Team admins can give members a name that every teammate sees in the member list and the audit log. The audit CSV export gains a trailing `actor_member_name` column (#403)
+- On a self-hosted server with `HANDLES_FROM_EMAIL` on, Account settings say your handle is managed by your organization (#403)
+
+### Changed
+
+- Plugins: `PluginConnection.connection_type` can now be `"webdav"`, and snippet SFTP steps run against FTP and WebDAV hosts (#442)
+- Self-hosted: update the server together with the app (`ghcr.io/voltiusapp/voltius-server:sha-3897686` or newer)
+
+### Fixed
+
+- Termius import works with large databases and with newer Termius versions that keep their data in SQLite (#400, #449)
+- The keychain accepts PuTTY `.ppk` private keys (#455)
+- SSH shells open on hosts without `base64`, such as OpenWrt and other busybox systems (#418)
+- System Metrics keep running when you switch between tabs of the same host (#452)
+- A member re-invited to a team vault no longer finds it empty. A key rotation racing their join could leave them with a key that decrypted nothing (#438)
+- Your other devices now see your team-vault edits right away
+- Refreshing a team vault reports failures even when a background refresh was already queued (#412)
+- A snippet folder's panel shows the same cloud-sync state as its card (#413)
+
+## [0.46.0] - 2026-10-02
+
+### Added
+
+- Connect to a shared team host with your own identity, chosen per host ("Connect as") or as a default for the whole vault. Your pick is stored outside the host, so other members and the shared credential are unchanged. Devices on an older app keep using the host's credential until they update (#387)
+- The host picker (SFTP panes, jump hosts, snippet remote path, key export) groups hosts by vault and folder, with an "All vaults" filter; the mobile SFTP sheet gets the same tree with vault chips (#398)
+- Clear messages when a self-hosted server has registration or team invites switched off (#401)
+
+### Changed
+
+- Persistent sessions on tmux 3.2 and newer now run tmux in control mode: scrollback, drag selection with auto-scroll, Ctrl+F over history, the mouse wheel and mouse apps behave exactly like a plain SSH session. Older tmux keeps the legacy attach, with copy-mode using the theme selection colour (#379)
+- Context menus and their submenus stay inside the window
+- Plugins: backend commands that now carry error codes (SFTP and others) reject with an `Error` (`BackendError`) instead of a string (#395)
+- Self-hosted: update the server together with the app (`ghcr.io/voltiusapp/voltius-server:sha-b3a7e9d` or newer)
+
+### Fixed
+
+- Backend errors (vault, secrets, SSH connect and auth, port forwarding, SFTP) are shown in your language instead of English (#395)
+- Fast multi-megabyte output bursts no longer lose output on SSH sessions (#379)
+- Inside tmux, terminal colour queries report the real theme, so apps such as OpenCode pick the right light or dark palette on tmux 3.2+ (#280)
+- Team-vault hosts now appear in the desktop host pickers, and key export for a team key no longer shows an empty list (#398)
+- Object editors in a team vault list that vault's folders, not only personal ones (#404)
+- A new object created in a folder gets that folder's permission rules (#409)
+- Two people editing the same object's permissions no longer overwrite each other's changes (#407)
+- Moving an object now warns when the move changes per-member rules, not only role rules (#408)
+- Cancelling a move's permission warning puts the saved folder back in the editor (#411)
+- On mobile, cancelling a folder move's permission warning no longer shows an error (#410)
+
+### Security
+
+- Updated the bundled SSH library (`russh`) to 0.63.3, picking up fixes for a malicious server opening channels the client never asked for, a memory-exhaustion flood during rekeying, and a crash on a cipher negotiated without a MAC
+- Updated `pageant` to 0.2.3, fixing an out-of-bounds read when talking to a malicious Pageant agent on Windows
+
+## [0.45.0] - 2026-10-01
+
+### Added
+
+- Leave a team vault from the vault menu
+- Updates are now checked even with auto-download off, so What's New shows a new version; the setting only decides whether it is downloaded (#417)
+
+### Changed
+
+- Custom roles, per-member permissions and per-object permissions now need the team owner's Business plan. Below Business, custom roles and permission grants stop working; restrictions stay in place and can be removed. Upgrading restores everything (#419)
+- Self-hosted: update the server together with the app (`ghcr.io/voltiusapp/voltius-server:sha-b522ae8` or newer, VoltiusApp/server#66)
+
+### Fixed
+
+- The owner can delete a team vault from the vault menu
+- The vault menu no longer treats the owner as a member while roles are loading, so Delete and Make private show and Leave is not offered
+- Every Android screen now shows only the vault on screen (#416)
+- Losing edit or View secrets access while an object is open now makes its editor read-only and hides its secrets immediately
+- The Logs view shows a converted team vault's full audit trail
+- Clicking Invite in vault share search results works again
+- The sync, share, notification and account menus and the new-session popover now close and fade the same way; clicking the sync button while its menu is open closes it
+- Settings search lists terminal toggles under Terminal instead of Appearance
+- System proxy detection and bypass rules: macOS proxy exceptions and simple hostnames, bypass entries with a port, and NO_PROXY now match consistently; the global proxy password survives sign-in and account switches (#396)
+- Esc no longer restores a maximized pane, so vim and tmux receive it
+
+## [0.44.1] - 2026-09-30
+
+### Changed
+
+- A team vault's name is now the team's name on the server: renaming a team vault renames the team, and the name is no longer saved or synced locally (#415)
+- The team list, and commands, snippet variables and workspace tabs for team hosts, now stay in memory only instead of being written to disk (#415)
+
+### Fixed
+
+- Team hosts without the Connect permission no longer resolve credentials, and Connect is disabled on their host cards and menus; View and Copy secrets now require Connect, as on the server (#415)
+
+## [0.44.0] - 2026-09-29
+
+### Added
+
+- Per-object permissions for team vaults: allow, inherit or deny access on each host, key, identity, snippet and folder, with new View and Administrator permissions (#405)
+- HTTPS proxies for SSH, SFTP and reachability checks, in Settings → Hosts and the host form (#397)
+- Translated the first-party plugin panels into all five languages; the plugin i18n API gains plural forms and relative time (#370)
+
+### Changed
+
+- Team vault secrets now stay in memory only. Local copies of team passwords are removed on upgrade, since team vaults are online only (#402)
+- `HTTPS_PROXY`/`ALL_PROXY` and Windows proxy values with an `https://` scheme are now used as HTTPS proxies instead of being ignored. A plain proxy set as `https://` now fails the TLS handshake instead of connecting directly (#397)
+- FTPS on Android now also trusts the bundled webpki root certificates (#397)
+- Per-object permissions are always on for every team vault, so members on 0.43.0 or older must update before they can open a team vault (#405)
+- Self-hosted servers need the matching server release for per-object permissions: `ghcr.io/voltiusapp/voltius-server:sha-b305624` or newer (VoltiusApp/server#61)
+
+### Fixed
+
+- Closed localization gaps in the host UI: plural forms, date, number and sort order follow the app language, and search handles the Turkish İ (#385)
+- Passed IPv6 destinations to SOCKS5 forwarding correctly (#384)
+- Showed the real host-key error behind a jump host and stopped auto-reconnect on it (#384)
+- Fixed local copy for links, overwrites and copying a folder into itself (#384)
+
+## [0.43.0] - 2026-09-27
+
+### Added
+
+- Proxy support for SSH, SFTP and reachability checks (#361)
+- Relinked imported hosts to keys and identities already in the vault (#375)
+
+### Fixed
+
+- Stopped sync from losing or reverting local changes (#367)
+- Kept the vault openable after a password change, and refused tampered team rows (#368)
+- Fixed legacy terminal encodings, port-forward races and the guest terminal (#366)
+- Made SFTP tar transfers, editor reads and file handles robust (#364)
+- Stopped SFTP retry storms, stale listings and path bugs (#365)
+- Cleaned up tar temp archives after cancelled and failed SFTP transfers (#394)
+- Skipped file names the local OS can't hold instead of failing the SFTP download (#376)
+- Stopped exporting machine-local key and snippet ids on connections (#393)
+- Kept references, large exports and username-less hosts on import (#369)
+- Added another account from a modal instead of signing out (#378)
+- Let a drag selection over tmux scroll past the viewport (#379)
+- Stopped re-downloading updates and honoured auto-download off (#374)
+- Kept the app rendered after turning a vault into a team vault (#386)
+- Supported keyboard-interactive auth for PAM-only servers (#356)
+- Recognised expired passwords and localised password prompts over SSH (#359, #360)
+- Opened the host's shell when running as a Flatpak (#358)
+
+### Security
+
+- Closed agent-forwarding and SFTP file-name security holes (#363)
+
+## [0.42.0] - 2026-09-24
+
+### Added
+
+- Tar-accelerated SFTP transfers for Windows OpenSSH hosts (#345)
+
+### Changed
+
+- Slid side panels in with the terminal's edge instead of wiping them
+
+### Fixed
+
+- Let typing leave tmux copy-mode after scrolling up (#344)
+- Let the Personal vault become a team vault like any other (#349)
+- Kept empty folders visible and included them in JSON exports (#338)
+- Made linked identities and keys opt-in in exports, showed auto-included items, and confirmed saved files (#336)
+- Signed macOS builds with a stable self-signed certificate (#347)
+- Faded the sync menu in and out like the share menu
+
+## [0.41.0] - 2026-09-23
+
+### Added
+
+- DTR/RTS toggles and a break signal in the serial status bar (#332)
+- Created and edited keys and identities from the mobile keychain (#325)
+
+### Changed
+
+- Made grouping tabs by host opt-in rather than opt-out
+
+### Fixed
+
+- Released open serial ports when the app exits (#334)
+- Stopped covering ended sessions with a false "Reconnecting…" overlay (#333)
+- Staged SFTP downloads and tar-accelerated transfers in the app cache dir on Android (#328, #331)
+- Showed the renamed session name on Android cross-device cards (#326)
+
+## [0.40.0] - 2026-09-20
+
+### Added
+
+- Grouped a host's sessions into one tab, with a pinnable session panel (#318)
+- Published setup.sh and voltius.repo alongside the apt/yum repos (#322)
+
+## [0.39.2] - 2026-09-18
+
+### Fixed
+
+- Listed the drive root when browsing to "C:" on Windows in SFTP (#316)
+- Kept the DMA-BUF renderer on Wayland + NVIDIA, disabled explicit sync (#315)
+- Stopped ~0.6 s terminal echo lag on Linux WebKitGTK (#313)
+
+## [0.39.1] - 2026-09-18
+
+### Fixed
+
+- Honour the Legacy Algorithms toggle for SFTP and headless commands (#312)
+
+## [0.39.0] - 2026-09-17
+
+### Added
+
+- Exposed FormSelect via @voltius/ui.
+
+### Fixed
+
+- Showed custom icons for installed plugins.
+- Resolved http.stream for 204/205/304 responses.
+- Said the Teams upgrade is a free trial, and stopped promising unlimited guests.
+
+## [0.38.2] - 2026-09-17
+
+### Fixed
+
+- Applied theme selection color while the editor is focused.
+- Refused sessions.sendCommand/sendInput without multiplayer control.
+- Named hosts through connectionDisplayName in pickers.
+- Required app 0.38.2 for docker and gist-sync plugins.
+- Showed renamed tab names in session pickers and lists.
+- Gated snippet execute on multiplayer control and stopped broadcast double sends.
+
+## [0.38.1] - 2026-09-16
+
+### Fixed
+
+- Reconnected as soon as the network returns, including tabs restored offline.
+- Made overflowing tab strips usable with a mouse wheel.
+
+## [0.38.0] - 2026-09-16
+
+### Added
+
+- Markdown host notes in the right panel and host forms.
+
+### Fixed
+
+- Stripped bidi and zero-width characters before pasting.
+- Pasted snippets get inserted and run in serial sessions too.
+- Raised understated minimum app version for the ssh-config and process-manager plugins.
+- Made the SFTP panel's home button navigate to the remote home.
+- Kept the catalogue icon on an uninstalled built-in plugin's row.
+
+## [0.37.0] - 2026-09-16
+
+### Added
+
+- Every installed sync provider now shows alongside Voltius cloud sync — in the title bar, the sync menu, the mobile header and Settings › Sync — each with its own status and a Sync now action. Sync plugins you have not installed yet are offered there too.
+
+### Fixed
+
+- Stopped sync plugins notifying on routine background syncs; failures are left to the title-bar sync icon.
+- Retried a hash-mismatched plugin install against a refreshed catalogue instead of failing outright.
+- Showed the settings gear on marketplace-installed plugins.
+- Fixed a streamed-request abort hang and settings hidden for installed plugins.
+
+## [0.36.0] - 2026-09-15
+
+### Added
+
+- Turkish localization.
+
+### Fixed
+
+- Replaced the title-bar sync icon's spin with a calmer animation: background syncs breathe instead of spinning, manual syncs draw a symmetric arc that finishes before showing the result.
+- Kept reconnecting after a long outage and resumed when the network returned.
+- Drew every status dot with one shared StatusDot primitive.
+
 ## [0.35.1] - 2026-09-15
 
 ### Fixed

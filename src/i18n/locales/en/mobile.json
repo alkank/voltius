@@ -8,25 +8,6 @@
     "filterBar": {
       "placeholder": "Filter…"
     },
-    "header": {
-      "syncTooltip": "Sync: {{status}}",
-      "syncStatus": {
-        "idle": "Idle",
-        "syncing": "Syncing",
-        "success": "Synced",
-        "error": "Error",
-        "offline": "Offline"
-      }
-    },
-    "remoteSessions": {
-      "title": "Live on other devices",
-      "relativeTime": {
-        "justNow": "just now",
-        "minutesAgo": "{{count}}m ago",
-        "hoursAgo": "{{count}}h ago",
-        "daysAgo": "{{count}}d ago"
-      }
-    },
     "snippets": {
       "searchPlaceholder": "Search snippets",
       "noMatches": "No matches",
@@ -37,7 +18,6 @@
       "newFolderTitle": "New folder"
     },
     "terminalGestures": {
-      "selectAll": "All",
       "paste": "Paste"
     },
     "terminalTopBar": {
@@ -46,11 +26,7 @@
       "panelsAriaLabel": "Panels"
     },
     "panelItems": {
-      "sftp": "SFTP",
-      "docker": "Docker",
-      "metrics": "Metrics",
-      "processes": "Processes",
-      "proxmox": "Proxmox"
+      "sftp": "SFTP"
     },
     "morePages": {
       "keychain": "Keychain",
@@ -64,15 +40,7 @@
       "email": "Email",
       "notSignedIn": "Not signed in",
       "plan": "Plan",
-      "cloudSync": "Cloud sync",
       "off": "Off",
-      "proTrial": "Pro Trial — {{days}}d left",
-      "tier": {
-        "free": "Free",
-        "pro": "Pro",
-        "teams": "Teams",
-        "business": "Business"
-      },
       "cancelsOn": "Cancels on {{date}}. You keep access until then.",
       "periodEnd": "the period end",
       "renewsOn": "Renews on {{date}}.",
@@ -80,16 +48,16 @@
       "seats": "Seats",
       "seatsUsed": "{{used}} / {{total}} used",
       "upgradeToPro": "Upgrade to Pro",
-      "upgradeToTeams": "Upgrade to Teams",
+      "upgradeToTeams": "Try Teams free for {{days}} days",
+      "teamsTrialNote": "Card required · no charge during the trial",
       "manageBilling": "Manage billing",
       "viewAllPlans": "View all plans",
-      "signInToSync": "Sign in to sync",
+      "signInToSync": "Sign in to Voltius",
       "signOutConfirm": "Sign out? Your encrypted vault is removed from this device and re-synced when you sign back in.",
       "signOut": "Sign out"
     },
     "more": {
-      "settings": "Settings",
-      "planLabel": "{{tier}} plan"
+      "settings": "Settings"
     },
     "host": {
       "newTitle": "New host",
@@ -106,7 +74,10 @@
       "identitiesHeader": "IDENTITIES",
       "addedOn": "added {{date}}",
       "noSearchMatches": "Nothing matches your search",
-      "empty": "Keychain is empty"
+      "empty": "Keychain is empty",
+      "generateKey": "Generate SSH key",
+      "importKey": "Import SSH key",
+      "newIdentity": "New identity"
     },
     "knownHostsScreen": {
       "filterPlaceholder": "Filter hosts…",
@@ -124,15 +95,25 @@
       "filterPlaceholder": "Filter rules…",
       "summary": "{{total}} total · {{active}} active",
       "noSearchMatches": "No rules match your search",
-      "empty": "No port-forwarding rules yet",
-      "newRuleLabel": "New rule"
+      "empty": "No port-forwarding rules yet"
     },
     "snippetEdit": {
       "editTitle": "Edit snippet",
       "newTitle": "New snippet",
       "namePlaceholder": "Snippet name",
       "contentPlaceholder": "echo hello",
-      "delete": "Delete snippet"
+      "delete": "Delete snippet",
+      "nameLabel": "Name",
+      "contentLabel": "Script"
+    },
+    "editForm": {
+      "required": "Required",
+      "incompleteTitle": "Leave without saving?",
+      "incompleteBody": "A required field is empty, so your latest changes can't be saved yet.",
+      "unsavedTitle": "Discard changes?",
+      "unsavedBody": "Your changes to this snippet haven't been saved.",
+      "keepEditing": "Keep editing",
+      "discard": "Discard"
     },
     "snippetsScreen": {
       "newSnippetLabel": "New snippet"
@@ -142,6 +123,7 @@
       "pickHost": "Pick a host"
     },
     "sftp": {
+      "transferFailed": "Transfer failed",
       "chooseHost": "Choose a host",
       "hidden": "Hidden",
       "visible": "Visible",
@@ -174,12 +156,20 @@
       "batchDeleteTitle_other": "Delete {{count}} items?",
       "newFileOption": "New file",
       "folderNamePlaceholder": "Folder name",
-      "fileNamePlaceholder": "File name"
+      "fileNamePlaceholder": "File name",
+      "selectAll": "Select all",
+      "onePane": "One pane",
+      "twoPanes": "Two panes",
+      "moreActions": "More actions",
+      "itemActions": "Actions for {{name}}"
     },
     "folders": {
       "home": "Home"
     },
     "sheets": {
+      "newSession": {
+        "noHosts": "No hosts"
+      },
       "shared": {
         "moveToVault": "Move to vault",
         "copyToVault": "Copy to vault",
@@ -191,7 +181,6 @@
         "confirmDeleteBody": "Permanently delete {{name}}? This can't be undone."
       },
       "folderActions": {
-        "renameTitle": "Rename folder",
         "deleteTitle": "Delete folder?",
         "deleteBody": "Delete {{name}} and everything inside it? This can't be undone."
       },
@@ -200,8 +189,6 @@
         "openFiles": "Open files",
         "copyAddress": "Copy address",
         "copiedAddress": "Copied {{host}}",
-        "enableCloudSync": "Enable cloud sync",
-        "disableCloudSync": "Disable cloud sync",
         "enableReachabilityCheck": "Enable reachability check",
         "disableReachabilityCheck": "Disable reachability check"
       },
@@ -249,6 +236,53 @@
       "vaultSwitcher": {
         "newVault": "New vault",
         "namePlaceholder": "Vault name"
+      }
+    },
+    "shortcuts": {
+      "hostGone": "That host no longer exists. Its shortcut was removed."
+    },
+    "share": {
+      "action": "Share",
+      "publicKey": "Share public key",
+      "failed": "Couldn’t open the share sheet",
+      "downloadFailed": "Couldn’t download the file to share",
+      "largeTitle": "Share {{size}}?",
+      "largeBody": "The files are downloaded to this phone first, then handed to the app you pick.",
+      "tooLong": "Too long to share as text"
+    },
+    "vaultSettings": {
+      "title": "Vault settings",
+      "gone": "This vault no longer exists on this device.",
+      "openFor": "Settings for {{name}}",
+      "nameRequired": "A vault needs a name.",
+      "nameReadOnly": "Only the vault's managers can rename it.",
+      "kindTeam": "Team vault",
+      "kindPrivate": "Private vault",
+      "sections": {
+        "general": "General",
+        "people": "People",
+        "danger": "Danger zone"
+      },
+      "rows": {
+        "name": "Name",
+        "share": "Share & invite",
+        "members": "Members",
+        "roles": "Roles",
+        "security": "Security policy",
+        "makePrivate": "Make private",
+        "delete": "Delete vault",
+        "leave": "Leave vault"
+      },
+      "summaries": {
+        "share": "Invite people and manage join links",
+        "members_one": "{{count}} member",
+        "members_other": "{{count}} members",
+        "roles": "What each role can do",
+        "security": "Lock and session rules for members",
+        "makePrivate": "Remove everyone else and keep a private copy",
+        "delete": "Deletes the vault and everything in it",
+        "deleteTeam": "Deletes it for every member",
+        "leave": "Remove your access to this vault"
       }
     }
   }

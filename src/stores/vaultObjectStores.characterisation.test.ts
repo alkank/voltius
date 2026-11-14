@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => {
@@ -11,6 +12,7 @@ const h = vi.hoisted(() => {
   return {
     saveTeamVaultObject: vi.fn(async (_teamId: string, _kind: string, _item: unknown) => {}),
     removeTeamVaultObject: vi.fn(async (_teamId: string, _id: string) => {}),
+    writeSecretAt: vi.fn(async (_teamId: string, _key: string, _value: string) => {}),
     reportAuditMutation: vi.fn(),
     scheduleSync: vi.fn(),
     isServerMode: vi.fn(async () => true),
@@ -28,6 +30,10 @@ const h = vi.hoisted(() => {
 vi.mock("@/services/teamObjectPersistence", () => ({
   saveTeamVaultObject: h.saveTeamVaultObject,
   removeTeamVaultObject: h.removeTeamVaultObject,
+}));
+vi.mock("@/services/secretRouting", () => ({
+  writeSecretAt: h.writeSecretAt,
+  reportUploadFailure: () => () => {},
 }));
 vi.mock("@/services/auditMutations", () => ({ reportAuditMutation: h.reportAuditMutation }));
 vi.mock("@/services/sync", () => ({ scheduleSync: h.scheduleSync }));
@@ -79,6 +85,7 @@ import { usePortForwardingStore } from "./portForwardingStore";
 import { useTeamStore } from "./teamStore";
 import { useSyncPrefsStore } from "./syncPrefsStore";
 import { useHistoryStore } from "./historyStore";
+import { teamSecretCache } from "@/services/teamSecretCache";
 
 type Bag = Record<string, unknown>;
 type Store = { getState: () => Bag; setState: (s: Bag) => void };
@@ -114,7 +121,7 @@ const adapters: Adapter[] = [
     store: useConnectionStore as unknown as Store,
     localKey: "connections", teamKey: "teamConnections",
     persistKind: "connection", auditKind: "connection", pinField: "pinned",
-    pinPayloadKeys: ["name", "host", "port", "username", "auth_type", "tags", "identity_id", "key_id", "folder_id", "vault_id", "jump_hosts", "env_vars", "agent_forwarding", "legacy_algorithms", "pre_command", "post_command", "pre_snippet_id", "post_snippet_id", "ask_vars_each_time", "terminal_encoding", "distro", "icon", "pinned", "ping_disabled", "shell_integration", "keepalive_preset", "connection_type", "serial_port", "serial_baud", "serial_data_bits", "serial_parity", "serial_stop_bits", "serial_flow_control", "serial_auto_reconnect", "ftp_secure", "notes"],
+    pinPayloadKeys: ["name", "host", "port", "username", "auth_type", "tags", "identity_id", "key_id", "folder_id", "vault_id", "jump_hosts", "env_vars", "agent_forwarding", "legacy_algorithms", "pre_command", "post_command", "pre_snippet_id", "post_snippet_id", "ask_vars_each_time", "terminal_encoding", "distro", "icon", "pinned", "ping_disabled", "shell_integration", "keepalive_preset", "persist_session", "proxy", "port_knock", "connection_type", "serial_port", "serial_baud", "serial_data_bits", "serial_parity", "serial_stop_bits", "serial_flow_control", "serial_auto_reconnect", "ftp_secure", "webdav_url", "notes"],
     api: h.connections,
     seed: (o) => ({ id: "x1", name: "Web", host: "h", port: 22, username: "u", auth_type: "key", tags: [], vault_id: "personal", ...stamps, ...o }),
     form: (o) => ({ name: "Web", host: "h", port: 22, username: "u", auth_type: "key", tags: [], vault_id: "personal", ...o }),
@@ -223,7 +230,7 @@ describe.each(adapters)("$name store", (a) => {
   test("a create into a team vault persists the object and lands it in the team map", async () => {
     seedTeam(a, {});
     await a.create(a.form({ vault_id: "team-a" }));
-    expect(h.saveTeamVaultObject).toHaveBeenCalledWith("team-a", a.persistKind, expect.objectContaining({ vault_id: "team-a" }));
+    expect(h.saveTeamVaultObject).toHaveBeenCalledWith("team-a", a.persistKind, expect.objectContaining({ vault_id: "team-a" }), { rulesFrom: undefined });
     expect(teamMap(a)["team-a"]).toHaveLength(1);
     expect(localList(a)).toHaveLength(0);
   });
@@ -321,6 +328,30 @@ describe.each(adapters)("$name store", (a) => {
   });
 });
 
+describe.each(adapters.filter((a) => ["connection", "identity", "key", "snippet"].includes(a.name)))("$name delete undo", (a) => {
+  test("undoing a team delete restores the original object, and redo deletes it again", async () => {
+    const original = a.seed({ vault_id: "team-a", folder_id: "f1" });
+    seedTeam(a, { "team-a": [original] });
+    await a.remove("x1");
+    expect(teamMap(a)["team-a"]).toEqual([]);
+    await useHistoryStore.getState().undo();
+    expect(h.saveTeamVaultObject.mock.calls).toEqual([["team-a", a.persistKind, original]]);
+    expect(teamMap(a)["team-a"]).toEqual([original]);
+    await useHistoryStore.getState().redo();
+    expect(h.removeTeamVaultObject.mock.calls).toEqual([["team-a", "x1"], ["team-a", "x1"]]);
+    expect(teamMap(a)["team-a"]).toEqual([]);
+  });
+});
+
+test("undoing a team connection delete re-uploads its cached secrets", async () => {
+  teamSecretCache.set("team-a", "password:x1", "pw");
+  seedTeam(adapters[0], { "team-a": [adapters[0].seed({ vault_id: "team-a" })] });
+  await adapters[0].remove("x1");
+  await useHistoryStore.getState().undo();
+  expect(h.writeSecretAt.mock.calls).toEqual([["team-a", "password:x1", "pw"]]);
+  teamSecretCache.clearAll();
+});
+
 describe("audit reporting", () => {
   test("the five audited stores report a create; the snippet folder store reports none", async () => {
     for (const a of adapters) {
@@ -350,6 +381,22 @@ describe("sync scheduling", () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(h.scheduleSync).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["connection", "identity", "key", "folder", "snippet", "snippetFolder"])(
+    "%s edits reach local-network sync in a no-account install",
+    async (name) => {
+      h.isServerMode.mockResolvedValue(false);
+      try {
+        const a = byName(name);
+        seedLocal(a, [a.seed()]);
+        await a.remove("x1");
+        await Promise.resolve();
+        expect(h.scheduleSync).toHaveBeenCalled();
+      } finally {
+        h.isServerMode.mockResolvedValue(true);
+      }
     },
   );
 

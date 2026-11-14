@@ -1,25 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { openSystemDialog as openDialog } from "@/services/systemDialog";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import LogoSvg from "/logo.svg?react";
 import { useDefaultVaultId, resolveVaultIdForSave } from "@/hooks/useWritableVaultIds";
-import { decryptText, fromJSON } from "@/services/import-export/formats";
-import type { ConnectionExport, ExportBundle, FolderExport, IdentityExport, KeyExport, PortForwardingRuleExport, SnippetExport } from "@/services/import-export/formats";
+import { isLocked } from "@/services/import-export/formats";
+import type { ConnectionExport, ExportBundle, FolderExport, IdentityExport, ImportNotice, ImportOutcome, KeyExport, LockedImport, PortForwardingRuleExport, SnippetExport } from "@/services/import-export/formats";
 import { runImport, reloadAll } from "@/services/import-export/registry";
-import { existingConnectionsForVault } from "@/services/import-export/context";
+import { findDupes, newImportCtx } from "@/services/import-export/context";
+import type { Dupes } from "@/services/import-export/context";
+import { loadPublicKeys } from "@/services/publicKeyStore";
 import { IMPORTERS, parseImport } from "@/services/import-export/importers";
 import { useImportStores, useReloadFns, useStoreSlices, useDeleteStores } from "./useStores";
 import { ActionBtn, VaultChipSelect, useVaultList } from "./shared";
+import { CheckboxBox } from "@/components/shared/Checkbox";
 import { FileInputArea } from "./FileInputArea";
+import { searchMatcher } from "@/utils/search";
+import { defaultActions, setActions, type ItemAction } from "./importActions";
+import { useTeamStore } from "@/stores/teamStore";
+import { isTeamVaultId } from "@/stores/teamVaultMap";
+import { isMobileShell, useIsMobile } from "@/utils/platform";
+import { PORT_FORWARDING_ICON } from "@/lib/conceptIcons";
 
-type ItemAction = "include" | "skip" | "overwrite";
 type ItemMeta = { isDupe: boolean };
+type RefMeta = { icon: string; title: string; linkedTo?: string };
 
 type ImportStatus =
   | { type: "idle" }
   | { type: "parsing" }
   | { type: "error"; message: string }
-  | { type: "needs-password" }
+  | { type: "needs-password"; locked: LockedImport; unlocking?: boolean; error?: string }
   | { type: "ready";
       bundle: ExportBundle;
       connectionMeta: ItemMeta[];
@@ -27,6 +37,7 @@ type ImportStatus =
       identityMeta: ItemMeta[];
       snippetMeta: ItemMeta[];
       pfRuleMeta: ItemMeta[];
+      refMeta: RefMeta[];
     };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -41,19 +52,26 @@ function getFolderPath(eid: string | undefined, folders: FolderExport[]): string
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function ItemCheckbox({ checked }: { checked: boolean }) {
+function ReadOnlySection({ label, rows }: { label: string; rows: { icon: string; title: string; sub: string }[] }) {
+  if (rows.length === 0) return null;
   return (
-    <span
-      className="flex items-center justify-center w-4 h-4 rounded-sm shrink-0 transition-colors"
-      style={{
-        background: checked ? "var(--t-accent)" : "var(--t-bg-input)",
-        border: `1px solid ${checked ? "var(--t-accent)" : "var(--t-border-hover)"}`,
-      }}
-    >
-      {checked && <Icon icon="lucide:check" width={10} color="white" />}
-    </span>
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim) mb-1">{label}</span>
+      {rows.map((r, i) => (
+        <ItemRow key={i} icon={r.icon} title={r.title} sub={r.sub} readOnly isDupe={false} action="include" onToggle={() => {}} onActionChange={() => {}} />
+      ))}
+    </div>
   );
 }
+
+const NOTICE_ICONS: Record<ImportNotice["kind"], string> = {
+  pattern: "lucide:asterisk",
+  match: "lucide:git-branch",
+  include: "lucide:file-x",
+  includeOutside: "lucide:folder-x",
+  key: "lucide:key-round",
+  proxyCommand: "lucide:terminal-square",
+};
 
 function DupeControl({ action, onChange }: { action: ItemAction; onChange: (a: ItemAction) => void }) {
   const { t } = useTranslation();
@@ -85,7 +103,7 @@ function DupeControl({ action, onChange }: { action: ItemAction; onChange: (a: I
   );
 }
 
-function ItemRow({ icon, title, sub, folderPath, isDupe, action, onToggle, onActionChange }: {
+function ItemRow({ icon, title, sub, folderPath, isDupe, action, onToggle, onActionChange, readOnly }: {
   icon: string;
   title: string;
   sub: string;
@@ -94,18 +112,20 @@ function ItemRow({ icon, title, sub, folderPath, isDupe, action, onToggle, onAct
   action: ItemAction;
   onToggle: () => void;
   onActionChange: (a: ItemAction) => void;
+  readOnly?: boolean;
 }) {
+  const toggles = !isDupe && !readOnly;
   return (
     <div
-      onClick={isDupe ? undefined : onToggle}
-      className={`flex items-center gap-2.5 px-3 py-2 rounded-lg transition-opacity select-none ${isDupe ? "" : "cursor-pointer"}`}
+      onClick={toggles ? onToggle : undefined}
+      className={`flex items-center gap-2.5 px-3 py-2 rounded-lg transition-opacity select-none ${toggles ? "cursor-pointer" : ""}`}
       style={{
         background: "var(--t-bg-elevated)",
         border: "1px solid var(--t-border)",
         opacity: action === "skip" ? 0.45 : 1,
       }}
     >
-      {!isDupe && <ItemCheckbox checked={action !== "skip"} />}
+      {toggles && <CheckboxBox checked={action !== "skip"} />}
       <Icon icon={icon} width={13} style={{ color: "var(--t-text-dim)", flexShrink: 0 }} />
       <div className="flex flex-col min-w-0 flex-1">
         <span className="text-sm text-(--t-text-primary) truncate">{title}</span>
@@ -113,7 +133,7 @@ function ItemRow({ icon, title, sub, folderPath, isDupe, action, onToggle, onAct
           {folderPath ? `${folderPath} · ${sub}` : sub}
         </span>
       </div>
-      {isDupe
+      {isDupe && !readOnly
         ? <DupeControl action={action} onChange={onActionChange} />
         : null}
     </div>
@@ -150,12 +170,35 @@ function GroupHeader({ label, icon, included, total, allSkipped, collapsed, onTo
   );
 }
 
+// StrictMode re-runs mount effects; a reset there would drop an auto-extract already in flight.
+function useOnChange<T>(value: T, onChange: () => void) {
+  const prev = useRef(value);
+  useEffect(() => {
+    if (Object.is(prev.current, value)) return;
+    prev.current = value;
+    onChange();
+  });
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: string; autoTrigger?: boolean }) {
   const { t } = useTranslation();
   const storeSlices = useStoreSlices();
-  const { connections: existingConnections } = storeSlices;
+  const [publicKeys, setPublicKeys] = useState<ReadonlyMap<string, string>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    void loadPublicKeys(storeSlices.keys.filter(k => !k.deleted_at)).then(m => { if (!cancelled) setPublicKeys(m); });
+    return () => { cancelled = true; };
+  }, [storeSlices.keys]);
+  const existingItems = useMemo(() => ({
+    existingConnections: storeSlices.connections,
+    existingKeys: storeSlices.keys,
+    existingPublicKeys: publicKeys,
+    existingIdentities: storeSlices.identities,
+    existingSnippets: storeSlices.snippets,
+    existingPfRules: storeSlices.pfRules,
+  }), [storeSlices.connections, storeSlices.keys, publicKeys, storeSlices.identities, storeSlices.snippets, storeSlices.pfRules]);
   const importStores = useImportStores();
   const reloaders = useReloadFns();
   const deletes = useDeleteStores();
@@ -169,10 +212,8 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
     defaultSource && IMPORTERS.find(i => i.key === defaultSource) ? defaultSource : IMPORTERS[0].key
   );
   const didAutoTrigger = useRef(false);
-  // True once an auto-extract owns the current status. Prevents the empty-text
-  // parse effect (which fires whenever store slices reload) from wiping the
-  // extracted bundle back to "idle" — text stays "" during auto-extract.
-  const autoExtracted = useRef(false);
+  const parseSeq = useRef(0);
+  const [parsed, setParsed] = useState<ExportBundle | null>(null);
   const [targetVaultIds, setTargetVaultIds] = useState<string[]>([defaultVaultId]);
   const [text, setText] = useState("");
   const [addTag, setAddTag] = useState("");
@@ -184,82 +225,95 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const writableVaults = useVaultList(true);
+  const teams = useTeamStore((s) => s.teams);
+  const isMobile = useIsMobile();
+  const touched = useRef(new Set<string>());
+  const teamTargets = useMemo(
+    () => targetVaultIds.map(resolveVaultIdForSave).filter(isTeamVaultId).map((id) => teams.find((t) => t.id === id)?.name ?? id),
+    [targetVaultIds, teams],
+  );
   const source = IMPORTERS.find(i => i.key === selectedSource)!;
+  const hintKey = (isMobile && source.mobileHintKey) || source.hintKey;
 
   const applyBundle = useCallback((bundle: ExportBundle) => {
-    const targetVaultSaveIds = targetVaultIds.map(resolveVaultIdForSave);
-    const existingConnSets = targetVaultSaveIds.map(vaultId =>
-      new Set(existingConnectionsForVault(existingConnections, vaultId).map(c => `${c.host}:${c.port}:${c.username}`))
-    );
-    const existingKeySets = targetVaultSaveIds.map(vId =>
-      new Set(storeSlices.keys.filter(k => !k.deleted_at && (k.vault_id ?? "personal") === vId).map(k => k.name))
-    );
-    const existingIdentitySets = targetVaultSaveIds.map(vId =>
-      new Set(storeSlices.identities.filter(i => !i.deleted_at && (i.vault_id ?? "personal") === vId).map(i => i.name))
-    );
-    const existingSnippetSets = targetVaultSaveIds.map(vId =>
-      new Set(storeSlices.snippets.filter(s => !s.deleted_at && (s.vault_id ?? "personal") === vId).map(s => s.name))
-    );
-    const existingPfSets = targetVaultSaveIds.map(vId =>
-      new Set(storeSlices.pfRules.filter(r => !r.deleted_at && (r.vault_id ?? "personal") === vId).map(r => r.name))
-    );
+    const vaultDupes = targetVaultIds.map(vId => findDupes(existingItems, resolveVaultIdForSave(vId)));
+    const metaOf = <T,>(items: T[], match: (d: Dupes, item: T) => string | undefined) =>
+      items.map(item => ({ isDupe: vaultDupes.every(d => match(d, item) !== undefined) }));
+    const connectionMeta = metaOf(bundle.connections, (d, c) => d.connection(c));
+    const keyMeta = metaOf(bundle.keys, (d, k) => d.key(k));
+    const identityMeta = metaOf(bundle.identities, (d, i) => d.identity(i));
+    const snippetMeta = metaOf(bundle.snippets, (d, s) => d.snippet(s));
+    const pfRuleMeta = metaOf(bundle.portForwardingRules, (d, r) => d.pfRule(r));
+    const linkedName = (match: (d: Dupes) => string | undefined, existing: { id: string; name?: string }[]) => {
+      const ids = vaultDupes.map(match);
+      return ids.every(Boolean) ? existing.find(e => e.id === ids[0])?.name ?? "" : undefined;
+    };
+    const refMeta: RefMeta[] = [
+      ...(bundle.keyRefs ?? []).map(r => ({
+        icon: "lucide:key", title: r.name || t("importExport.import.unnamedKey"),
+        linkedTo: linkedName(d => d.keyRef(r), existingItems.existingKeys),
+      })),
+      ...(bundle.identityRefs ?? []).map(r => ({
+        icon: "lucide:user", title: r.name,
+        linkedTo: linkedName(d => d.identity(r), existingItems.existingIdentities),
+      })),
+    ];
 
-    const connectionMeta = bundle.connections.map(c => ({
-      isDupe: existingConnSets.every(s => s.has(`${c.host}:${c.port}:${c.username}`)),
-    }));
-    const keyMeta = bundle.keys.map(k => ({
-      isDupe: k.name ? existingKeySets.every(s => s.has(k.name!)) : false,
-    }));
-    const identityMeta = bundle.identities.map(i => ({
-      isDupe: i.name ? existingIdentitySets.every(s => s.has(i.name!)) : false,
-    }));
-    const snippetMeta = bundle.snippets.map(s => ({
-      isDupe: existingSnippetSets.every(es => es.has(s.name)),
-    }));
-    const pfRuleMeta = bundle.portForwardingRules.map(r => ({
-      isDupe: existingPfSets.every(s => s.has(r.name)),
-    }));
+    const handChosen = touched.current;
+    setItemAction((prev) => defaultActions(
+      { connections: connectionMeta, keys: keyMeta, identities: identityMeta, snippets: snippetMeta, pfRules: pfRuleMeta },
+      teamTargets.length > 0, prev, handChosen,
+    ));
 
-    const actions = new Map<string, ItemAction>();
-    bundle.connections.forEach((_, i) => actions.set(`connections:${i}`, connectionMeta[i].isDupe ? "skip" : "include"));
-    bundle.keys.forEach((_, i) => actions.set(`keys:${i}`, keyMeta[i].isDupe ? "skip" : "include"));
-    bundle.identities.forEach((_, i) => actions.set(`identities:${i}`, identityMeta[i].isDupe ? "skip" : "include"));
-    bundle.snippets.forEach((_, i) => actions.set(`snippets:${i}`, snippetMeta[i].isDupe ? "skip" : "include"));
-    bundle.portForwardingRules.forEach((_, i) => actions.set(`pfRules:${i}`, pfRuleMeta[i].isDupe ? "skip" : "include"));
-    setItemAction(actions);
-
-    setStatus({ type: "ready", bundle, connectionMeta, keyMeta, identityMeta, snippetMeta, pfRuleMeta });
+    setStatus({ type: "ready", bundle, connectionMeta, keyMeta, identityMeta, snippetMeta, pfRuleMeta, refMeta });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingConnections, storeSlices.keys, storeSlices.identities, storeSlices.snippets, storeSlices.pfRules, targetVaultIds]);
+  }, [existingItems, targetVaultIds]);
 
-  const parse = useCallback((raw: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) { if (!autoExtracted.current) setStatus({ type: "idle" }); return; }
+  useEffect(() => { if (parsed) applyBundle(parsed); }, [parsed, applyBundle]);
+
+  const adopt = useCallback((bundle: ExportBundle | null) => {
+    touched.current = new Set();
+    setParsed(bundle);
+  }, []);
+
+  const load = useCallback(async (outcome: () => ImportOutcome | Promise<ImportOutcome>) => {
+    const seq = ++parseSeq.current;
+    adopt(null);
     setStatus({ type: "parsing" });
     try {
-      const result = parseImport(trimmed);
-      if (result === "encrypted") {
+      const result = await outcome();
+      if (seq !== parseSeq.current) return;
+      if (isLocked(result)) {
         setDecryptPassword("");
-        setStatus({ type: "needs-password" });
-        return;
+        setStatus({ type: "needs-password", locked: result });
+      } else {
+        adopt(result);
       }
-      applyBundle(result);
     } catch (err) {
-      setStatus({ type: "error", message: String(err) });
+      if (seq === parseSeq.current) setStatus({ type: "error", message: String(err) });
     }
-  }, [applyBundle]);
+  }, [adopt]);
 
-  useEffect(() => { parse(text); }, [text, parse]);
-
-  useEffect(() => {
-    autoExtracted.current = false;
+  const reset = useCallback(() => {
+    parseSeq.current++;
+    adopt(null);
     setStatus({ type: "idle" });
+  }, [adopt]);
+
+  useOnChange(text, () => {
+    const trimmed = text.trim();
+    if (trimmed) void load(() => parseImport(trimmed));
+    else reset();
+  });
+
+  useOnChange(selectedSource, () => {
+    reset();
     setText("");
     setImportResult(null);
-  }, [selectedSource]);
+  });
 
   useEffect(() => {
-    if (autoTrigger && source.autoExtract && !didAutoTrigger.current) {
+    if (autoTrigger && source.autoExtract && !isMobileShell() && !didAutoTrigger.current) {
       didAutoTrigger.current = true;
       void handleAutoExtract();
     }
@@ -273,36 +327,42 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
     }
   }, [autoTrigger, status.type, step, writableVaults.length]);
 
-  const handleAutoExtract = useCallback(async () => {
-    if (!source.autoExtract) return;
-    autoExtracted.current = true;
+  const extract = useCallback(async (run: () => Promise<ImportOutcome>) => {
     setExtracting(true);
     setImportResult(null);
-    setStatus({ type: "parsing" });
-    try {
-      applyBundle(await source.autoExtract());
-    } catch (err) {
-      setStatus({ type: "error", message: String(err) });
-    } finally {
-      setExtracting(false);
-    }
-  }, [source, applyBundle]);
+    await load(run);
+    setExtracting(false);
+  }, [load]);
+
+  const handleAutoExtract = useCallback(async () => {
+    const auto = source.autoExtract;
+    if (auto) await extract(auto);
+  }, [source, extract]);
+
+  const handlePickFolder = useCallback(async () => {
+    const fromFolder = source.extractFromFolder;
+    if (!fromFolder) return;
+    const dir = await openDialog({ directory: true });
+    if (typeof dir === "string") await extract(() => fromFolder(dir));
+  }, [source, extract]);
 
   const handleDecrypt = useCallback(async () => {
-    if (!decryptPassword) return;
-    setStatus({ type: "parsing" });
+    if (!decryptPassword || status.type !== "needs-password") return;
+    const { locked } = status;
+    setStatus({ type: "needs-password", locked, unlocking: true });
     try {
-      applyBundle(fromJSON(await decryptText(text, decryptPassword)));
+      adopt(await locked.unlock(decryptPassword));
     } catch (err) {
-      setStatus({ type: "error", message: String(err) });
+      setStatus({ type: "needs-password", locked, error: String(err) });
     }
-  }, [decryptPassword, text, applyBundle]);
+  }, [decryptPassword, status, adopt]);
 
   // ── Action helpers ──────────────────────────────────────────────────────────
 
   const getAction = (key: string): ItemAction => itemAction.get(key) ?? "include";
-  const setAction = (key: string, action: ItemAction) =>
-    setItemAction(prev => new Map(prev).set(key, action));
+  const applyAction = (keys: string[], action: ItemAction) =>
+    setItemAction(prev => setActions(prev, keys, action, touched.current));
+  const setAction = (key: string, action: ItemAction) => applyAction([key], action);
   const toggleItem = (key: string) =>
     setAction(key, getAction(key) === "skip" ? "include" : "skip");
 
@@ -311,11 +371,7 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
 
   const toggleGroup = (type: string, len: number) => {
     const allSkipped = isGroupAllSkipped(type, len);
-    setItemAction(prev => {
-      const next = new Map(prev);
-      for (let i = 0; i < len; i++) next.set(`${type}:${i}`, allSkipped ? "include" : "skip");
-      return next;
-    });
+    applyAction(Array.from({ length: len }, (_, i) => `${type}:${i}`), allSkipped ? "include" : "skip");
   };
 
   const toggleCollapse = (type: string) =>
@@ -339,68 +395,37 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
       for (const vaultTargetId of targetVaultIds) {
         const vault_id = resolveVaultIdForSave(vaultTargetId);
 
-        // Delete existing items marked as overwrite before re-importing
-        const deleteOps: Promise<void>[] = [];
-        status.bundle.connections.forEach((c, i) => {
-          if (getAction(`connections:${i}`) === "overwrite") {
-            const ex = storeSlices.connections.find(ec =>
-              !ec.deleted_at && (ec.vault_id ?? "personal") === vault_id &&
-              ec.host === c.host && ec.port === c.port && ec.username === c.username
-            );
-            if (ex) deleteOps.push(deletes.deleteConnection(ex.id));
-          }
-        });
-        status.bundle.keys.forEach((k, i) => {
-          if (getAction(`keys:${i}`) === "overwrite" && k.name) {
-            const ex = storeSlices.keys.find(ek => !ek.deleted_at && (ek.vault_id ?? "personal") === vault_id && ek.name === k.name);
-            if (ex) deleteOps.push(deletes.deleteKey(ex.id));
-          }
-        });
-        status.bundle.identities.forEach((id, i) => {
-          if (getAction(`identities:${i}`) === "overwrite" && id.name) {
-            const ex = storeSlices.identities.find(ei => !ei.deleted_at && (ei.vault_id ?? "personal") === vault_id && ei.name === id.name);
-            if (ex) deleteOps.push(deletes.deleteIdentity(ex.id));
-          }
-        });
-        status.bundle.snippets.forEach((s, i) => {
-          if (getAction(`snippets:${i}`) === "overwrite") {
-            const ex = storeSlices.snippets.find(es => !es.deleted_at && (es.vault_id ?? "personal") === vault_id && es.name === s.name);
-            if (ex) deleteOps.push(deletes.deleteSnippet(ex.id));
-          }
-        });
-        status.bundle.portForwardingRules.forEach((r, i) => {
-          if (getAction(`pfRules:${i}`) === "overwrite") {
-            const ex = storeSlices.pfRules.find(er => !er.deleted_at && (er.vault_id ?? "personal") === vault_id && er.name === r.name);
-            if (ex) deleteOps.push(deletes.deleteRule(ex.id));
-          }
-        });
+        const dupes = findDupes(existingItems, vault_id);
+        const overwritten = <T,>(type: string, items: T[], match: (item: T) => string | undefined, remove: (id: string) => Promise<void>) =>
+          items.flatMap((item, i) => {
+            const id = getAction(`${type}:${i}`) === "overwrite" ? match(item) : undefined;
+            return id ? [remove(id)] : [];
+          });
+        const deleteOps = [
+          ...overwritten("connections", status.bundle.connections, dupes.connection, deletes.deleteConnection),
+          ...overwritten("keys", status.bundle.keys, dupes.key, deletes.deleteKey),
+          ...overwritten("identities", status.bundle.identities, dupes.identity, deletes.deleteIdentity),
+          ...overwritten("snippets", status.bundle.snippets, dupes.snippet, deletes.deleteSnippet),
+          ...overwritten("pfRules", status.bundle.portForwardingRules, dupes.pfRule, deletes.deleteRule),
+        ];
         await Promise.all(deleteOps);
 
-        const filteredBundle: ExportBundle = {
-          ...status.bundle,
-          connections: status.bundle.connections.filter((_, i) => getAction(`connections:${i}`) !== "skip"),
-          keys: status.bundle.keys.filter((_, i) => getAction(`keys:${i}`) !== "skip"),
-          identities: status.bundle.identities.filter((_, i) => getAction(`identities:${i}`) !== "skip"),
-          snippets: status.bundle.snippets.filter((_, i) => getAction(`snippets:${i}`) !== "skip"),
-          portForwardingRules: status.bundle.portForwardingRules.filter((_, i) => getAction(`pfRules:${i}`) !== "skip"),
-        };
-
-        const result = await runImport(filteredBundle, {
+        const skippedOf = (type: string, items: object[]) => items.filter((_, i) => getAction(`${type}:${i}`) === "skip");
+        const result = await runImport(status.bundle, newImportCtx({
           vault_id,
           tag: addTag.trim(),
           skipDupes: false,
-          existingConnections,
-          existingKeys: storeSlices.keys,
-          existingIdentities: storeSlices.identities,
-          existingSnippets: storeSlices.snippets,
-          existingPfRules: storeSlices.pfRules,
-          folderEidMap: new Map(),
-          snippetFolderEidMap: new Map(),
-          keyEidMap: new Map(),
-          identityEidMap: new Map(),
-          connectionEidMap: new Map(),
+          skipped: new Set([
+            ...skippedOf("connections", status.bundle.connections),
+            ...skippedOf("keys", status.bundle.keys),
+            ...skippedOf("identities", status.bundle.identities),
+            ...skippedOf("snippets", status.bundle.snippets),
+            ...skippedOf("pfRules", status.bundle.portForwardingRules),
+          ]),
+          ...existingItems,
+          existingFolders: [...storeSlices.folders, ...storeSlices.snippetFolders],
           stores: importStores,
-        });
+        }));
         imported += result.imported;
         errors += result.errors;
       }
@@ -424,9 +449,9 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
   // ── Step 2: review ──────────────────────────────────────────────────────────
 
   if (step === 2 && status.type === "ready") {
-    const { bundle, connectionMeta, keyMeta, identityMeta, snippetMeta, pfRuleMeta } = status;
-    const q = search.toLowerCase();
-    const matches = (strs: (string | undefined)[]) => !q || strs.some(s => s?.toLowerCase().includes(q));
+    const { bundle, connectionMeta, keyMeta, identityMeta, snippetMeta, pfRuleMeta, refMeta } = status;
+    const match = searchMatcher(search);
+    const matches = (strs: (string | undefined)[]) => match(...strs);
 
     const totalDupes = [...connectionMeta, ...keyMeta, ...identityMeta, ...snippetMeta, ...pfRuleMeta].filter(m => m.isDupe).length;
     const allDupesSkipped = totalDupes > 0 && [
@@ -439,17 +464,15 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
 
     const toggleAllDupes = () => {
       const target: ItemAction = allDupesSkipped ? "include" : "skip";
-      setItemAction(prev => {
-        const next = new Map(prev);
-        const apply = (meta: ItemMeta[], type: string) =>
-          meta.forEach((m, i) => { if (m.isDupe) next.set(`${type}:${i}`, target); });
-        apply(connectionMeta, "connections");
-        apply(keyMeta, "keys");
-        apply(identityMeta, "identities");
-        apply(snippetMeta, "snippets");
-        apply(pfRuleMeta, "pfRules");
-        return next;
-      });
+      const keys: string[] = [];
+      const collect = (meta: ItemMeta[], type: string) =>
+        meta.forEach((m, i) => { if (m.isDupe) keys.push(`${type}:${i}`); });
+      collect(connectionMeta, "connections");
+      collect(keyMeta, "keys");
+      collect(identityMeta, "identities");
+      collect(snippetMeta, "snippets");
+      collect(pfRuleMeta, "pfRules");
+      applyAction(keys, target);
     };
 
     const totalToImport = (
@@ -466,11 +489,18 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
         meta: connectionMeta,
         rows: bundle.connections.map((c: ConnectionExport, i: number) => {
           const fp = getFolderPath(c._folder_eid, bundle.folders);
-          if (!matches([c.name, c.host, c.username, fp])) return null;
+          if (!matches([c.name, c.host, c.username, c.serial_port, fp])) return null;
+          const serial = c.connection_type === "serial";
+          const address = serial ? c.serial_port ?? "" : `${c.host}:${c.port}`;
           return (
             <ItemRow key={i} icon="lucide:server"
-              title={c.name || `${c.host}:${c.port}`}
-              sub={`${c.host}:${c.port} · ${c.username}`}
+              title={c.name || address}
+              sub={serial ? address : [
+                `${address} · ${c.username}`,
+                ...(c.jump_hosts?.length ? [t("importExport.import.viaJump", {
+                  hosts: c.jump_hosts.map((j) => bundle.connections.find((x) => x._eid === j._connection_eid)?.name ?? j.host).join(", "),
+                })] : []),
+              ].join(" · ")}
               folderPath={fp || undefined}
               isDupe={connectionMeta[i].isDupe}
               action={getAction(`connections:${i}`)}
@@ -535,14 +565,16 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
         }),
       },
       {
-        type: "pfRules", label: t("importExport.import.groupPortForwarding"), icon: "lucide:arrow-right-left",
+        type: "pfRules", label: t("importExport.import.groupPortForwarding"), icon: PORT_FORWARDING_ICON,
         meta: pfRuleMeta,
         rows: bundle.portForwardingRules.map((r: PortForwardingRuleExport, i: number) => {
           if (!matches([r.name, r.remote_host])) return null;
           return (
-            <ItemRow key={i} icon="lucide:arrow-right-left"
+            <ItemRow key={i} icon={PORT_FORWARDING_ICON}
               title={r.name}
-              sub={`${r.local_port} → ${r.remote_host}:${r.remote_port}`}
+              sub={r.tunnel_type === "dynamic"
+                ? t("portForwarding.activeTunnels.socksPortLabel", { port: r.local_port })
+                : `${r.local_port} → ${r.remote_host}:${r.remote_port}`}
               isDupe={pfRuleMeta[i].isDupe}
               action={getAction(`pfRules:${i}`)}
               onToggle={() => toggleItem(`pfRules:${i}`)}
@@ -602,6 +634,13 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
             const isCollapsed = collapsed.has(g.type);
             return (
               <div key={g.type}>
+                {g.type === "keys" && teamTargets.map((team) => (
+                  <div key={team} className="flex items-start gap-2 px-3 py-2 mb-2 rounded-lg text-xs"
+                    style={{ color: "var(--t-status-warning)", background: "color-mix(in srgb, var(--t-status-warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--t-status-warning) 30%, transparent)" }}>
+                    <Icon icon="lucide:triangle-alert" width={13} className="mt-0.5 shrink-0" />
+                    {t("importExport.import.teamKeysWarning", { team })}
+                  </div>
+                ))}
                 <GroupHeader
                   label={g.label} icon={g.icon}
                   included={countIncluded(g.type, g.meta.length)}
@@ -617,6 +656,13 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
               </div>
             );
           })}
+          <ReadOnlySection label={t("importExport.import.groupLinkedCredentials")} rows={refMeta.map((r) => ({
+            icon: r.icon, title: r.title,
+            sub: r.linkedTo === undefined ? t("importExport.import.linkedNotFound") : t("importExport.import.linkedTo", { name: r.linkedTo || r.title }),
+          }))} />
+          <ReadOnlySection label={t("importExport.import.groupNotImported")} rows={(bundle.notices ?? []).map((n) => ({
+            icon: NOTICE_ICONS[n.kind], title: n.text, sub: t(`importExport.import.notice.${n.kind}`),
+          }))} />
         </div>
 
         {importResult && (
@@ -683,7 +729,7 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
     <div className="flex flex-col gap-4 h-full">
       <div className="flex flex-col gap-2">
         <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{t("importExport.import.importFrom")}</p>
-        <div className="flex flex-wrap gap-1.5">
+        <div data-chip-group className="flex flex-wrap gap-1.5">
           {IMPORTERS.map(importer => {
             const active = selectedSource === importer.key;
             return (
@@ -706,10 +752,10 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
             );
           })}
         </div>
-        {source.hint && (
+        {hintKey && (
           <p className="text-xs text-(--t-text-dim) flex items-center gap-1.5 mt-0.5">
             <Icon icon="lucide:info" width={11} />
-            {source.hint}
+            {t(hintKey)}
           </p>
         )}
       </div>
@@ -721,7 +767,7 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
         </div>
       )}
 
-      {source.autoExtract && !text.trim() && status.type !== "ready" && (
+      {source.autoExtract && !isMobile && !text.trim() && status.type !== "ready" && (
         <div
           className="flex flex-col gap-3 p-4 rounded-xl"
           style={{ background: "color-mix(in srgb, var(--t-accent) 8%, var(--t-bg-elevated))", border: "1px solid color-mix(in srgb, var(--t-accent) 30%, transparent)" }}
@@ -746,15 +792,25 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
             onClick={handleAutoExtract}
             disabled={extracting}
             className="flex items-center justify-center gap-2 w-full py-2 rounded-lg text-sm font-semibold transition-opacity hover:opacity-80 disabled:opacity-50"
-            style={{ background: "var(--t-accent)", color: "#fff" }}
+            style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
           >
             <Icon icon={extracting ? "lucide:loader-circle" : "lucide:download"} width={14} className={extracting ? "animate-spin" : ""} />
             {extracting ? t("importExport.import.extracting") : t("importExport.import.extractFrom", { label: source.label })}
           </button>
+          {source.extractFromFolder && (
+            <button
+              onClick={handlePickFolder}
+              disabled={extracting}
+              className="self-center text-xs transition-opacity hover:opacity-70 disabled:opacity-50"
+              style={{ color: "var(--t-text-dim)" }}
+            >
+              {t("importExport.import.chooseConfigFolder", { label: source.label })}
+            </button>
+          )}
         </div>
       )}
 
-      {source.autoExtract && selectedSource !== "termius" && !text.trim() && status.type !== "ready" && (
+      {source.autoExtract && !isMobile && selectedSource !== "termius" && !text.trim() && status.type !== "ready" && (
         <div className="flex items-center gap-3">
           <div className="flex-1 h-px" style={{ background: "var(--t-border)" }} />
           <span className="text-xs font-medium" style={{ color: "var(--t-text-dim)" }}>{t("importExport.import.orImportFromFile")}</span>
@@ -766,9 +822,9 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
         <FileInputArea
           text={text}
           onChange={setText}
-          placeholder={source.placeholder}
+          placeholder={t(source.placeholderKey)}
           fileAccept={source.fileAccept}
-          openLabel={t("importExport.import.openFileLabel", { sub: source.sub })}
+          openLabel={t("importExport.import.openFileLabel", { sub: t(source.subKey) })}
           hasError={status.type === "error"}
           onClear={() => { setStatus({ type: "idle" }); setImportResult(null); }}
         />
@@ -785,7 +841,7 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
         <div className="flex flex-col gap-3 p-3 rounded-lg bg-(--t-bg-elevated) border border-(--t-border)">
           <div className="flex items-center gap-2 text-sm" style={{ color: "var(--t-text-primary)" }}>
             <Icon icon="lucide:lock" width={14} style={{ color: "var(--t-accent)" }} />
-            {t("importExport.import.encryptedBackupTitle")}
+            {t(status.locked.kind === "securecrt" ? "importExport.import.configPassphraseTitle" : "importExport.import.encryptedBackupTitle")}
           </div>
           <div className="flex gap-2">
             <input
@@ -797,8 +853,18 @@ export function ImportTab({ defaultSource, autoTrigger }: { defaultSource?: stri
               autoFocus
               className="flex-1 px-2.5 py-1.5 rounded-lg text-sm outline-hidden bg-(--t-bg-input) border border-(--t-border-hover) text-(--t-text-primary)"
             />
-            <ActionBtn icon="lucide:lock-open" label={t("importExport.import.unlock")} onClick={handleDecrypt} primary disabled={!decryptPassword} />
+            <ActionBtn icon="lucide:lock-open" label={t("importExport.import.unlock")} onClick={handleDecrypt} primary disabled={!decryptPassword || status.unlocking} />
           </div>
+          {status.error && <p className="text-xs" style={{ color: "var(--t-status-error)" }}>{status.error}</p>}
+          {status.locked.withoutSecrets && (
+            <button
+              onClick={() => { const { locked } = status; if (locked.withoutSecrets) adopt(locked.withoutSecrets()); }}
+              className="self-start text-xs transition-opacity hover:opacity-70"
+              style={{ color: "var(--t-text-dim)" }}
+            >
+              {t("importExport.import.skipPasswords")}
+            </button>
+          )}
         </div>
       )}
 

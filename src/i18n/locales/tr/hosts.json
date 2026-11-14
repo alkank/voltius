@@ -8,10 +8,11 @@
       "importExport": "İçe/dışa aktar",
       "import": "İçe aktar…",
       "export": "Dışa aktar…",
-      "fromImporter": "{{label}} kaynağından",
+      "importFrom": "Şuradan içe aktar",
       "newHost": "Yeni sunucu",
       "newSerialHost": "Yeni seri sunucu",
-      "newFolder": "Yeni klasör"
+      "newFolder": "Yeni klasör",
+      "systemShell": "Sistem varsayılanı"
     },
     "card": {
       "pin": "Sabitle",
@@ -31,30 +32,31 @@
       "copyHostnameIp": "Ana bilgisayar adını/IP'yi kopyala",
       "copiedHost": "{{host}} kopyalandı",
       "executeSnippet": "Kod parçacığı çalıştır",
-      "cloudSyncDisabled": "Bulut eşitleme devre dışı",
-      "enableCloudSync": "Bulut eşitlemeyi etkinleştir",
-      "disableCloudSync": "Bulut eşitlemeyi devre dışı bırak",
       "enableReachability": "Ulaşılabilirlik denetimini etkinleştir",
       "disableReachability": "Ulaşılabilirlik denetimini devre dışı bırak",
       "connectTitle": "Bağlan (veya çift tıklayın)",
       "openFilesTitle": "Dosyaları aç (veya çift tıklayın)",
       "inUseBy": "{{name}} tarafından kullanılıyor",
       "inUseByOverflow_one": "{{name}} ve {{count}} kişi daha tarafından kullanılıyor",
-      "inUseByOverflow_other": "{{name}} ve {{count}} kişi daha tarafından kullanılıyor"
+      "inUseByOverflow_other": "{{name}} ve {{count}} kişi daha tarafından kullanılıyor",
+      "filesSuffix": "dosyalar",
+      "knockProtected": "Port vuruşuyla korunuyor. Yalnızca Voltius vuruş yaptıktan sonra yoklanır.",
+      "knockWindowOpen": "Vuruş penceresi açık",
+      "knockProtectedShort": "vuruşla korunuyor"
     },
     "page": {
       "all": "Tümü",
       "folders": "Klasörler",
       "new": "Yeni",
       "pinned": "Sabitlenenler",
-      "folderEmpty": "Bu klasör boş",
-      "addHost": "Sunucu ekle",
       "noSearchResults": "\"{{search}}\" ile eşleşen sunucu yok",
       "ejectMoveTo": "{{name}} klasörüne taşı",
       "ejectRemoveFromFolder": "Klasörden çıkar",
       "emptyState": {
         "title": "Henüz sunucu yok",
-        "subtitle": "Başlamak için ilk SSH sunucunuzu ekleyin"
+        "subtitle": "Tek tıkla bağlanmak için bir sunucu ekleyin.",
+        "import": "Sunucuları içe aktar",
+        "quickConnect": "Kaydetmeden bağlan"
       },
       "draft": {
         "unsaved": "Kaydedilmedi"
@@ -72,8 +74,6 @@
         "moveItemsTo_other": "{{count}} öğeyi şuraya taşı",
         "copyItemsTo_one": "{{count}} öğeyi şuraya kopyala",
         "copyItemsTo_other": "{{count}} öğeyi şuraya kopyala",
-        "enableCloudSync": "Bulut eşitlemeyi etkinleştir ({{count}})",
-        "disableCloudSync": "Bulut eşitlemeyi devre dışı bırak ({{count}})",
         "enableReachability": "Ulaşılabilirlik denetimini etkinleştir ({{count}})",
         "disableReachability": "Ulaşılabilirlik denetimini devre dışı bırak ({{count}})",
         "exportHosts": "{{count}} sunucuyu dışa aktar",
@@ -97,21 +97,21 @@
     },
     "remoteSessions": {
       "title": "Diğer cihazlarda etkin",
-      "justNow": "az önce",
-      "minutesAgo": "{{count}} dk önce",
-      "hoursAgo": "{{count}} sa önce",
-      "daysAgo": "{{count}} gün önce",
       "kill": "Oturumu sonlandır",
+      "join": "Oturuma katıl",
       "killing": "Oturum sonlandırılıyor…",
       "undo": "Geri al",
       "killFailed": "Uzaktan sonlandırılamadı — sonlandırmak için oturumu açın",
-      "dismiss": "Kapat"
+      "dismiss": "Kapat",
+      "deviceActive": "{{device}} · {{age}} etkin",
+      "unknownDevice": "Bilinmeyen cihaz"
     },
     "teamSessions": {
       "title": "Ekip oturumları",
       "joinByCode": "Kodla katıl",
-      "emptyHint": "Ekip arkadaşlarınızın paylaştığı terminaller burada görünür. Davet kodunuz mu var? Katılmak için arama alanına yapıştırın.",
+      "emptyHint": "Ekip arkadaşlarınızın paylaştığı terminaller burada görünür. Davet bağlantınız veya kodunuz mu var? “Kodla katıl”ı kullanın.",
       "live": "CANLI",
+      "sharedBy": "{{name}} paylaşıyor",
       "pasteInviteCode": "Özel bir oturuma katılmak için davet bağlantısını veya kodunu yapıştırın:",
       "inviteCodePlaceholder": "voltius://join?… veya sessionId:token",
       "join": "Katıl",
@@ -142,6 +142,22 @@
       "failed": "{{host}} için sunucu komutu başarısız oldu: {{error}}",
       "missingSnippet": "{{host}} için sunucu komutunun kod parçacığı bulunamadı",
       "postPromptTimedOut": "{{host}} için son komut atlandı: 60 saniye içinde yanıt gelmedi"
+    },
+    "connectAs": {
+      "title": "Farklı kimlikle bağlan",
+      "yours": "sizin",
+      "hostDefault": "sunucu varsayılanı",
+      "vaultDefault": "{{vault}} için kimliğim…",
+      "clearPick": "Seçimimi temizle"
+    },
+    "managed": {
+      "badge": "ssh config",
+      "tooltip": "~/.ssh/config tarafından yönetiliyor · takma ad {{alias}}",
+      "bannerTitle": "~/.ssh/config tarafından yönetiliyor",
+      "bannerBodyBefore": "Takma ad ",
+      "bannerBodyAfter": ". Kilitli alanlar dosyayı izler.",
+      "detach": "Ayır",
+      "detachMenu": "~/.ssh/config'ten ayır"
     }
   }
 }

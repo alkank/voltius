@@ -9,7 +9,9 @@ import {
   type Shortcut,
 } from "@/stores/shortcutStore";
 import { useFilterShortcut } from "@/components/shared/ToolbarViewControls";
-import { DirtyDot, ResetButton } from "./shared";
+import { DirtyDot, ResetButton, SETTINGS_SURFACE } from "./shared";
+import { searchMatcher } from "@/utils/search";
+import { chordKey, primaryModifier, secondaryModifier } from "@/utils/primaryModifier";
 
 const BLOCKED_KEYS = new Set(["Escape", "Tab"]);
 
@@ -20,7 +22,7 @@ const GROUPS: Group[] = [
   { id: "global",     ids: ["omni", "shortcuts", "themes"] },
   { id: "tabs",       ids: ["new-tab", "duplicate-session", "duplicate-session-split", "close-tab", "next-tab", "prev-tab"] },
   { id: "navigation", ids: ["sidebar", "filter"] },
-  { id: "editing",    ids: ["delete", "undo", "redo"] },
+  { id: "editing",    ids: ["delete", "rename", "undo", "redo"] },
 ];
 
 function displayLabel(sc: Shortcut, t: TranslateFn): string {
@@ -31,18 +33,12 @@ function displayDescription(sc: Shortcut, t: TranslateFn): string {
 }
 
 function matchesSearch(sc: Shortcut, q: string, t: TranslateFn): boolean {
-  if (!q) return true;
-  const needle = q.toLowerCase().trim();
-  if (!needle) return true;
-  const haystack = [
+  return searchMatcher(q)(
     displayLabel(sc, t),
     displayDescription(sc, t),
     formatShortcut(sc),
-    ...(getAliases(sc.id)?.map((a) => a.label) ?? []),
-  ]
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes(needle);
+    ...(getAliases(sc.id)?.map(formatShortcut) ?? []),
+  );
 }
 
 export default function ShortcutsSection() {
@@ -90,11 +86,12 @@ export default function ShortcutsSection() {
 
       e.preventDefault();
       e.stopPropagation();
+      if (secondaryModifier(e)) return;
 
-      const ctrl = e.ctrlKey || e.metaKey;
+      const ctrl = primaryModifier(e);
       const shift = e.shiftKey;
       const alt = e.altKey;
-      const key = e.key;
+      const key = chordKey(e);
 
       const existing = shortcuts.find((sc) => {
         if (sc.id === recording) return false;
@@ -210,8 +207,7 @@ export default function ShortcutsSection() {
                 {t(`settings.shortcuts.group.${group.id}`)}
               </h3>
               <div
-                className="rounded-xl overflow-hidden border bg-(--t-bg-card)"
-                style={{ borderColor: "var(--t-border)" }}
+                className={`overflow-hidden ${SETTINGS_SURFACE}`}
               >
                 {group.items.map((sc, idx) => {
                   const isRecording = recording === sc.id;
@@ -292,7 +288,7 @@ export default function ShortcutsSection() {
 
                         {aliases.map((alias) => (
                           <span
-                            key={alias.label}
+                            key={formatShortcut(alias)}
                             title={t("settings.shortcuts.aliasTitle")}
                             className="rounded-md text-[11px] font-mono leading-none text-(--t-text-muted)"
                             style={{
@@ -302,7 +298,7 @@ export default function ShortcutsSection() {
                               letterSpacing: "0.02em",
                             }}
                           >
-                            {alias.label}
+                            {formatShortcut(alias)}
                           </span>
                         ))}
                       </div>

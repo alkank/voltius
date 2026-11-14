@@ -1,13 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { pushSettingsChange, settingsStamp } from "./remoteApplyGuard";
+import { chordKey, primaryModifier, primaryModifierLabel, secondaryModifier } from "@/utils/primaryModifier";
 
 export interface ShortcutAlias {
   key: string;
   ctrl: boolean;
   shift: boolean;
   alt: boolean;
-  label: string;
 }
 
 export interface Shortcut {
@@ -26,11 +26,11 @@ export interface Shortcut {
 /** Static alias definitions — not persisted, always active */
 const ALIASES: Record<string, ShortcutAlias[]> = {
   omni: [
-    { key: "P",  ctrl: true,  shift: true,  alt: false, label: "Ctrl+Shift+P" },
-    { key: "F1", ctrl: false, shift: false, alt: false, label: "F1" },
+    { key: "P",  ctrl: true,  shift: true,  alt: false },
+    { key: "F1", ctrl: false, shift: false, alt: false },
   ],
   redo: [
-    { key: "y", ctrl: true, shift: false, alt: false, label: "Ctrl+Y" },
+    { key: "y", ctrl: true, shift: false, alt: false },
   ],
 };
 
@@ -54,6 +54,7 @@ const DEFAULTS: Omit<Shortcut, "key">[] = [
   { id: "prev-tab",        labelKey: "settings.shortcuts.items.prevTab.label",         descriptionKey: "settings.shortcuts.items.prevTab.desc",         defaultKey: "Tab",    ctrl: true,  shift: true,  alt: false },
   { id: "sidebar",         labelKey: "settings.shortcuts.items.sidebar.label",         descriptionKey: "settings.shortcuts.items.sidebar.desc",         defaultKey: "b",      ctrl: true,  shift: false, alt: false },
   { id: "delete",          labelKey: "settings.shortcuts.items.delete.label",          descriptionKey: "settings.shortcuts.items.delete.desc",          defaultKey: "Delete", ctrl: false, shift: false, alt: false },
+  { id: "rename",          labelKey: "settings.shortcuts.items.rename.label",          descriptionKey: "settings.shortcuts.items.rename.desc",          defaultKey: "F2",     ctrl: false, shift: false, alt: false },
   { id: "undo",            labelKey: "settings.shortcuts.items.undo.label",            descriptionKey: "settings.shortcuts.items.undo.desc",            defaultKey: "z",      ctrl: true,  shift: false, alt: false },
   { id: "redo",            labelKey: "settings.shortcuts.items.redo.label",            descriptionKey: "settings.shortcuts.items.redo.desc",            defaultKey: "z",      ctrl: true,  shift: true,  alt: false },
   { id: "filter",          labelKey: "settings.shortcuts.items.filter.label",          descriptionKey: "settings.shortcuts.items.filter.desc",          defaultKey: "f",      ctrl: true,  shift: false, alt: false },
@@ -61,6 +62,7 @@ const DEFAULTS: Omit<Shortcut, "key">[] = [
   { id: "history",         labelKey: "settings.shortcuts.items.history.label",         descriptionKey: "settings.shortcuts.items.history.desc",         defaultKey: "h",      ctrl: true,  shift: true,  alt: false },
   { id: "snippets",        labelKey: "settings.shortcuts.items.snippets.label",        descriptionKey: "settings.shortcuts.items.snippets.desc",        defaultKey: "s",      ctrl: true,  shift: true,  alt: false },
   { id: "panel-themes",    labelKey: "settings.shortcuts.items.panelThemes.label",     descriptionKey: "settings.shortcuts.items.panelThemes.desc",     defaultKey: "t",      ctrl: true,  shift: true,  alt: false },
+  { id: "panel-notes",     labelKey: "settings.shortcuts.items.panelNotes.label",      descriptionKey: "settings.shortcuts.items.panelNotes.desc",      defaultKey: "n",      ctrl: true,  shift: true,  alt: false },
   { id: "copy",  labelKey: "settings.shortcuts.items.copy.label",  descriptionKey: "settings.shortcuts.items.copy.desc",  defaultKey: "c", ctrl: true, shift: false, alt: false },
   { id: "cut",   labelKey: "settings.shortcuts.items.cut.label",   descriptionKey: "settings.shortcuts.items.cut.desc",   defaultKey: "x", ctrl: true, shift: false, alt: false },
   { id: "paste", labelKey: "settings.shortcuts.items.paste.label", descriptionKey: "settings.shortcuts.items.paste.desc", defaultKey: "v", ctrl: true, shift: false, alt: false },
@@ -109,7 +111,7 @@ export const useShortcutStore = create<ShortcutStore>()(
     {
       name: "voltius-shortcuts",
       // Bump on every DEFAULTS addition: migrate is what merges new entries into a persisted set.
-      version: 7,
+      version: 9,
       // v5: label/description (literal English strings) → labelKey/descriptionKey
       // (i18n keys resolved at render time). Re-derive keys from `id`; drop the
       // stale literal fields so old English text can't linger in persisted state.
@@ -143,16 +145,12 @@ function normalizeKey(k: string): string {
 
 export function matchShortcut(id: string, e: KeyboardEvent): boolean {
   const sc = useShortcutStore.getState().shortcuts.find((s) => s.id === id);
-  if (!sc) return false;
-  const ctrl = e.ctrlKey || e.metaKey;
-
-  // Check primary
-  if (ctrl === sc.ctrl && e.shiftKey === sc.shift && e.altKey === (sc.alt ?? false) && normalizeKey(e.key) === normalizeKey(sc.key)) return true;
-
-  // Check static aliases
-  return ALIASES[id]?.some(
-    (a) => ctrl === a.ctrl && e.shiftKey === a.shift && e.altKey === (a.alt ?? false) && normalizeKey(e.key) === normalizeKey(a.key),
-  ) ?? false;
+  if (!sc || secondaryModifier(e)) return false;
+  const ctrl = primaryModifier(e);
+  const key = normalizeKey(chordKey(e));
+  const matches = (b: ShortcutAlias) =>
+    ctrl === b.ctrl && e.shiftKey === b.shift && e.altKey === (b.alt ?? false) && key === normalizeKey(b.key);
+  return matches(sc) || (ALIASES[id]?.some(matches) ?? false);
 }
 
 export function getShortcutHint(id: string): string | undefined {
@@ -160,11 +158,16 @@ export function getShortcutHint(id: string): string | undefined {
   return sc ? formatShortcut(sc) : undefined;
 }
 
-export function formatShortcut(sc: Shortcut): string {
+export function useShortcutHint(id: string): string | undefined {
+  const sc = useShortcutStore((s) => s.shortcuts.find((x) => x.id === id));
+  return sc ? formatShortcut(sc) : undefined;
+}
+
+export function formatShortcut(sc: ShortcutAlias): string {
   const parts: string[] = [];
-  if (sc.ctrl) parts.push("Ctrl");
+  if (sc.ctrl) parts.push(primaryModifierLabel(sc.key, sc.alt));
   if (sc.alt) parts.push("Alt");
   if (sc.shift) parts.push("Shift");
-  parts.push(sc.key === " " ? "Space" : sc.key);
+  parts.push(sc.key === " " ? "Space" : sc.key.length === 1 ? sc.key.toUpperCase() : sc.key);
   return parts.join("+");
 }

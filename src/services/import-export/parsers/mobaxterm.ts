@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
+import { importedBundle } from "../formats";
 import type { ConnectionExport, ExportBundle, IdentityExport } from "../formats";
 
 // INI file format. Each [Bookmarks_N] section has SubRep=FolderName, then
@@ -38,8 +39,8 @@ export function connectionsFromMobaXterm(text: string): ConnectionExport[] {
     // fields[0]=flags, [1]=host, [2]=port, [3]=username, [4]=auth
     const host = fields[1]?.trim();
     const port = parseInt(fields[2] ?? "22", 10) || 22;
-    const username = fields[3]?.trim();
-    if (!host || !username) continue;
+    const username = fields[3]?.trim() ?? "";
+    if (!host) continue;
 
     const auth_type: "key" | "password" = fields[4]?.trim() === "3" ? "key" : "password";
 
@@ -99,14 +100,5 @@ export async function extractMobaXtermBundle(): Promise<ExportBundle> {
     password: cr.password,
   }));
 
-  return {
-    version: 1,
-    exported_at: "",
-    folders: [],
-    connections,
-    identities,
-    keys: [],
-    snippets: [],
-    portForwardingRules: [],
-  };
+  return importedBundle({ connections, identities });
 }

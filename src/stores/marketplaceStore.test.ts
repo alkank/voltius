@@ -19,6 +19,7 @@ vi.mock("@/i18n", () => ({ default: { t: (k: string) => k } }));
 vi.mock("@/services/http", () => ({ appFetch: vi.fn() }));
 vi.mock("@/stores/pluginRegistryStore", () => ({
   usePluginRegistryStore: { getState: () => ({ isEnabled: () => true }) },
+  installAllowed: () => true,
 }));
 
 import { useMarketplaceStore, restoreMissingPlugins, FIRST_PARTY_SOURCE, type MarketplacePlugin } from "./marketplaceStore";
@@ -380,4 +381,19 @@ test("a manifest id that differs from the catalogue id aborts before anything is
 // would resolve to a source id nothing on the device recognises.
 test("the deep-link default plugin source id is the first-party source's own id", () => {
   expect(DEFAULT_PLUGIN_SOURCE_ID).toBe(FIRST_PARTY_SOURCE.id);
+});
+
+test("restore ignores a retired plugin missing on disk without installing or warning", async () => {
+  restoreSetup();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  useMarketplaceStore.setState({
+    installedMeta: [{ id: "plugin-ssh-config", version: "1.0.0", sourceId: "voltius", hash: JS_HASH, repo: "https://example.com/p" }],
+  });
+
+  await restoreMissingPlugins();
+
+  expect(h.loadPlugin).not.toHaveBeenCalled();
+  expect(h.invoke.mock.calls.some(([cmd]) => cmd === "plugin_fetch_url")).toBe(false);
+  expect(warn).not.toHaveBeenCalled();
+  warn.mockRestore();
 });

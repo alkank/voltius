@@ -1,5 +1,6 @@
 import { test, expect } from "vitest";
 import { intentKey, isAttenuatedIntent, isConfirmIntent, isNavigateIntent, isUnpromptedIntent, parseDeepLink, buildDeepLink, DEFAULT_PLUGIN_SOURCE_ID, type SilentIntent } from "./deepLinkUrl";
+import { buildEnrollmentToken } from "@/services/enrollment/enrollmentToken";
 
 const SESSION = "3f2504e0-4f89-11d3-9a0c-0305e82c3301";
 const TOKEN = "deadbeefdeadbeefdeadbeefdeadbeef";
@@ -195,6 +196,7 @@ test("the navigate routes are not confirm routes", () => {
     "voltius://notification",
     "voltius://settings?section=account",
     "voltius://billing",
+    "voltius://port-forwarding",
   ]) {
     const intent = parseDeepLink(url)!;
     expect(isNavigateIntent(intent)).toBe(true);
@@ -208,6 +210,7 @@ test("builds the navigate routes in both forms and round-trips them", () => {
     { route: "notification", entryId: null },
     { route: "settings", section: "sync" },
     { route: "billing" },
+    { route: "port-forwarding" },
   ] as const;
   for (const intent of intents) {
     for (const form of ["scheme", "https"] as const) {
@@ -315,4 +318,41 @@ test("a vault-join link carries no account id", () => {
   const url = buildDeepLink({ route: "vault-join", grantId: GRANT, secret: SECRET }, "scheme");
   const params = new URLSearchParams(url.slice(url.indexOf("?") + 1));
   expect([...params.keys()].sort()).toEqual(["g", "k"]);
+});
+
+const HOST = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
+
+test("connect carries a host id and is an unprompted route", () => {
+  const intent = parseDeepLink(`voltius://connect?host=${HOST}`);
+  expect(intent).toEqual({ route: "connect", hostId: HOST });
+  expect(isAttenuatedIntent(intent!)).toBe(true);
+  expect(isUnpromptedIntent(intent!)).toBe(true);
+  expect(buildDeepLink({ route: "connect", hostId: HOST }, "scheme")).toBe(`voltius://connect?host=${HOST}`);
+});
+
+test("connect rejects a missing or malformed host id", () => {
+  expect(parseDeepLink("voltius://connect")).toBeNull();
+  expect(parseDeepLink("voltius://connect?host=")).toBeNull();
+  expect(parseDeepLink("voltius://connect?host=../etc")).toBeNull();
+  expect(parseDeepLink(`voltius://connect?host=${"a".repeat(65)}`)).toBeNull();
+});
+
+test("connect is scheme-only: the https App Link form never carries it", () => {
+  expect(parseDeepLink(`https://voltius.app/open#connect?host=${HOST}`)).toBeNull();
+});
+
+const ENROLL_TOKEN = buildEnrollmentToken("https://voltius.acme.com/api", "0123456789abcdef0123456789abcdef", SECRET);
+
+test("an enroll link round-trips through both forms as a confirm intent", () => {
+  const intent = { route: "enroll" as const, token: ENROLL_TOKEN };
+  expect(parseDeepLink(buildDeepLink(intent, "scheme"))).toEqual(intent);
+  expect(parseDeepLink(buildDeepLink(intent, "https"))).toEqual(intent);
+  expect(buildDeepLink(intent)).toBe(`https://voltius.app/open#enroll?t=${ENROLL_TOKEN}`);
+  expect(isConfirmIntent(intent)).toBe(true);
+});
+
+test("an enroll link with a malformed token is rejected", () => {
+  expect(parseDeepLink("voltius://enroll")).toBeNull();
+  expect(parseDeepLink("voltius://enroll?t=nonsense")).toBeNull();
+  expect(parseDeepLink(`https://voltius.app/open#enroll?t=${ENROLL_TOKEN}x`)).toBeNull();
 });

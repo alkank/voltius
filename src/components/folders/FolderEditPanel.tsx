@@ -1,68 +1,98 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Icon } from "@iconify/react";
 import { useAutosave } from "@/hooks/useAutosave";
-import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
-import { PanelShell, PanelHeader } from "@/components/shared/Panel";
+import {
+  PanelShell,
+  PanelHeader,
+  FormSection,
+  formInputClass,
+  formInputStyle,
+  formLabelClass,
+  formLabelStyle,
+} from "@/components/shared/Panel";
 import { PanelActionsMenu } from "@/components/shared/PanelActionsMenu";
+import { IconTileButton } from "@/components/shared/IconTileButton";
+import { PinButton } from "@/components/shared/PinButton";
 import { VaultPicker } from "@/components/shared/VaultPicker";
-import { vaultMenuItems } from "@/utils/vaultMenuItems";
+import FolderSelector from "@/components/shared/FolderSelector";
+import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { revertIfMoveCancelled } from "@/services/teamObjectPersistence";
+import { clipboardMenuItems } from "@/utils/clipboardMenuItems";
+import { buildFolderMenuItems } from "@/utils/folderMenuItems";
+import { FolderAppearancePicker, folderIcon, type FolderAppearance } from "./folderAppearance";
+import { useFolderPin } from "./useFolderPin";
+import { useFolderSync } from "./useFolderSync";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 import type { Folder, FolderFormData, VaultOption } from "@/types";
 
 interface FolderEditPanelProps {
   folder: Folder;
-  onUpdate: (id: string, data: FolderFormData) => void;
+  onUpdate: (id: string, data: FolderFormData) => void | Promise<void>;
   onDelete: (folder: Folder) => void;
   onExport?: () => void;
+  onShare?: () => void;
   onClose: () => void;
+  onOpen: () => void;
+  onSelectSelf: () => void;
+  parentOptions?: Folder[];
   vaults?: VaultOption[];
-  canEdit?: boolean;
   onMoveToVault?: (vaultId: string) => void;
   onCopyToVault?: (vaultId: string) => void;
-  /** Sync object type used to check per-object and global sync state. Defaults to "folder". */
-  syncObjectType?: string;
 }
 
-export function FolderEditPanel({
+export const FolderEditPanel = withEditAccess("folder", (p: FolderEditPanelProps) => p.folder, FolderEditPanelEditor);
+
+function FolderEditPanelEditor({
   folder,
   onUpdate,
   onDelete,
   onExport,
+  onShare,
   onClose,
+  onOpen,
+  onSelectSelf,
+  parentOptions,
   vaults,
-  canEdit,
   onMoveToVault,
   onCopyToVault,
-  syncObjectType = "folder",
-}: FolderEditPanelProps) {
+  readOnly,
+}: FolderEditPanelProps & EditAccessProps) {
   const { t } = useTranslation();
-  const [name, setName]       = useState(folder.name);
-  const [vaultId, setVaultId] = useState(folder.vault_id ?? "personal");
-  const isSynced     = useSyncPrefsStore((s) => s.isObjectSynced(folder.id, syncObjectType));
-  const toggleExcluded = useSyncPrefsStore((s) => s.toggleExcluded);
-  const isTypeSynced = useSyncPrefsStore((s) => s.isTypeSynced(syncObjectType));
+  const [name, setName]         = useState(folder.name);
+  const [vaultId, setVaultId]   = useState(folder.vault_id ?? "personal");
+  const [parentId, setParentId] = useState<string | null>(folder.parent_folder_id ?? null);
+  const [appearance, setAppearance] = useState<FolderAppearance>({ color: folder.color, icon: folder.icon });
+  const [showAppearance, setShowAppearance] = useState(false);
+  const nameRowRef = useRef<HTMLDivElement>(null);
+  const sync = useFolderSync(folder);
+  const pin = useFolderPin(folder, !readOnly);
 
-  // Reset when switching to a different folder
   useEffect(() => {
     setName(folder.name);
     setVaultId(folder.vault_id ?? "personal");
-  }, [folder.id, folder.name, folder.vault_id]);
+    setParentId(folder.parent_folder_id ?? null);
+    setAppearance({ color: folder.color, icon: folder.icon });
+  }, [folder.id, folder.name, folder.vault_id, folder.parent_folder_id, folder.color, folder.icon]);
 
   const buildFormData = (overrides?: Partial<FolderFormData>): FolderFormData => ({
     name: name.trim() || folder.name,
     object_type: folder.object_type,
-    parent_folder_id: folder.parent_folder_id,
+    parent_folder_id: parentId ?? undefined,
     vault_id: vaultId,
+    color: appearance.color,
+    icon: appearance.icon,
     ...overrides,
   });
 
   const { schedule, markDirty, flushAndClose, saveState } = useAutosave({
     onSave: () => onUpdate(folder.id, buildFormData()),
     canSave: () => !!name.trim(),
+    readOnly,
   });
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => schedule(), [name]);
+  useEffect(() => schedule(), [name, appearance]);
 
   const handleClose = () => flushAndClose(onClose);
 
@@ -72,98 +102,70 @@ export function FolderEditPanel({
     onUpdate(folder.id, buildFormData({ vault_id: id }));
   };
 
-  const panelActions = [
-    ...(onExport ? [{ label: t("folders.card.exportFolder"), icon: "lucide:upload", onClick: onExport }] : []),
-    ...vaultMenuItems(vaults, canEdit, onMoveToVault, onCopyToVault, t),
-    {
-      label: isSynced ? t("folders.card.disableCloudSync") : t("folders.card.enableCloudSync"),
-      icon: isSynced ? "lucide:cloud-off" : "lucide:cloud",
-      onClick: () => toggleExcluded(folder.id),
-    },
-  ];
+  const handleParentChange = (id: string | null) => {
+    setParentId(id);
+    void Promise.resolve(onUpdate(folder.id, buildFormData({ parent_folder_id: id ?? undefined })))
+      .catch(revertIfMoveCancelled(() => setParentId(folder.parent_folder_id ?? null)));
+  };
+
+  const menuItems = buildFolderMenuItems({
+    t,
+    onOpen,
+    pinItem: pin.pinItem,
+    pinTeamItem: pin.pinTeamItem,
+    onExport,
+    onShare,
+    vaults,
+    canEdit: !readOnly,
+    onMoveToVault,
+    onCopyToVault,
+    clipboard: clipboardMenuItems(t).map((i) => ({ ...i, onClick: () => { flushSync(onSelectSelf); i.onClick?.(); } })),
+    ...sync,
+    onDelete: () => onDelete(folder),
+  });
 
   return (
     <PanelShell>
       <PanelHeader
-        icon="lucide:folder"
-        title={t("common.entity.folder")}
-        subtitle={<VaultPicker vaultId={vaultId} onChange={handleVaultChange} />}
+        icon="lucide:pencil"
+        title={t("folders.editPanel.title")}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={handleVaultChange} disabled={readOnly} />}
         onClose={handleClose}
         saveState={saveState}
-        actions={<PanelActionsMenu items={panelActions} />}
+        actions={<><PinButton pinned={pin.effPinned} onToggle={pin.togglePin} /><PanelActionsMenu items={menuItems} /></>}
       />
-
-      <div className="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-5">
-        {/* Name */}
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{t("folders.editPanel.nameLabel")}</label>
-          <input
-            className="form-input w-full px-3 py-2 rounded-lg text-sm outline-hidden bg-(--t-bg-input) border border-(--t-border) text-(--t-text-bright)"
-            value={name}
-            onChange={(e) => { markDirty(); setName(e.target.value); }}
-            onKeyDown={(e) => e.key === "Escape" && setName(folder.name)}
-          />
-        </div>
-
-        {/* Cloud sync */}
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{t("folders.editPanel.cloudSyncLabel")}</label>
-          <button
-            className={`flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors bg-(--t-bg-input) border border-(--t-border) ${isTypeSynced ? "cursor-pointer" : "cursor-default"}`}
-            style={{ opacity: isTypeSynced ? 1 : 0.5 }}
-            onClick={() => { if (isTypeSynced) toggleExcluded(folder.id); }}
-          >
-            <div className="flex items-center gap-2">
-              <Icon
-                icon={isSynced ? "lucide:cloud" : "lucide:cloud-off"}
-                width={15}
-                style={{ color: isSynced ? "var(--t-accent)" : "var(--t-text-dim)" }}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        <ReadOnlyFields readOnly={readOnly}>
+        <FormSection label={t("folders.editPanel.general")}>
+          <div>
+            <label className={formLabelClass} style={formLabelStyle}>{t("folders.editPanel.nameLabel")}</label>
+            <div ref={nameRowRef} className="relative flex gap-2.5">
+              <IconTileButton
+                icon={folderIcon(appearance)}
+                base={appearance.color}
+                title={t("folders.appearance.change")}
+                ariaLabel={t("folders.appearance.change")}
+                onClick={() => setShowAppearance((v) => !v)}
               />
-              <span className="text-sm text-(--t-text-primary)">
-                {isSynced ? t("folders.editPanel.syncedToCloud") : t("folders.editPanel.notSynced")}
-              </span>
-            </div>
-            <div
-              className="w-8 h-4 rounded-full transition-colors relative"
-              style={{ background: isSynced ? "var(--t-accent)" : "var(--t-border-hover)" }}
-            >
-              <div
-                className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all"
-                style={{ left: isSynced ? "calc(100% - 14px)" : "2px" }}
+              <input className={formInputClass} style={formInputStyle} value={name}
+                onChange={(e) => { markDirty(); setName(e.target.value); }}
+                onKeyDown={(e) => e.key === "Escape" && setName(folder.name)} />
+              <FolderAppearancePicker
+                open={showAppearance}
+                onClose={() => setShowAppearance(false)}
+                anchorRef={nameRowRef}
+                value={appearance}
+                onChange={(next) => { markDirty(); setAppearance(next); }}
               />
             </div>
-          </button>
-          {!isTypeSynced && (
-            <p className="text-xs text-(--t-text-dim)">
-              {t("folders.editPanel.syncDisabledGlobally")}
-            </p>
-          )}
-        </div>
-
-        {/* Meta */}
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{t("folders.editPanel.createdLabel")}</label>
-          <p className="text-sm text-(--t-text-secondary)">
-            {new Date(folder.created_at).toLocaleString()}
-          </p>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-t-(--t-border)">
-        <button
-          className="flex items-center gap-2 w-full justify-center px-3 py-2 rounded-lg text-sm transition-colors text-(--t-danger)"
-          style={{
-            background: "transparent",
-            border: "1px solid color-mix(in srgb, var(--t-danger) 40%, transparent)",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "color-mix(in srgb, var(--t-danger) 8%, transparent)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          onClick={() => onDelete(folder)}
-        >
-          <Icon icon="lucide:trash-2" width={14} />
-          {t("folders.card.deleteFolder")}
-        </button>
+          </div>
+          <div>
+            <label className={formLabelClass} style={formLabelStyle}>{t("folders.editPanel.parentLabel")}</label>
+            <FolderSelector value={parentId} folders={(parentOptions ?? []).filter((f) => (f.vault_id ?? "personal") === vaultId)} onChange={handleParentChange} />
+          </div>
+        </FormSection>
+        </ReadOnlyFields>
+        <PermissionsSection objectId={folder.id} vaultId={folder.vault_id} type={pin.folderType} />
       </div>
     </PanelShell>
   );

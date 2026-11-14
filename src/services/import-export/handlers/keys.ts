@@ -1,10 +1,10 @@
 import { storeSecret } from "@/services/vault";
 import type { SshKey } from "@/types";
 import type { DataTypeHandler } from "../handler";
-import type { ExportBundle, KeyExport } from "../formats";
+import type { ExportBundle, KeyExport, KeyRefExport } from "../formats";
 import type { ExportCtx, ImportCtx, ReloadFns } from "../context";
-import { liveInVault, selectionMethods } from "../context";
-import { saveTeamVaultSecretForVault } from "@/services/teamVaultSecrets";
+import { dupesOf, resolveRefs, selectionMethods, skipItem } from "../context";
+import { reportUploadFailure } from "@/services/secretRouting";
 import { fetchKeySecrets, storeKeySecrets } from "../secretsLogic";
 
 export const keysHandler: DataTypeHandler = {
@@ -12,7 +12,7 @@ export const keysHandler: DataTypeHandler = {
   label: "SSH Keys",
   jsonOnly: true,
 
-  ...selectionMethods<SshKey>("keys", "keys", s => s.keys),
+  ...selectionMethods<SshKey>("keys", "keys", s => s.keys, "keychain"),
 
   async buildExports(items: unknown[], ctx: ExportCtx, bundle: ExportBundle) {
     const keys = items as SshKey[];
@@ -23,23 +23,22 @@ export const keysHandler: DataTypeHandler = {
       name: k.name,
       key_type: k.key_type,
       tags: k.tags,
-      ...(await fetchKeySecrets(k.id, ctx.readSecret(k.vault_id))),
+      ...(await fetchKeySecrets(k.id, ctx.readSecret(k))),
       _folder_eid: k.folder_id ? ctx.folderEidMap.get(k.folder_id) : undefined,
     })));
+    const refs = await Promise.all(ctx.keyRefs.map(async (k, i): Promise<KeyRefExport | null> => {
+      const public_key = await ctx.publicKey(k);
+      return public_key ? { _eid: `kr${i}`, name: k.name, public_key } : null;
+    }));
+    bundle.keyRefs = refs.filter((r): r is KeyRefExport => r !== null);
+    ctx.keyRefs.forEach((k, i) => { if (refs[i]) ctx.keyEidMap.set(k.id, `kr${i}`); });
   },
 
   async importItems(bundle: ExportBundle, ctx: ImportCtx) {
     let imported = 0; let errors = 0;
-    const existing = liveInVault(ctx.existingKeys, ctx.vault_id);
-    const existingNames = new Set(existing.map(k => k.name));
+    resolveRefs(bundle.keyRefs, dupesOf(ctx).keyRef, ctx.keyEidMap);
     for (const key of bundle.keys) {
-      if (ctx.skipDupes && key.name && existingNames.has(key.name)) {
-        if (key._eid) {
-          const match = existing.find(k => k.name === key.name);
-          if (match) ctx.keyEidMap.set(key._eid, match.id);
-        }
-        continue;
-      }
+      if (skipItem(ctx, key, dupesOf(ctx).key(key), ctx.keyEidMap)) continue;
       try {
         const saved = await ctx.stores.saveKey({
           name: key.name, key_type: key.key_type,
@@ -47,10 +46,9 @@ export const keysHandler: DataTypeHandler = {
           folder_id: key._folder_eid ? ctx.folderEidMap.get(key._folder_eid) : undefined,
           vault_id: ctx.vault_id,
         });
-        await storeKeySecrets(key, saved.id, async (k, value) => {
-          await storeSecret(k, value);
-          await saveTeamVaultSecretForVault(ctx.vault_id, k, value).catch(() => {});
-        });
+        await storeKeySecrets(key, saved.id, (k, value) =>
+          storeSecret(k, value).catch(reportUploadFailure("import")),
+        );
         if (key._eid) ctx.keyEidMap.set(key._eid, saved.id);
         imported++;
       } catch { errors++; }

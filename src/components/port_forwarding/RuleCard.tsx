@@ -1,10 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { Icon } from "@iconify/react";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import type { PortForwardingRule, VaultOption } from "@/types";
 import { formatRuleLabel } from "@/utils/tunnelFormat";
 import { BaseCard } from "@/components/shared/BaseCard";
-import { CardActionButton } from "@/components/shared/CardActionButton";
+import { CardActionButton, CardMenuButton } from "@/components/shared/CardActionButton";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { tunnelStatusTone } from "@/utils/statusTone";
 import { type ContextMenuItem } from "@/components/shared/ContextMenu";
@@ -13,6 +12,10 @@ import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
 import { vaultMenuItems } from "@/utils/vaultMenuItems";
 import { getShortcutHint } from "@/stores/shortcutStore";
 import { clipboardMenuItems } from "@/utils/clipboardMenuItems";
+import { ruleToForm } from "@/utils/portForwardingForm";
+import { useInlineRename } from "@/hooks/useInlineRename";
+import { usePortForwardingStore } from "@/stores/portForwardingStore";
+import { PORT_FORWARDING_ICON } from "@/lib/conceptIcons";
 
 interface Props {
   rule: PortForwardingRule;
@@ -55,9 +58,12 @@ export function RuleCard({
   const isList = layout === "list";
   const contributions = useUIContributions("portForwardingRule.contextMenu", rule);
   const isSynced = useSyncPrefsStore((s) => s.isObjectSynced(rule.id, "port-forwarding-rule"));
+  const updateRule = usePortForwardingStore((s) => s.updateRule);
+  const rename = useInlineRename(rule.id, canEdit, rule.name, (name) => { void updateRule(rule.id, ruleToForm(rule, { name })); });
 
   const contextMenuItems: ContextMenuItem[] = [
     ...(canEdit ? [{ label: t("common.action.edit"), icon: "lucide:pencil", onClick: () => onEdit(rule), shortcut: "E" }] : []),
+    ...rename.menuItems,
     ...(status === "active" && onStop ? [{ label: t("portForwarding.ruleCard.pause"), icon: "lucide:pause", onClick: () => onStop(rule) }] : []),
     ...(status !== "active" && onStart ? [{ label: t("portForwarding.ruleCard.resume"), icon: "lucide:play", onClick: () => onStart(rule) }] : []),
     ...(webUrl && onOpenWeb ? [{ label: t("portForwarding.ruleCard.openWebLink"), icon: "lucide:globe", onClick: () => onOpenWeb(webUrl) }] : []),
@@ -72,7 +78,7 @@ export function RuleCard({
       t,
     ),
     {
-      label: isSynced ? t("portForwarding.ruleCard.disableCloudSync") : t("portForwarding.ruleCard.enableCloudSync"),
+      label: isSynced ? t("common.objectSync.disable") : t("common.objectSync.enable"),
       icon: isSynced ? "lucide:cloud-off" : "lucide:cloud",
       onClick: () => useSyncPrefsStore.getState().toggleExcluded(rule.id),
       divider: true,
@@ -99,6 +105,7 @@ export function RuleCard({
     </span>
   );
   const effectiveStatusLabel = statusLabel ?? (status === "active" ? t("portForwarding.ruleCard.active") : status === "error" ? t("portForwarding.ruleCard.error") : t("portForwarding.ruleCard.stopped"));
+  const statusLabelClass = status === "error" ? "text-red-400" : "text-(--t-text-dim)";
   const actionIcon = isBusy ? "lucide:loader-circle" : status === "active" ? "lucide:pause" : "lucide:play";
   const actionTitle = status === "active" ? t("portForwarding.ruleCard.pauseForwarding") : t("portForwarding.ruleCard.resumeForwarding");
   const handleToggle = () => {
@@ -108,12 +115,11 @@ export function RuleCard({
   const statusDot = (
     <StatusDot tone={tunnelStatusTone(status)} halo="var(--t-bg-card)" corner label={effectiveStatusLabel} />
   );
-  const actionButtons = (
-    <div className="flex items-center gap-1 shrink-0">
-      <CardActionButton icon={actionIcon} title={actionTitle} onClick={handleToggle} />
-      {canEdit && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} onClick={() => onDelete(rule.id)} danger />}
-      {webUrl && onOpenWeb && <CardActionButton icon="lucide:globe" title={t("portForwarding.ruleCard.openUrl", { url: webUrl })} onClick={() => onOpenWeb(webUrl)} />}
-    </div>
+  const webButton = (reveal: boolean) => webUrl && onOpenWeb && (
+    <CardActionButton icon="lucide:globe" title={t("portForwarding.ruleCard.openUrl", { url: webUrl })} reveal={reveal} onClick={() => onOpenWeb(webUrl)} />
+  );
+  const toggleButton = (
+    <CardActionButton icon={actionIcon} title={actionTitle} reveal={false} iconClassName={isBusy ? "animate-spin" : undefined} onClick={handleToggle} />
   );
 
   return (
@@ -128,17 +134,18 @@ export function RuleCard({
       className={dimmed ? "opacity-50" : ""}
       onPointerDown={onPointerDown}
       onClick={(e) => onSelect?.(rule.id, e)}
+      onDoubleClick={() => onEdit(rule)}
       bulkContextMenuItems={bulkContextMenuItems}
       contextMenuItems={contextMenuItems}
     >
       {isList ? (
         <>
           <div className="relative shrink-0">
-            <AvatarTile icon="lucide:network" iconSize={15} className="w-7 h-7 rounded-lg text-(--t-text-secondary)" />
+            <AvatarTile icon={PORT_FORWARDING_ICON} iconSize={15} className="w-7 h-7 rounded-lg text-(--t-text-secondary)" />
             {statusDot}
           </div>
           <p className="text-sm font-medium-bold truncate w-52 shrink-0 text-(--t-text-bright)">
-            {rule.name}
+            {rename.editor ?? rule.name}
           </p>
           {typeBadge}
           <p className="text-xs truncate flex-1 text-(--t-text-secondary) font-mono">
@@ -158,21 +165,25 @@ export function RuleCard({
               {rule.description}
             </p>
           )}
-          <span className="text-xs text-(--t-text-dim) shrink-0 hidden md:inline">{effectiveStatusLabel}</span>
-          {actionButtons}
+          <span title={effectiveStatusLabel} className={`text-xs shrink-0 hidden md:inline max-w-72 truncate ${statusLabelClass}`}>{effectiveStatusLabel}</span>
+          <div className="flex items-center gap-1 shrink-0">
+            {webButton(true)}
+            {canEdit && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} onClick={() => onDelete(rule.id)} danger />}
+            {toggleButton}
+            <CardMenuButton />
+          </div>
         </>
       ) : (
         <div className="flex-1 min-w-0 self-start flex flex-col gap-3">
           <div className="flex items-start gap-2 min-w-0">
             <div className="relative shrink-0">
-              <AvatarTile icon="lucide:network" iconSize={16} className="w-[30px] h-[30px] rounded-lg text-(--t-text-secondary)" />
+              <AvatarTile icon={PORT_FORWARDING_ICON} iconSize={16} className="w-[30px] h-[30px] rounded-lg text-(--t-text-secondary)" />
               {statusDot}
             </div>
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
               <div className="flex items-center gap-2 min-w-0">
-                <p className="text-sm font-bold truncate text-(--t-text-bright)">{rule.name}</p>
-                {typeBadge}
-                <span className="ml-auto text-xs font-medium text-(--t-text-dim) shrink-0">{effectiveStatusLabel}</span>
+                <p className="text-sm font-bold truncate text-(--t-text-bright)">{rename.editor ?? rule.name}</p>
+                <span className="ml-auto shrink-0">{typeBadge}</span>
               </div>
               <p className="text-xs font-mono text-(--t-text-secondary) truncate">{portLabel}</p>
             </div>
@@ -189,20 +200,11 @@ export function RuleCard({
               {t("portForwarding.ruleCard.connectionsCount", { count: rule.connection_ids.length })}
             </span>
           )}
-          <div className="flex items-center gap-3">
-            <button onClick={(e) => { e.stopPropagation(); handleToggle(); }} className="text-(--t-text-dim) hover:text-(--t-text-bright) transition-colors flex items-center" title={actionTitle}>
-              <Icon icon={actionIcon} width={18} className={isBusy ? "animate-spin" : undefined} />
-            </button>
-            {canEdit && (
-              <button onClick={(e) => { e.stopPropagation(); onDelete(rule.id); }} className="text-(--t-text-dim) hover:text-(--t-status-error) transition-colors flex items-center" title={t("common.action.delete")}>
-                <Icon icon="lucide:trash-2" width={18} />
-              </button>
-            )}
-            {webUrl && onOpenWeb && (
-              <button onClick={(e) => { e.stopPropagation(); onOpenWeb(webUrl); }} className="text-(--t-text-dim) hover:text-(--t-text-bright) transition-colors flex items-center" title={t("portForwarding.ruleCard.openUrl", { url: webUrl })}>
-                <Icon icon="lucide:globe" width={18} />
-              </button>
-            )}
+          <div className="flex items-center gap-0.5 -mb-1.5">
+            <span title={effectiveStatusLabel} className={`flex-1 min-w-0 truncate text-xs font-medium ${statusLabelClass}`}>{effectiveStatusLabel}</span>
+            {webButton(false)}
+            {toggleButton}
+            <CardMenuButton />
           </div>
         </div>
       )}

@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
-import { TOGGLE_DEFS, useToggle } from "@/stores/toggleSettingsStore";
+import { useToggle } from "@/stores/toggleSettingsStore";
 import { Toggle } from "@/components/shared/Toggle";
 import { FormSelect } from "@/components/shared/FormSelect";
 import { StatusDot } from "@/components/shared/StatusDot";
-import { DirtyDot, ResetButton } from "./shared";
+import { DirtyDot, ResetButton, RowControl, SETTINGS_SURFACE, useRowManaged } from "./shared";
 import { getMcpStatus } from "@/mcp/status";
 import { buildMcpClientSnippet, MCP_CLIENT_IDS, type McpClientId } from "@/mcp/clientSnippets";
 import { buildAddMcpCommand } from "@/mcp/registerCommand";
@@ -13,6 +13,8 @@ import { writeClipboard } from "@/utils/clipboard";
 import { contributionsByPlugin, onContributionsChanged } from "@/mcp/contributions";
 import { useMcpContributionStore, setPluginExposed } from "@/stores/mcpContributionStore";
 import { getLoadedPlugins } from "@/plugins/runtime";
+import { useCopiedFlash } from "@/hooks/useCopiedFlash";
+import { useSettingState } from "@/components/settings/registry/useSettingState";
 
 /** The installed plugin's manifest name, falling back to its id: a contribution
  *  can outlive the plugin's load, and only the id is always available. */
@@ -21,16 +23,11 @@ function pluginDisplayName(pluginId: string): string {
 }
 
 function useCopy(value: string) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => () => clearTimeout(timer.current), []);
+  const { copied, flash } = useCopiedFlash(1500);
 
   async function copy() {
     await writeClipboard(value);
-    setCopied(true);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 1500);
+    flash();
   }
 
   return { copied, copy };
@@ -104,6 +101,8 @@ const CLIENT_HELP_KEYS: Record<McpClientId, string> = {
 export default function IntegrationsSection() {
   const { t } = useTranslation();
   const [mcpServer, setMcpServer] = useToggle("mcp-server");
+  const mcpState = useSettingState("toggles.mcp-server");
+  const mcpManaged = useRowManaged("appSettings.toggles.mcp-server");
   const [status, setStatus] = useState<{ enabled: boolean; exePath: string; socketPath: string } | null>(null);
   const [clientId, setClientId] = useState<McpClientId>("claude-code");
   const [manualOpen, setManualOpen] = useState(false);
@@ -134,12 +133,12 @@ export default function IntegrationsSection() {
   }, [mcpServer]);
 
   return (
-    <div className="p-6 max-w-lg space-y-6">
+    <div className="p-6 space-y-6">
       <div>
         <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
           {t("settings.integrations.mcp.title")}
         </h3>
-        <div className="rounded-lg bg-(--t-bg-elevated) border border-(--t-border)">
+        <div className={SETTINGS_SURFACE}>
           <div className="group flex items-start justify-between px-4 py-3 gap-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -154,11 +153,13 @@ export default function IntegrationsSection() {
               <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.integrations.mcp.sub")}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {mcpServer !== TOGGLE_DEFS["mcp-server"].default && (
-                <ResetButton onReset={() => setMcpServer(TOGGLE_DEFS["mcp-server"].default)} />
+              {mcpState.dirty && !mcpManaged.locked && (
+                <>
+                  {mcpState.canReset && <ResetButton onReset={mcpState.reset} />}
+                  <DirtyDot />
+                </>
               )}
-              {mcpServer !== TOGGLE_DEFS["mcp-server"].default && <DirtyDot />}
-              <Toggle checked={mcpServer} onChange={setMcpServer} />
+              <RowControl managed={mcpManaged}><Toggle checked={mcpServer} onChange={setMcpServer} /></RowControl>
             </div>
           </div>
           {status && (
@@ -239,7 +240,7 @@ export default function IntegrationsSection() {
           {t("settings.integrations.mcp.plugins.title")}
         </h3>
         <p className="text-xs mb-3 text-(--t-text-dim)">{t("settings.integrations.mcp.plugins.sub")}</p>
-        <div className="rounded-lg bg-(--t-bg-elevated) border border-(--t-border)">
+        <div className={SETTINGS_SURFACE}>
           {contributions.length === 0 ? (
             <p className="px-4 py-3 text-xs text-(--t-text-dim)">
               {t("settings.integrations.mcp.plugins.empty")}

@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   folderCardProps: [] as Record<string, unknown>[],
   navFolders: [] as unknown[],
   folderPath: [] as unknown[],
+  toolbarProps: {} as Record<string, unknown>,
   ejectTargetFolderId: null as string | null,
   activeFolderId: null as string | null,
   accessibleVaultIds: [] as string[],
@@ -38,6 +39,12 @@ const h = vi.hoisted(() => ({
   saveIdentity: vi.fn(async (d: { name?: string }) => ({ id: `new-${d.name}` })),
   confirmModals: [] as Record<string, unknown>[],
   bulkOnDelete: null as ((ids: string[]) => void) | null,
+  moveKeyToVault: vi.fn(async (
+    key: { id: string }, _vaultId: string, data: unknown, updateKey: (id: string, data: unknown) => Promise<unknown>,
+  ) => { await updateKey(key.id, data); }),
+  moveIdentityToVault: vi.fn(async (
+    identity: { id: string }, _vaultId: string, data: unknown, updateIdentity: (id: string, data: unknown) => Promise<unknown>,
+  ) => { await updateIdentity(identity.id, data); }),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -59,8 +66,13 @@ vi.mock("@/components/folders/FolderCard", () => ({
   FolderCard: (props: Record<string, unknown>) => { h.folderCardProps.push(props); return null; },
 }));
 vi.mock("@/components/folders/FolderEditPanel", () => ({ FolderEditPanel: () => null }));
-vi.mock("./KeychainToolbar", () => ({ KeychainToolbar: () => null }));
-vi.mock("./KeyCards", () => ({ KeySection: () => null, IdentitySection: () => null }));
+vi.mock("./KeychainToolbar", () => ({
+  KeychainToolbar: (props: Record<string, unknown>) => { h.toolbarProps = props; return null; },
+}));
+vi.mock("./KeyCards", () => ({
+  KeySection: () => <div data-test-keys />,
+  IdentitySection: () => <div data-test-identities />,
+}));
 vi.mock("./KeyForm", () => ({ KeyForm: () => null }));
 vi.mock("./IdentityForm", () => ({ IdentityForm: () => null }));
 vi.mock("./KeyExportPanel", () => ({ KeyExportPanel: () => null, sortByMode: <T,>(items: T[]) => items }));
@@ -210,7 +222,10 @@ vi.mock("@/services/vault", () => ({
   getSecret: vi.fn(async () => null),
   deleteSecret: vi.fn(async () => {}),
 }));
-vi.mock("@/services/teamVaultSecrets", () => ({ saveTeamVaultSecretForVault: vi.fn(async () => {}) }));
+vi.mock("@/services/vaultObjectSecrets", () => ({
+  moveKeyToVault: h.moveKeyToVault,
+  moveIdentityToVault: h.moveIdentityToVault,
+}));
 vi.mock("@/services/teamVaultPermissions", () => ({ buildTeamVaultTransferPlan: () => ({ allowed: true }) }));
 
 import KeychainPage from "./KeychainPage";
@@ -306,6 +321,8 @@ test("moving a folder to a vault cascades over the whole subtree, parents before
   expect(h.updateFolder.mock.calls.map((c) => c[0])).toEqual(["root", "mid", "leaf"]);
   expect(h.updateKey.mock.calls.map((c) => c[0])).toEqual(["k-root", "k-leaf"]);
   expect(h.updateIdentity.mock.calls.map((c) => c[0])).toEqual(["i-mid"]);
+  expect(h.moveKeyToVault.mock.calls.map((c) => c[0].id)).toEqual(["k-root", "k-leaf"]);
+  expect(h.moveIdentityToVault.mock.calls.map((c) => c[0].id)).toEqual(["i-mid"]);
 });
 
 test("an unlinked team is offered as a vault target alongside the linked vaults", () => {
@@ -365,4 +382,43 @@ test("copying a folder to a vault recreates the subtree but leaves the copies at
   expect(h.saveKey.mock.calls[0][0]).toMatchObject({ vault_id: "team-1" });
   expect(h.saveKey.mock.calls[0][0]).not.toHaveProperty("folder_id");
   expect(h.saveIdentity.mock.calls[0][0]).not.toHaveProperty("folder_id");
+});
+
+test("a new folder created inside a team folder lands in that team's vault (#816)", async () => {
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  render(<KeychainPage />);
+
+  await act(async () => { (h.toolbarProps.onNewFolder as () => void)(); });
+  expect(h.saveFolder).toHaveBeenCalledWith(expect.objectContaining({ parent_folder_id: "child", vault_id: "team-1" }));
+});
+
+test("New folder is greyed out inside a folder whose vault the user cannot edit folders in", () => {
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  h.can.mockImplementation((p: string, vaultId: string) => !(p === "EDIT_FOLDERS" && vaultId === "team-1"));
+  render(<KeychainPage />);
+
+  expect(h.toolbarProps.newFolderBlocked).toBe("folders.noPermissionCreate");
+});
+
+test("an empty folder shows the shared folder-empty state with both add buttons, not the per-type sections", () => {
+  h.folders = [folder("child")];
+  h.folderPath = [folder("child")];
+  h.activeFolderId = "child";
+  const { getByText, container } = render(<KeychainPage />);
+
+  getByText("folders.empty");
+  getByText("keychain.cards.keySection.addButton");
+  getByText("keychain.cards.identitySection.addButton");
+  expect(container.querySelector("[data-test-keys]")).toBeNull();
+  expect(container.querySelector("[data-test-identities]")).toBeNull();
+});
+
+test("at the root the per-type sections keep their own empty states", () => {
+  const { queryByText, container } = render(<KeychainPage />);
+
+  expect(queryByText("folders.empty")).toBeNull();
+  expect(container.querySelector("[data-test-keys]")).not.toBeNull();
+  expect(container.querySelector("[data-test-identities]")).not.toBeNull();
 });

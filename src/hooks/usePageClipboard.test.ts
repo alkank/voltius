@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { test, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, cleanup } from "@testing-library/react";
 import { usePageClipboard } from "./usePageClipboard";
@@ -5,6 +6,7 @@ import { useVaultClipboardStore } from "@/stores/vaultClipboardStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { useHistoryStore } from "@/stores/historyStore";
+import { RuleSetMoveCancelled } from "@/services/teamObjectPersistence";
 
 function baseAdapter(over = {}) {
   return {
@@ -38,7 +40,7 @@ afterEach(() => cleanup());
 
 beforeEach(() => {
   useVaultClipboardStore.getState().clear();
-  useUIStore.setState({ activeNav: "hosts" });
+  useUIStore.setState({ activeNav: "hosts", sftpPanelOpen: false });
   useNotificationStore.setState({ toasts: [] });
   useHistoryStore.setState({
     past: [], future: [], bypassing: false, suppressing: false, suppressDepth: 0,
@@ -301,6 +303,19 @@ test("a paste that rejects raises an error toast", async () => {
   spy.mockRestore();
 });
 
+test("a paste whose move warning is cancelled raises no toast", async () => {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const a = baseAdapter({ moveItems: vi.fn(async () => { throw new RuleSetMoveCancelled(); }) });
+  renderHook(() => usePageClipboard(a));
+  window.dispatchEvent(new CustomEvent("voltius:clipboard-cut"));
+  window.dispatchEvent(new CustomEvent("voltius:clipboard-paste"));
+  await vi.waitFor(() => expect(a.moveItems).toHaveBeenCalled());
+  await new Promise((r) => setTimeout(r, 0));
+  expect(useNotificationStore.getState().toasts).toEqual([]);
+  expect(spy).not.toHaveBeenCalled();
+  spy.mockRestore();
+});
+
 // Ctrl+V at a root cannot migrate vaults by design, so the object is dropped —
 // which was indistinguishable from a dead shortcut until it was said out loud.
 test("a root paste that cannot change vault raises a toast", async () => {
@@ -365,4 +380,14 @@ test("a paste that would dangle a reference is refused and named as such", async
   expect(message).toContain("stay in another vault");
   expect(message).toContain("identities");
   expect(a.moveItems).not.toHaveBeenCalled();
+});
+
+test("the SFTP panel's own copy, cut and paste do not reach the page behind it", () => {
+  const adapter = baseAdapter();
+  renderHook(() => usePageClipboard(adapter));
+  useUIStore.setState({ sftpPanelOpen: true });
+  for (const kind of ["copy", "cut", "paste"]) window.dispatchEvent(new CustomEvent(`voltius:clipboard-${kind}`));
+  expect(useVaultClipboardStore.getState().clipboard).toBeNull();
+  expect(adapter.moveItems).not.toHaveBeenCalled();
+  expect(adapter.duplicateItems).not.toHaveBeenCalled();
 });

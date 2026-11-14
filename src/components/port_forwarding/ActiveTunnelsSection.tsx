@@ -1,32 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Icon } from "@iconify/react";
-import { useSessionStore } from "@/stores/sessionStore";
-import { useAllConnections } from "@/hooks/useAllConnections";
-import { useAccessibleVaultIds } from "@/hooks/useAccessibleVaultIds";
 import { useUIStore } from "@/stores/uiStore";
-import { getPfState, closePfTunnel, resumeAutoPort } from "@/services/portForwardingTunnels";
+import { useActiveTunnelCards } from "@/hooks/useActiveTunnelCards";
 import { formatActiveTunnelLabel, getLocalTunnelHttpUrl } from "@/utils/tunnelFormat";
 import { getConnectionIcon, getConnectionIconColor } from "@/utils/icons";
+import { sessionLabel } from "@/utils/sessionLabel";
+import { sessionUserAtHost } from "@/components/terminal/sessionOverlay";
 import { AvatarTile } from "@/components/shared/AvatarTile";
+import { cardGridProps } from "@/components/shared/cardGrid";
+import { SectionHeader, StatusPill } from "@/components/shared/SectionHeader";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { TunnelStatusDot } from "@/components/shared/TunnelStatusDot";
 import type { ActiveTunnel } from "@/types";
 
-interface PfStatePayload {
-  session_id: string;
-  tunnels: ActiveTunnel[];
-  suppressed_ports: number[];
-}
-
-interface SessionPfState {
-  tunnels: ActiveTunnel[];
-  suppressedPorts: number[];
-}
-
-function TunnelTypeBadge({ tunnelType }: { tunnelType: ActiveTunnel["tunnel_type"] }) {
+export function TunnelTypeBadge({ tunnelType }: { tunnelType: ActiveTunnel["tunnel_type"] }) {
   const { t } = useTranslation();
   if ((tunnelType ?? "local") === "local") {
     return <span className="text-[10px] px-1 py-0.5 rounded-sm font-medium shrink-0 leading-none bg-blue-500/15 text-blue-400">{t("portForwarding.activeTunnels.local")}</span>;
@@ -42,141 +30,27 @@ function TunnelTypeBadge({ tunnelType }: { tunnelType: ActiveTunnel["tunnel_type
 
 export function ActiveTunnelsSection() {
   const { t } = useTranslation();
-  const sessions = useSessionStore((s) => s.sessions);
-  const connections = useAllConnections();
-  const accessibleVaultIds = useAccessibleVaultIds();
+  const { sessionCards, totalTunnelCount, totalErrorCount, isKeyBusy, pause, resume, deleteActive, deletePaused } = useActiveTunnelCards();
   const layoutMode = useUIStore((s) => s.portForwardingLayoutMode);
-
-  const [pfStateMap, setPfStateMap] = useState<Map<string, SessionPfState>>(new Map());
-  const [busy, setBusy] = useState<Set<string>>(new Set());
-  const [hiddenPorts, setHiddenPorts] = useState<Set<string>>(new Set());
-
-  const relevantSessions = useMemo(() => {
-    return sessions.filter((s) => {
-      if (s.type !== "ssh" || s.status !== "connected") return false;
-      const conn = connections.find((c) => c.id === s.connectionId);
-      if (!conn) return false;
-      return accessibleVaultIds.includes(conn.vault_id ?? "personal");
-    });
-  }, [sessions, connections, accessibleVaultIds]);
-
-  const sessionIdKey = relevantSessions.map((s) => s.id).join(",");
-
-  useEffect(() => {
-    const ids = relevantSessions.map((s) => s.id);
-
-    for (const sessionId of ids) {
-      getPfState(sessionId)
-        .then((state) => setPfStateMap((prev) => new Map(prev).set(sessionId, { tunnels: state.tunnels, suppressedPorts: state.suppressed_ports })))
-        .catch(() => {});
-    }
-
-    setPfStateMap((prev) => {
-      const next = new Map(prev);
-      for (const key of next.keys()) {
-        if (!ids.includes(key)) next.delete(key);
-      }
-      return next;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionIdKey]);
-
-  useEffect(() => {
-    const ids = relevantSessions.map((s) => s.id);
-    let cleanup: (() => void) | undefined;
-
-    listen<PfStatePayload>("pf-state-changed", ({ payload }) => {
-      if (!ids.includes(payload.session_id)) return;
-      setPfStateMap((prev) => new Map(prev).set(payload.session_id, { tunnels: payload.tunnels, suppressedPorts: payload.suppressed_ports }));
-    }).then((u) => { cleanup = u; });
-
-    return () => { cleanup?.(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionIdKey]);
-
-  // Port forwarding is host-scoped: terminals of the same host share one tunnel
-  // list, so collapse to a single card per host (first session per connection).
-  const hostSessions = useMemo(() => {
-    const seen = new Set<string>();
-    return relevantSessions.filter((s) => {
-      if (seen.has(s.connectionId)) return false;
-      seen.add(s.connectionId);
-      return true;
-    });
-  }, [relevantSessions]);
-
-  const sessionCards = useMemo(() => {
-    return hostSessions
-      .map((session) => {
-        const connection = connections.find((c) => c.id === session.connectionId) ?? null;
-        const state = pfStateMap.get(session.id);
-        const tunnels = (state?.tunnels ?? []).filter((tunnel) => tunnel.origin.type !== "rule" && !hiddenPorts.has(`${session.id}:${tunnel.remote_port}`));
-        const activePorts = new Set(tunnels.map((tunnel) => tunnel.remote_port));
-        const suppressedPorts = (state?.suppressedPorts ?? []).filter((port) => !activePorts.has(port) && !hiddenPorts.has(`${session.id}:${port}`));
-        const errorCount = tunnels.filter((tunnel) => typeof tunnel.state === "object" && "error" in tunnel.state).length;
-        return { session, connection, tunnels, suppressedPorts, errorCount };
-      })
-      .filter(({ tunnels, suppressedPorts }) => tunnels.length > 0 || suppressedPorts.length > 0);
-  }, [hostSessions, connections, pfStateMap, hiddenPorts]);
-
-  const totalTunnelCount = sessionCards.reduce((sum, card) => sum + card.tunnels.length + card.suppressedPorts.length, 0);
+  const collapsed = useUIStore((s) => s.activeTunnelsCollapsed);
+  const toggleCollapsed = useUIStore((s) => s.toggleActiveTunnelsCollapsed);
 
   if (totalTunnelCount === 0) return null;
 
-  function setBusyKey(key: string, on: boolean) {
-    setBusy((prev) => {
-      const s = new Set(prev);
-      on ? s.add(key) : s.delete(key);
-      return s;
-    });
-  }
-
-  async function handlePause(sessionId: string, tunnelId: string) {
-    const key = `${sessionId}-${tunnelId}`;
-    setBusyKey(key, true);
-    try { await closePfTunnel(sessionId, tunnelId); }
-    catch (e) { console.error("pf_tunnel_close failed:", e); }
-    finally { setBusyKey(key, false); }
-  }
-
-  async function handleResume(sessionId: string, port: number) {
-    const key = `${sessionId}-${port}`;
-    setBusyKey(key, true);
-    try { await resumeAutoPort(sessionId, port); }
-    catch (e) { console.error("pf_tunnel_resume_auto failed:", e); }
-    finally { setBusyKey(key, false); }
-  }
-
-  async function handleDeleteActive(sessionId: string, tunnel: ActiveTunnel) {
-    const key = `del-${sessionId}-${tunnel.id}`;
-    setBusyKey(key, true);
-    try {
-      await closePfTunnel(sessionId, tunnel.id);
-      setHiddenPorts((prev) => new Set([...prev, `${sessionId}:${tunnel.remote_port}`]));
-    } catch (e) { console.error("pf_tunnel_close failed:", e); }
-    finally { setBusyKey(key, false); }
-  }
-
-  function handleDeletePaused(sessionId: string, port: number) {
-    setHiddenPorts((prev) => new Set([...prev, `${sessionId}:${port}`]));
-  }
-
   return (
     <div className="mb-4">
-      <div className="flex items-center justify-between px-1 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-(--t-text-dim)">
-          {t("portForwarding.activeTunnels.sectionTitle")}
-        </span>
-        <div className="flex items-center gap-2 text-[10px] text-(--t-text-muted)">
-          <span className="px-1.5 py-0.5 rounded-full bg-(--t-bg-elevated) leading-none">{t("portForwarding.activeTunnels.hostCount", { count: sessionCards.length })}</span>
-          <span className="px-1.5 py-0.5 rounded-full bg-(--t-status-connected)/10 text-(--t-status-connected) leading-none">{t("portForwarding.activeTunnels.tunnelCount", { count: totalTunnelCount })}</span>
-        </div>
-      </div>
+      <SectionHeader
+        label={t("portForwarding.activeTunnels.sectionTitle")}
+        count={sessionCards.length}
+        aside={<>
+          {totalErrorCount > 0 && <StatusPill tone="error">{t("portForwarding.activeTunnels.errorCount", { count: totalErrorCount })}</StatusPill>}
+          <StatusPill tone="connected">{t("portForwarding.activeTunnels.tunnelCount", { count: totalTunnelCount })}</StatusPill>
+        </>}
+        collapsed={collapsed}
+        onToggle={toggleCollapsed}
+      />
 
-      <div className={layoutMode === "grid"
-        ? "grid grid-cols-[repeat(auto-fill,minmax(21rem,1fr))] gap-4"
-        : "flex flex-col gap-3"
-      }>
+      {!collapsed && <div {...cardGridProps(layoutMode, "wide")}>
         {sessionCards.map(({ session, connection, tunnels, suppressedPorts, errorCount }) => {
           const displayIcon = connection ? (connection.icon || connection.distro) : null;
           const distroIcon = displayIcon ? getConnectionIcon(displayIcon) : null;
@@ -197,11 +71,11 @@ export function ActiveTunnelsSection() {
                 <AvatarTile base={distroColor} icon={distroIcon ?? "lucide:server"} iconSize={30} className="h-14 w-14 rounded-2xl text-white" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
-                    <p className="truncate text-base font-bold text-(--t-text-bright)">{session.connectionName}</p>
+                    <p className="truncate text-base font-bold text-(--t-text-bright)">{sessionLabel(session)}</p>
                     <StatusDot tone="connected" label={t("portForwarding.activeTunnels.connected")} />
                   </div>
                   <p className="truncate text-xs text-(--t-text-dim)">
-                    {connection ? `${connection.username}@${connection.host}:${connection.port}` : session.id}
+                    {connection ? `${sessionUserAtHost(session, connection)}:${connection.port}` : session.id}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
@@ -220,13 +94,13 @@ export function ActiveTunnelsSection() {
                 {tunnels.map((tunnel) => {
                   const key = `${session.id}-${tunnel.id}`;
                   const deleteKey = `del-${session.id}-${tunnel.id}`;
-                  const isBusy = busy.has(key);
-                  const isDeleting = busy.has(deleteKey);
+                  const isBusy = isKeyBusy(key);
+                  const isDeleting = isKeyBusy(deleteKey);
                   const isAuto = tunnel.origin.type === "auto";
                   const isError = typeof tunnel.state === "object" && "error" in tunnel.state;
                   const errorMsg = isError ? (tunnel.state as { error: string }).error : null;
                   const portLabel = formatActiveTunnelLabel(tunnel);
-                  const webUrl = !isError ? getLocalTunnelHttpUrl(tunnel.tunnel_type ?? "local", tunnel.remote_port, tunnel.local_port) : null;
+                  const webUrl = !isError ? getLocalTunnelHttpUrl(tunnel.tunnel_type ?? "local", tunnel.remote_port, tunnel.local_port, tunnel.bind_host) : null;
 
                   return (
                     <div
@@ -254,7 +128,7 @@ export function ActiveTunnelsSection() {
                         </p>
                       </div>
                       <button
-                        onClick={(e) => { e.stopPropagation(); void handlePause(session.id, tunnel.id); }}
+                        onClick={(e) => { e.stopPropagation(); void pause(session.id, tunnel.id); }}
                         disabled={isBusy}
                         title={t("portForwarding.activeTunnels.pauseForwarding")}
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-(--t-text-muted) transition-all hover:bg-amber-500/10 hover:text-amber-400 disabled:opacity-60"
@@ -265,7 +139,7 @@ export function ActiveTunnelsSection() {
                         }
                       </button>
                       <button
-                        onClick={(e) => { e.stopPropagation(); void handleDeleteActive(session.id, tunnel); }}
+                        onClick={(e) => { e.stopPropagation(); void deleteActive(session.id, tunnel); }}
                         disabled={isDeleting}
                         title={t("common.action.delete")}
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-(--t-text-muted) transition-all hover:bg-red-500/10 hover:text-red-400 disabled:opacity-60"
@@ -289,7 +163,7 @@ export function ActiveTunnelsSection() {
                 })}
                 {suppressedPorts.map((port) => {
                   const key = `${session.id}-${port}`;
-                  const isBusy = busy.has(key);
+                  const isBusy = isKeyBusy(key);
 
                   return (
                     <div
@@ -305,7 +179,7 @@ export function ActiveTunnelsSection() {
                         <p className="truncate text-xs font-mono text-(--t-text-secondary)">{port} → 127.0.0.1:{port}</p>
                       </div>
                       <button
-                        onClick={(e) => { e.stopPropagation(); void handleResume(session.id, port); }}
+                        onClick={(e) => { e.stopPropagation(); void resume(session.id, port); }}
                         disabled={isBusy}
                         title={t("portForwarding.activeTunnels.resumeForwarding")}
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-(--t-text-muted) transition-all hover:bg-green-500/10 hover:text-green-400 disabled:opacity-60"
@@ -316,7 +190,7 @@ export function ActiveTunnelsSection() {
                         }
                       </button>
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleDeletePaused(session.id, port); }}
+                        onClick={(e) => { e.stopPropagation(); deletePaused(session.id, port); }}
                         title={t("common.action.delete")}
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-(--t-text-muted) transition-all hover:bg-red-500/10 hover:text-red-400"
                       >
@@ -329,7 +203,7 @@ export function ActiveTunnelsSection() {
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const listeners = new Map<string, (e: { payload: unknown }) => void>();
@@ -56,7 +57,7 @@ describe("MCP bridge listener", () => {
     const [cmd, args] = replyCall();
     expect(cmd).toBe("mcp_bridge_reply");
     expect(args.id).toBe("r1");
-    expect(args.result.tools).toHaveLength(91);
+    expect(args.result.tools).toHaveLength(94);
   });
 
   it("answers a tools/call request with the tool's real result", async () => {

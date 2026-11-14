@@ -44,6 +44,8 @@
         "portForwardDeleted": "Port yönlendirme silindi",
         "vaultRenamed": "Kasa yeniden adlandırıldı",
         "vaultKeyRotated": "Anahtar yenilendi",
+        "teamLockPolicySet": "Kilit politikası ayarlandı",
+        "teamLockPolicyRemoved": "Kilit politikası kaldırıldı",
         "roleCreated": "Rol oluşturuldu",
         "roleUpdated": "Rol güncellendi",
         "roleDeleted": "Rol silindi",
@@ -52,7 +54,13 @@
         "secretViewed": "Gizli bilgi gösterildi",
         "sessionStarted": "Oturum başlatıldı",
         "sessionEnded": "Oturum sonlandı",
-        "sessionJoined": "Oturuma katılındı"
+        "sessionJoined": "Oturuma katılındı",
+        "memberRenamed": "Üye yeniden adlandırıldı",
+        "permissionGranted": "İzin verildi",
+        "permissionRevoked": "İzin kaldırıldı",
+        "sessionLeft": "Oturumdan ayrıldı",
+        "vaultCreated": "Kasa oluşturuldu",
+        "vaultDeleted": "Kasa silindi"
       }
     },
     "timeRange": {
@@ -73,18 +81,27 @@
     },
     "badges": {
       "client": "istemci",
-      "clientTooltip": "İstemci uygulaması tarafından bildirildi — kesin kaynak değildir"
+      "clientTooltip": "İstemci uygulaması tarafından bildirildi — kesin kaynak değildir",
+      "ownKey": "kendi anahtarı",
+      "ownKeyTooltip": "Üyenin kendi kimliğiyle bağlanıldı; kimlik cihazından hiç çıkmaz",
+      "shared": "paylaşılan · {{name}}",
+      "sharedUnknown": "paylaşılan"
     },
     "eventLabels": {
       "memberInvited": "davet etti: {{name}}",
       "memberJoined": "ekibe {{role}} olarak katıldı",
       "memberRemoved": "ekipten çıkardı: {{name}}",
+      "memberRenamed": "{{name}} için “{{to}}” adını verdi",
+      "memberNameRemoved": "{{name}} adlı üyenin adını kaldırdı",
       "memberRoleChanged": "rolü değiştirdi: {{name}}",
       "memberPermissionsChanged": "izinleri değiştirdi: {{name}}",
       "vaultCreated": "\"{{name}}\" kasasını oluşturdu",
       "vaultDeleted": "\"{{name}}\" kasasını sildi",
       "vaultRenamed": "kasayı \"{{name}}\" olarak yeniden adlandırdı",
       "vaultKeyRotated": "\"{{name}}\" kasasının anahtarını yeniledi",
+      "lockPolicySet": "kilit politikasını ayarladı (otomatik kilit: {{timeout}})",
+      "lockPolicySetVault": "kilit politikasını ayarladı (otomatik kilit: {{timeout}}, \"Kasayı kilitle\" zorunlu)",
+      "lockPolicyRemoved": "kilit politikasını kaldırdı",
       "roleCreated": "\"{{name}}\" rolünü oluşturdu",
       "roleUpdated": "\"{{name}}\" rolünü güncelledi",
       "roleDeleted": "\"{{name}}\" rolünü sildi",
@@ -119,7 +136,8 @@
       "fallbackMember": "bir üye",
       "fallbackRole": "üye",
       "fallbackResource": "bir kaynak",
-      "fallbackHost": "bir sunucu"
+      "fallbackHost": "bir sunucu",
+      "you": "Siz"
     },
     "timeline": {
       "today": "Bugün",

@@ -44,6 +44,8 @@
         "portForwardDeleted": "Port forward deleted",
         "vaultRenamed": "Vault renamed",
         "vaultKeyRotated": "Key rotated",
+        "teamLockPolicySet": "Lock policy set",
+        "teamLockPolicyRemoved": "Lock policy removed",
         "roleCreated": "Role created",
         "roleUpdated": "Role updated",
         "roleDeleted": "Role deleted",
@@ -52,7 +54,13 @@
         "secretViewed": "Secret revealed",
         "sessionStarted": "Session started",
         "sessionEnded": "Session ended",
-        "sessionJoined": "Session joined"
+        "sessionJoined": "Session joined",
+        "memberRenamed": "Member renamed",
+        "permissionGranted": "Permission granted",
+        "permissionRevoked": "Permission revoked",
+        "sessionLeft": "Session left",
+        "vaultCreated": "Vault created",
+        "vaultDeleted": "Vault deleted"
       }
     },
     "timeRange": {
@@ -73,18 +81,27 @@
     },
     "badges": {
       "client": "client",
-      "clientTooltip": "Reported by the client app — non-authoritative"
+      "clientTooltip": "Reported by the client app — non-authoritative",
+      "ownKey": "own key",
+      "ownKeyTooltip": "Connected with the member's own identity; it never leaves their device",
+      "shared": "shared · {{name}}",
+      "sharedUnknown": "shared"
     },
     "eventLabels": {
       "memberInvited": "invited {{name}}",
       "memberJoined": "joined the team as {{role}}",
       "memberRemoved": "removed {{name}}",
+      "memberRenamed": "named {{name}} “{{to}}”",
+      "memberNameRemoved": "removed the name of {{name}}",
       "memberRoleChanged": "changed role for {{name}}",
       "memberPermissionsChanged": "changed permissions for {{name}}",
       "vaultCreated": "created vault \"{{name}}\"",
       "vaultDeleted": "deleted vault \"{{name}}\"",
       "vaultRenamed": "renamed vault to \"{{name}}\"",
       "vaultKeyRotated": "rotated key for vault \"{{name}}\"",
+      "lockPolicySet": "set the lock policy (auto-lock: {{timeout}})",
+      "lockPolicySetVault": "set the lock policy (auto-lock: {{timeout}}, Lock vault required)",
+      "lockPolicyRemoved": "removed the lock policy",
       "roleCreated": "created role \"{{name}}\"",
       "roleUpdated": "updated role \"{{name}}\"",
       "roleDeleted": "deleted role \"{{name}}\"",
@@ -119,7 +136,8 @@
       "fallbackMember": "a member",
       "fallbackRole": "member",
       "fallbackResource": "a resource",
-      "fallbackHost": "a host"
+      "fallbackHost": "a host",
+      "you": "You"
     },
     "timeline": {
       "today": "Today",

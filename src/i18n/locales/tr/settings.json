@@ -1,6 +1,10 @@
 {
   "settings": {
     "terminal": {
+      "commandHistory": {
+        "title": "Komut Geçmişi",
+        "desc": "Terminallerde çalıştırdığınız komutları hatırlar. Bir satır yalnızca terminal onu geri gösterdiğinde saklanır; bu nedenle gizli istemlere yazılan parolalar asla kaydedilmez. Boşlukla başlayan satırlar asla kaydedilmez. Kapatmak kaydı durdurur; kaydedilenler, Geçmiş panelinden temizleyene kadar kalır."
+      },
       "heading": "Terminal davranışı",
       "preferredShell": {
         "title": "Tercih edilen kabuk"
@@ -36,12 +40,55 @@
       "ignoreBracketedPaste": {
         "title": "Düz metin yapıştırma (köşeli ayraçlı yapıştırma yok)",
         "desc": "Metni \\x1b[200~ / \\x1b[201~ işaretleri olmadan düz metin olarak yapıştırır. Köşeli ayraçlı yapıştırmayı desteklemeyen sudo istemlerine veya CLI uygulamalarına yapıştırırken oluşan bozuk girdileri (örn. \"200~\") düzeltir."
+      },
+      "pasteImageAsPath": {
+        "title": "Görüntüleri dosya yolu olarak yapıştır",
+        "desc": "Pano bir görüntü içerdiğinde onu SSH sunucusuna yükler (~/.cache/voltius/pastes, yalnızca sahibi erişebilir, 7 gün sonra silinir) ve yolunu yapıştırır. Claude Code gibi sunucudaki araçların ekran görüntüsü eklemesini sağlar. Oradan başka bir sunucuya SSH ile geçerseniz yol bu ilk sunucuyu gösterir."
+      },
+      "volumeDownCtrl": {
+        "title": "Ses kısma tuşunu Ctrl olarak kullan",
+        "desc": "Terminalde yazarken basılan tuşlara Ctrl eklemek için ses kısma tuşunu basılı tutun: ses kısma + C, Ctrl+C gönderir. Terminal dışında tuş her zamanki gibi sesi ayarlar."
+      },
+      "keywordHighlight": {
+        "title": "Anahtar kelime vurgulama",
+        "desc": "Komut çıktısındaki “error” veya “warning” gibi kelimeleri renklendirir. Kabuk entegrasyonu olan oturumlarda çalışır.",
+        "addRule": "Kural ekle",
+        "deleteRule": "Kuralı sil",
+        "ruleEnabled": "Kuralı etkinleştir",
+        "color": "Renk",
+        "wordsPlaceholder": "Kelime ekle…",
+        "removeWord": "{{word}} kelimesini kaldır"
       }
     },
     "appearance": {
+      "marketplace": {
+        "installedLabel": "Market",
+        "available": "Marketten",
+        "get": "Al",
+        "remove": "Kaldır",
+        "fromSource": "{{source}} kaynağından",
+        "desktopOnly": "Yalnızca masaüstü",
+        "partOfPlugin": "{{plugin}} eklentisinin parçası. Eklentiler bölümünden yönetin.",
+        "browseAll": "Markette tümüne göz at",
+        "loading": "Temalar yükleniyor…",
+        "unreachable_one": "{{count}} markete erişilemiyor",
+        "unreachable_other": "{{count}} markete erişilemiyor"
+      },
+      "themeActions": "Tema işlemleri",
       "interface": "Arayüz",
       "language": {
         "title": "Dil"
+      },
+      "timeFormat": {
+        "title": "Saat biçimi",
+        "desc": "Uygulama genelinde saatlerin nasıl gösterileceği.",
+        "auto": "Otomatik (dile göre)",
+        "12h": "12 saat",
+        "24h": "24 saat"
+      },
+      "groupTabsByHost": {
+        "title": "Sekmeleri ana makineye göre grupla",
+        "desc": "Aynı ana makinedeki oturumlar tek bir sekmeyi paylaşır. Aralarında geçiş yapmak için üzerine gelin."
       },
       "colorTheme": "Renk Teması",
       "import": "İçe Aktar",
@@ -52,7 +99,9 @@
       "editTheme": "Temayı düzenle",
       "deleteTheme": "Temayı sil",
       "newCustomTheme": "Yeni Özel Tema",
+      "dynamicThemeHint": "Duvar kağıdınızdan",
       "uiScale": {
+        "clickHintMobile": "Değer girmek için dokunun",
         "title": "Arayüz Ölçeği",
         "desc": "Tüm arayüzü yakınlaştırın veya uzaklaştırın.",
         "clickHint": "Değer girmek için tıklayın",
@@ -62,6 +111,7 @@
         "reset": "Sıfırla"
       },
       "terminalFontSize": {
+        "clickHintMobile": "Değer girmek için dokunun",
         "title": "Terminal Yazı Boyutu",
         "desc": "Arayüzün geri kalanını ölçeklemeden yalnızca terminal metninin boyutunu değiştirin.",
         "clickHint": "Değer girmek için tıklayın",
@@ -92,6 +142,7 @@
     },
     "nav": {
       "appearance": {
+        "mobileSub": "Tema, ölçek, dil",
         "label": "Görünüm",
         "keywords": [
           "tema",
@@ -101,6 +152,7 @@
         ]
       },
       "account": {
+        "mobileSub": "Hesap modu, uygulama kilidi",
         "label": "Hesap",
         "keywords": [
           "profil",
@@ -111,16 +163,27 @@
         ]
       },
       "sync": {
+        "mobileSub": "Bulut, yerel ağ ve eşitlenenler",
         "label": "Eşitleme",
         "keywords": [
           "yedekleme",
           "bulut",
           "gist",
           "eşitleme",
-          "pro"
+          "pro",
+          "yerel",
+          "ağ",
+          "yakındaki",
+          "wifi",
+          "lan",
+          "eşle",
+          "cihazlar",
+          "tailscale",
+          "vpn"
         ]
       },
       "plugins": {
+        "mobileSub": "Yüklü eklentiler ve katalog",
         "label": "Eklentiler",
         "keywords": [
           "uzantılar",
@@ -131,6 +194,7 @@
         ]
       },
       "integrations": {
+        "mobileSub": "Yapay zekâ ajanları için MCP sunucusu",
         "label": "Entegrasyonlar",
         "keywords": [
           "mcp",
@@ -144,6 +208,7 @@
         ]
       },
       "terminal": {
+        "mobileSub": "İmleç, geçmiş, yapıştırma",
         "label": "Terminal",
         "keywords": [
           "geri kaydırma",
@@ -155,7 +220,13 @@
           "tampon"
         ]
       },
+      "devices": {
+        "mobileSub": "Cihazlarınızın burada dosya açmasına izin verin",
+        "label": "Cihazlar",
+        "keywords": ["cihazlar", "dosyalar", "sftp", "paylaşım", "klasörler", "erişim"]
+      },
       "sftp": {
+        "mobileSub": "İndirmeler, aktarımlar, düzenleyici",
         "label": "SFTP",
         "keywords": [
           "dosya",
@@ -165,6 +236,7 @@
         ]
       },
       "portForwarding": {
+        "mobileSub": "Otomatik yönlendirme",
         "label": "Port Yönlendirme",
         "keywords": [
           "tünel",
@@ -175,6 +247,7 @@
         ]
       },
       "hosts": {
+        "mobileSub": "Erişilebilirlik, keepalive, proxy",
         "label": "Sunucular",
         "keywords": [
           "ping",
@@ -194,6 +267,7 @@
         ]
       },
       "diagnostics": {
+        "mobileSub": "Günlükler ve hata raporları",
         "label": "Tanılama",
         "keywords": [
           "tanılama",
@@ -205,6 +279,7 @@
         ]
       },
       "about": {
+        "mobileSub": "Sürüm ve bağlantılar",
         "label": "Hakkında",
         "keywords": [
           "sürüm",
@@ -218,11 +293,19 @@
       "title": "Ayarlar",
       "close": "Ayarları kapat",
       "back": "Geri",
-      "openHint": "Açmak için Ctrl+,",
+      "openHint": "Açmak için {{shortcut}}",
       "expandPluginGroup": "Eklenti ayarlarını genişlet",
       "collapsePluginGroup": "Eklenti ayarlarını daralt"
     },
     "shared": {
+      "reset": "Sıfırla",
+      "rowActions": "Ayar işlemleri",
+      "sync": {
+        "label": "Bu ayarı eşitle",
+        "on": "Cihazlarınız arasında eşitlenir",
+        "off": "Bu cihazda tutulur",
+        "deviceDefault": "Varsayılan olarak bu cihazda tutulur"
+      },
       "cancel": "İptal",
       "resetToDefault": "Varsayılana sıfırla",
       "modifiedFromDefault": "Varsayılandan değiştirildi"
@@ -237,17 +320,66 @@
         "unknown": "Bilinmiyor"
       },
       "sessionSecurity": {
+        "rememberPassword": {
+          "toggle": "Ana parolayı hatırla",
+          "desc": "Kasanızı açılışta parola sormadan açar. Bu açıkken parola bu cihazın sistem anahtar zincirinde saklanır; Linux ve Windows'ta sizin hesabınızla çalışan diğer programlar onu oradan okuyabilir. Her açılışta yazmak için kapatın.",
+          "enableTitle": "Ana parolanızı hatırlayın",
+          "enableBody": "Ana parolanızı bu cihazın sistem anahtar zincirinde saklamak için girin.",
+          "systemAuthNeedsIt": "Bu cihazda \"Ana parolayı hatırla\" gerekir. Bu olmadan Voltius ana parolanızı açılışta ve kasa kilitlendikten sonra sorar; sistem kimlik doğrulamasıyla yalnızca kilit ekranı açılır.",
+          "removeFailed": "Kayıtlı ana parola sistem anahtar zincirinden kaldırılamadı.",
+          "storeFailed": "Ana parola sistem anahtar zincirine kaydedilemedi."
+        },
         "title": "Oturum Güvenliği",
-        "autoLockLabel": "Etkinlik olmadığında kasayı otomatik kilitle",
-        "autoLockDesc": "Oturumunuzun süresi dolduğunda kasanızı kilitler ve ana parolanızı ister.",
-        "noPasswordHint": "Otomatik kilit ve oturum zaman aşımını kullanmak için bir ana parola etkinleştirin.",
+        "autoLockLabel": "Hareketsizlikten sonra otomatik kilitle",
+        "autoLockDesc": "Voltius'u bu kadar hareketsizlikten sonra ya da uygulamadan ayrıldığınız anda kilitler.",
         "timeout": {
           "never": "Hiçbir zaman",
           "5min": "5 dakika",
           "15min": "15 dakika",
           "30min": "30 dakika",
           "1h": "1 saat",
-          "4h": "4 saat"
+          "4h": "4 saat",
+          "minutes_one": "{{count}} dakika",
+          "minutes_other": "{{count}} dakika",
+          "immediately": "Hemen"
+        },
+        "needsSystemAuth": "Ana parolası olmayan bir hesabı kilitlemek için sistem kimlik doğrulamasını açın.",
+        "immediateVaultWarning": "Kasayı kilitle seçiliyken Voltius'tan kısa süre ayrılmak bile açık oturumlarınızı kapatır. Ekranı kilitle onları çalışır tutar.",
+        "policy": {
+          "timeout": "{{teams}} ilkesi: en fazla {{duration}}.",
+          "timeoutImmediately": "{{teams}} ilkesi: Voltius'tan çıkınca hemen kilitle.",
+          "vault": "{{teams}} ilkesi: \"Kasayı kilitle\" zorunlu."
+        },
+        "lockAction": {
+          "label": "Kilitlerken",
+          "vault": "Kasayı kilitle (oturumları kapat)",
+          "screen": "Ekranı kilitle (oturumlar çalışmaya devam eder)",
+          "vaultDesc": "Kasa anahtarını bellekten siler. Açık oturumlar kapanır ve Voltius yeniden yüklenir.",
+          "screenDesc": "Oturumlar, port yönlendirmeleri ve aktarımlar çalışırken Voltius'u gizler."
+        },
+        "systemAuth": {
+          "toggle": "Sistem kimlik doğrulamasıyla kilidi aç",
+          "desc": "Ana parolanızı yazmak yerine {{method}} kullanın.",
+          "unavailable": "Bu cihazda kullanılamıyor.",
+          "status": {
+            "bound": "Bu cihazın donanımına bağlı.",
+            "unbound": "Henüz bu cihazın donanımına bağlı değil.",
+            "os-login": "Cihaz girişinizle korunuyor.",
+            "no-password": "Cihaz girişinizle korunuyor. Anahtarı bu cihazın donanımına bağlamak için bir ana parola belirleyin."
+          },
+          "bindNow": "Şimdi bağla",
+          "confirm": "Onayla",
+          "enableTitle": "Kasa anahtarını bu cihaza bağla",
+          "enableBody": "Ana parolanızı girin. Bu cihazın girişi değişirse gerekecek.",
+          "disableTitle": "Sistem kimlik doğrulamasını kapat",
+          "disableBody": "Açılışta istem olmadan kilidi açmaya devam etmek için ana parolanızı girin.",
+          "method": {
+            "windows": "Windows Hello",
+            "macos": "Touch ID veya Mac parolanız",
+            "linux": "sistem parolanız",
+            "android": "parmak iziniz veya ekran kilidiniz",
+            "ios": "Face ID, Touch ID veya parolanız"
+          }
         }
       },
       "email": "E-posta",
@@ -259,13 +391,12 @@
         "errorInvalidEmail": "Geçersiz e-posta adresi",
         "errorSameEmail": "Yeni e-posta mevcut e-postadan farklı olmalıdır",
         "errorPasswordRequired": "Değişikliği onaylamak için parola gereklidir",
-        "updatedPrefix": "E-posta şu adresle güncellendi: ",
-        "updatedSuffix": ". Doğrulama bağlantısı için gelen kutunuzu kontrol edin.",
         "pausedNote": "Doğrulanana kadar ücretli özellikler duraklatılır.",
         "done": "Tamam",
         "saving": "Kaydediliyor…",
         "save": "Kaydet",
-        "toastVerification": "Doğrulama e-postası {{email}} adresine gönderildi."
+        "toastVerification": "Doğrulama e-postası {{email}} adresine gönderildi.",
+        "updated": "E-posta <email>{{email}}</email> olarak güncellendi. Doğrulama bağlantısı için gelen kutunuzu kontrol edin."
       },
       "handle": {
         "title": "Kullanıcı adı",
@@ -276,6 +407,7 @@
         "chooseSub": "Özel bir kullanıcı adı, ekipleriniz dışındaki kişilerin sizi bulabilmesini sağlar.",
         "generatedNote": "Mevcut kullanıcı adınız, onu verdiğiniz herkes için zaten geçerlidir.",
         "unverified": "Özel bir kullanıcı adı seçmek için e-postanızı doğrulayın.",
+        "managed": "Kuruluşunuz tarafından yönetiliyor. Değiştirmek için yöneticinize başvurun.",
         "placeholder": "kullanici-adiniz",
         "inputLabel": "Kullanıcı adı",
         "save": "Kaydet",
@@ -294,6 +426,11 @@
         "sub": "Kasanızı yeniden şifrelemeden parolanızı güncelleyin",
         "title": "Ana parolayı değiştir",
         "currentPlaceholder": "Mevcut parola",
+        "verifyWithDevice": "Unuttunuz mu? Bunun yerine {{method}} ile onaylayın",
+        "verifiedWithDevice": "Bu cihazda onaylandı",
+        "deviceReason": "Ana parolanızı değiştirmek için onaylayın",
+        "deviceFailed": "Bu cihaz kimliğinizi doğrulayamadı. Bunun yerine mevcut parolanızı girin.",
+        "deviceSignedOut": "Bu cihazın oturumu kapatıldı, büyük olasılıkla parola başka bir cihazda değiştirildi. Yeni parolayla yeniden oturum açın.",
         "newPlaceholder": "Yeni parola (en az 8 karakter)",
         "confirmPlaceholder": "Yeni parolayı doğrula",
         "errorCurrentRequired": "Mevcut parola gereklidir",
@@ -305,13 +442,99 @@
         "changing": "Değiştiriliyor…",
         "changeBtn": "Parolayı değiştir"
       },
+      "sessions": {
+        "title": "Oturum açık cihazlar",
+        "loading": "Cihazlar yükleniyor…",
+        "empty": "Henüz gösterilecek cihaz yok.",
+        "unknownDevice": "Bilinmeyen cihaz",
+        "thisDevice": "Bu cihaz",
+        "cli": "CLI",
+        "signedIn": "Oturum açıldı: {{date}}",
+        "lastActive": "Etkin: {{ago}}",
+        "signOut": "Oturumu kapat",
+        "signOutNamed": "{{name}} oturumunu kapat",
+        "signOutOthers": "Diğer cihazlarda oturumu kapat",
+        "signOutEverywhere": "Her yerde oturumu kapat",
+        "working": "Oturum kapatılıyor…",
+        "retry": "Yeniden dene",
+        "note": "Bir cihazda oturumu kapatmak hesabınıza erişimini sonlandırır; üzerindeki veriler silinmez. Bu güncellemeden önce oturum açmış cihazlar, oturumlarını bir sonraki yenilemelerinden sonra burada görünür.",
+        "offline": "Çevrimdışısınız.",
+        "unsupported": "Sunucunuz bunu henüz desteklemiyor.",
+        "unavailable": "Cihaz listesi yüklenmedi.",
+        "ended": "Bu cihazda oturum kapatıldı. Cihazlarınızı yönetmek için yeniden oturum açın.",
+        "confirm": {
+          "one": {
+            "title": "{{name}} oturumu kapatılsın mı?",
+            "message": "{{name}} hesabınıza erişimini kaybeder ve yeniden oturum açması gerekir. Üzerindeki veriler silinmez."
+          },
+          "this": {
+            "title": "Bu cihazda oturum kapatılsın mı?",
+            "message": "Bu cihaz, yeniden oturum açana kadar eşitlemeyi durdurur. Verileri burada kalır."
+          },
+          "others": {
+            "title": "Diğer cihazlarda oturum kapatılsın mı?",
+            "message": "Henüz listede olmayanlar dahil diğer tüm cihazların yeniden oturum açması gerekir. Bu cihazda oturum açık kalır. Üzerlerindeki veriler silinmez."
+          },
+          "all": {
+            "title": "Her yerde oturum kapatılsın mı?",
+            "message": "Bu cihaz dahil tüm cihazların yeniden oturum açması gerekir. Üzerlerindeki veriler silinmez."
+          }
+        }
+      },
+      "twoFactor": {
+        "label": "İki adımlı doğrulama",
+        "subOff": "Yeni bir cihazda oturum açarken kod veya geçiş anahtarı iste",
+        "subOn": "Açık. Yeni bir cihazda oturum açarken ikinci bir adım istenir",
+        "intro": "Ana parolanızdan sonra, yeni bir cihazda oturum açarken ikinci bir adım istenir. Birini seçin; diğerini sonra ekleyebilirsiniz.",
+        "introDevices": "Bunu açmak diğer cihazlarınızdaki oturumları kapatır. Yeniden oturum açmaları için güncel bir Voltius sürümü gerekir.",
+        "continue": "Devam",
+        "scan": "Bunu kimlik doğrulama uygulamanızla tarayın veya aşağıdaki anahtarı uygulamaya yazın.",
+        "qrLabel": "Kimlik doğrulama uygulamanız için QR kodu",
+        "copyKey": "Anahtarı kopyala",
+        "confirmPrompt": "Ardından uygulamanın gösterdiği 6 haneli kodu girin.",
+        "turnOn": "Aç",
+        "codesTitle": "Kurtarma kodlarınızı kaydedin",
+        "codesBody": "Kimlik doğrulama uygulamanızı veya geçiş anahtarınızı kaybederseniz her kod bir kez oturum açmanızı sağlar. Bir daha gösterilmezler.",
+        "copy": "Kopyala",
+        "copied": "Kopyalandı",
+        "save": "Dosyaya kaydet",
+        "saved": "Kaydettim",
+        "manageBody": "Yeni bir cihazda oturum açarken ana parolanızdan sonra bunlardan biri istenir.",
+        "newCodes": "Yeni kurtarma kodları",
+        "newCodesSub": "Mevcut kodlar geçersiz olur",
+        "turnOff": "Kapat",
+        "turnOffSub": "Yalnızca ana parolayla oturum aç",
+        "generate": "Oluştur",
+        "regeneratePrompt": "Kurtarma kodlarınızı değiştirmek için ikinci bir faktörle onaylayın.",
+        "disablePrompt": "İki adımlı doğrulamayı kapatmak için ana parolanızı girin ve ikinci bir faktörle onaylayın.",
+        "authenticator": "Kimlik doğrulama uygulaması",
+        "authenticatorSub": "Telefonunuzdaki bir uygulamadan 6 haneli kodlar",
+        "authenticatorOn": "Açık",
+        "authenticatorIntro": "Yeni bir cihazda oturum açarken kimlik doğrulama uygulamasından 6 haneli bir kod istenir.",
+        "passkey": "Geçiş anahtarı",
+        "passkeys": "Geçiş anahtarları",
+        "passkeySub": "Tarayıcınız üzerinden parmak izi, yüz veya güvenlik anahtarı",
+        "passkeyIntro": "Voltius, geçiş anahtarını oluşturmak için tarayıcınızı açar, sonra sizi buraya geri getirir.",
+        "passkeyName": "Ad, örneğin Dizüstü",
+        "passkeyCreate": "Tarayıcıda devam et",
+        "passkeyAdd": "Geçiş anahtarı ekle",
+        "passkeyAdded": "Eklenme: {{date}}",
+        "passkeyUsed": "son kullanım: {{date}}",
+        "passkeyRemove": "{{name}} anahtarını kaldır",
+        "remove": "Kaldır",
+        "removeAuthenticatorPrompt": "Kimlik doğrulama uygulamasını kaldırmak için ana parolanızı girin ve ikinci bir faktörle onaylayın.",
+        "removePasskeyPrompt": "“{{name}}” geçiş anahtarını kaldırmak için ana parolanızı girin ve ikinci bir faktörle onaylayın.",
+        "lastFactor": "Bu tek ikinci faktörünüz. Kaldırmak iki adımlı doğrulamayı kapatır ve diğer cihazlarınızdaki oturumları sonlandırır.",
+        "codesLeft": "Kullanılmamış kod: {{count}}",
+        "back": "Geri"
+      },
       "setMasterPassword": {
         "label": "Ana parola belirle",
         "sub": "Kasanızı bulut eşitleme olmadan yerel olarak koruyun"
       },
       "lockVault": {
-        "label": "Kasayı kilitle",
-        "sub": "Şimdi kilitle ve ana parolayı iste"
+        "label": "Şimdi kilitle",
+        "sub": "Voltius'u yukarıda seçilen eylemle kilitler"
       },
       "signOut": {
         "label": "Bulut hesabında oturumu kapat",
@@ -322,10 +545,8 @@
         "sub": "Tüm bağlantıları, anahtarları, kasayı ve anahtar zinciri kayıtlarını kalıcı olarak siler"
       },
       "confirmWipe": {
-        "descPre": "Bu işlem ",
-        "descBold": "tüm yerel verileri",
-        "descPost": " (bağlantılar, SSH anahtarları, kimlikler, kasadaki gizli bilgiler ve işletim sistemi anahtar zinciri kayıtları) kalıcı olarak siler. Bu işlem geri alınamaz.",
-        "confirm": "Her şeyi sil"
+        "confirm": "Her şeyi sil",
+        "desc": "Bu işlem <strong>tüm yerel verileri</strong> (bağlantılar, SSH anahtarları, kimlikler, kasadaki gizli bilgiler ve işletim sistemi anahtar zinciri kayıtları) kalıcı olarak siler. Bu işlem geri alınamaz."
       },
       "setPassword": {
         "desc": "Bir ana parola seçin. Mevcut verileriniz yeniden şifrelenecektir.",
@@ -343,14 +564,19 @@
       },
       "loading": "İşleniyor...",
       "plan": {
-        "title": "Plan",
-        "badge": {
-          "business": "Business",
-          "teams": "Teams",
-          "proTrial": "Pro Denemesi — {{daysLeft}} gün kaldı",
+        "name": {
+          "free": "Ücretsiz",
           "pro": "Pro",
-          "free": "Ücretsiz"
+          "teams": "Teams",
+          "business": "Business"
         },
+        "trialName": "{{plan}} deneme sürümü",
+        "trialLeft": "{{plan}} — {{daysLeft}} gün kaldı",
+        "viaSeat": "{{plan}} · {{team}} ekibindeki koltuğunuz üzerinden",
+        "viaTooltip": "{{team}} üzerinden",
+        "throughSeat": "{{team}} ekibindeki koltuğunuz üzerinden",
+        "ownLine": "{{plan}} aboneliğiniz",
+        "title": "Plan",
         "manageBilling": "Faturalandırmayı yönet →",
         "subscription": {
           "cancelled": "{{date}} tarihinde iptal edilecek. O zamana kadar erişiminiz devam eder.",
@@ -362,20 +588,35 @@
         "seatsUsed": "{{used}} / {{total}} kullanılıyor",
         "upgradeToPro": "Bulut eşitleme ve daha fazlasının kilidini açmak için yükseltin",
         "upgrade": "Yükselt",
-        "upgradeToTeams": "Paylaşılan kasalar ve sınırsız konuk için Teams planına yükseltin",
-        "teamsButton": "Teams →",
+        "upgradeToTeams": "Teams'i {{days}} gün ücretsiz deneyin: ekibiniz için paylaşılan kasalar ve roller. Kart gerekir.",
+        "teamsButton": "Ücretsiz dene →",
         "viewAllPlans": "Tüm planları gör →",
+        "everythingIn": "{{plan}} planındaki her şey, artı:",
+        "nextAdds": "{{plan}} şunları ekler:",
+        "freeForEveryone": "Herkese ücretsiz:",
         "feature": {
-          "localVault": "Yerel kasa",
-          "auditLogs": "Denetim günlükleri",
-          "gistSync": "GitHub Gist eşitleme",
-          "realtimeSync": "Gerçek zamanlı bulut eşitleme",
+          "privateVault": "1 özel kasa",
+          "localSync": "Yerel ağ eşitlemesi",
+          "deviceFiles": "Cihazlarınız arasında dosya aktarımı",
+          "syncPlugins": "Gist, Cloudflare ve S3 eşitleme eklentileri",
+          "cli": "Komut satırı (voltius-cli)",
+          "machinePolicy": "Toplu dağıtımlar için makine politikası",
+          "mdm": "Yönetilen yapılandırma (MDM)",
+          "auditLogs": "Yerel denetim günlükleri",
+          "cloudSync": "Cihazlarınız hiç aynı anda çevrimiçi olmasa bile bulut eşitleme",
+          "cloudBackup": "Voltius Cloud'da şifreli yedek",
+          "crossDeviceSessions": "Cihazlar arası oturumlar",
           "unlimitedVaults": "Sınırsız özel kasa",
-          "terminalSharing": "Terminal paylaşımı (1 oturum · 1 konuk)",
-          "teamVaults": "Paylaşılan ekip kasaları",
-          "teamSharing": "Ekip paylaşımı (5 oturum · 10 konuk)",
-          "seats": "Lisanslar (satın alınan kadar)",
-          "customRoles": "Özel roller"
+          "terminalSharing_one": "Terminal paylaşımı: 1 oturum, 1 konuk",
+          "terminalSharing_other": "Terminal paylaşımı: {{count}} oturum, her birinde {{guests}} konuk",
+          "teamVaults": "Paylaşılan ekip kasaları ve davetler",
+          "builtInRoles": "Yerleşik roller",
+          "teamAuditLogs": "Ekip denetim günlükleri",
+          "granularPermissions": "Özel roller, üye ve nesne bazlı izinler",
+          "teamPolicy": "Ekip politikası: herhangi bir ayarı tüm üyeler için kilitleyin",
+          "enrolment": "Toplu dağıtımlar için cihaz kayıt belirteçleri",
+          "commercialLicense": "Kendi sunucunuzda barındırma için ticari lisans",
+          "prioritySupport": "Öncelikli destek"
         }
       },
       "buySeats": {
@@ -398,14 +639,26 @@
     },
     "sync": {
       "voltiusCloud": "Voltius Cloud",
+      "local": {
+        "pairSub": "Hesap olmadan ağınızdaki başka bir cihazla eşitleyin.",
+        "title": "Yerel eşitleme",
+        "pauseSub": "Siz devam ettirene kadar yakındaki diğer cihazlarınızla eşitlemeyi durdurur.",
+        "footer": "Kişisel kasanız, ikisi de çevrimiçiyken aynı ağdaki veya Tailscale gibi bir VPN üzerindeki cihazlarınız arasında doğrudan eşitlenir. Ücretsizdir, arada sunucu yoktur. Ekip kasaları dahil değildir."
+      },
       "active": {
         "title": "Bulut eşitleme etkin",
         "syncing": "Eşitleniyor…",
         "error": "Hata: {{error}}",
         "lastSync": "Son eşitleme: {{time}}",
-        "offline": "Çevrimdışı",
+        "offline": "Sunucuya ulaşılamıyor",
+        "offlineDetail": "Sunucuya ulaşılamıyor: {{error}}",
         "idle": "Henüz eşitlenmedi",
+        "paused": "Bu cihazda duraklatıldı",
         "syncNow": "Şimdi eşitle"
+      },
+      "pause": {
+        "label": "Bu cihazda bulut eşitlemeyi duraklat",
+        "sub": "Sunucuyla arka plan eşitlemesini durdurur. Ekip kasaları güncellenmez ve siz sürdürene kadar açılışta yüklenmez. “Şimdi eşitle” yalnızca kendi verilerinizi eşitler."
       },
       "requiresPro": {
         "title": "Bulut eşitleme",
@@ -413,18 +666,13 @@
         "upgrade": "Yükselt"
       },
       "notConnected": {
-        "title": "Bulut hesabı bağlı değil",
-        "sub": "Cihazlar arasında eşitlemek için oturum açın veya bir bulut hesabı oluşturun.",
+        "title": "Oturum açılmadı",
+        "sub": "Voltius Cloud, cihazlarınız aynı anda çevrimiçi olmasa bile onları eşitlenmiş tutar ve şifreli bir yedek saklar. Ücretsiz bir hesapla cihazlarınız otomatik olarak eşlenir.",
         "signIn": "Oturum aç"
       },
-      "gistTitle": "GitHub Gist (uçtan uca şifreli)",
-      "gist": {
-        "title": "Gist Eşitleme eklentisi",
-        "sub": "GitHub Gist üzerinden uçtan uca şifreli eşitleme",
-        "configure": "Yapılandır →"
-      },
+      "providersTitle": "Eşitleme eklentileri",
       "prefsTitle": "Eşitleme Tercihleri",
-      "prefsFooter": "Devre dışı bırakılan türler hiçbir zaman yüklenmez. Tek tek nesneler de düzenleme panelinden hariç tutulabilir.",
+      "prefsFooter": "Devre dışı bırakılan türler bu cihazdan hiçbir zaman çıkmaz. Tek tek nesneler de düzenleme panelinden hariç tutulabilir.",
       "quickToggleLabel": "Eşitle: {{label}}",
       "objectType": {
         "connection": {
@@ -453,7 +701,7 @@
         }
       },
       "settingsTitle": "Ayarlar",
-      "settingsFooter": "Kapattığınız her şey bu cihazda kalır. Şifrelenmiş olarak bile hiçbir zaman yüklenmez. Eşitlemeyi yeniden açtığınızda bu cihazdaki değerler yayımlanır.",
+      "settingsFooter": "Kapattığınız her şey bu cihazda kalır ve şifrelenmiş olarak bile hiçbir yere gönderilmez. Eşitlemeyi yeniden açtığınızda bu cihazdaki değerler yayımlanır.",
       "settingDomain": {
         "themes": {
           "label": "Temalar",
@@ -492,10 +740,39 @@
         "deviceDefault": "cihaz varsayılanı",
         "yourChoice": "seçiminiz",
         "resume": "Eşitlemeyi sürdür"
+      },
+      "devices": {
+        "title": "Cihazlarınız",
+        "footer": "Her cihaz kendi şifreli kopyasını yükler. Bu liste, bu cihazın her birinin son kopyasını okuyup okuyamadığını gösterir.",
+        "empty": "Henüz başka bir cihaz eşitlenmedi.",
+        "unnamed": "Cihaz {{id}}",
+        "state": {
+          "synced": "Eşitlendi",
+          "pending": "Sonraki eşitleme bekleniyor",
+          "unavailable": "İndirilemedi",
+          "unavailableStatus": "İndirilemedi (HTTP {{status}})",
+          "undecryptable": "Şifresi çözülemiyor: bu cihazda olmayan bir anahtarla şifrelenmiş",
+          "unreadable": "Kopyası bozuk ve okunamıyor"
+        },
+        "hint": {
+          "unavailable": "Genellikle geçicidir. Voltius sonraki eşitlemede yeniden dener.",
+          "undecryptable": "O cihaz hâlâ eski bir kasa anahtarı kullanıyor olabilir. Yeni bir kopya yüklemesi için o cihazda Voltius'u açın ya da artık kullanmıyorsanız buradan kaldırın.",
+          "unreadable": "Yeni bir kopya yüklemesi için o cihazda Voltius'u açın ya da artık kullanmıyorsanız buradan kaldırın."
+        },
+        "changed": "Değişti: {{time}}",
+        "lastSynced": "Okundu: {{time}}",
+        "neverSynced": "Hiç okunmadı",
+        "retry": "Yeniden dene",
+        "retryNone": "Yeniden denenecek bir şey yok",
+        "remove": "Kaldır",
+        "removeTitle": "{{name}} bulut eşitlemeden kaldırılsın mı?",
+        "removeBody": "Şifreli kopyası sunucudan silinir. Bu cihazın ondan zaten eşitlediği veriler kalır. O cihazı hâlâ kullanıyorsanız, bir sonraki eşitlemede yeni bir kopya yükler.",
+        "removeFailed": "Cihaz kaldırılamadı: {{error}}"
       }
     },
     "vaults": {
       "general": {
+        "renameFailedToast": "Bu kasa yeniden adlandırılamadı. {{reason}}",
         "vaultNameLabel": "Kasa adı",
         "save": "Kaydet",
         "makePrivate": {
@@ -512,9 +789,11 @@
         "deleteVault": {
           "title": "Kasayı sil",
           "confirmDesc": "Bu kasayı ve içindeki {{count}} öğeyi kalıcı olarak siler. Bu işlem geri alınamaz.",
+          "confirmDescTeam": "Bu kasayı ve içindeki {{count}} öğeyi tüm üyeler için kalıcı olarak siler. Bu işlem geri alınamaz.",
           "confirmBtn": "Silmeyi onayla",
           "deleting": "Siliniyor…",
-          "failedToast": "Bu kasa tamamen silinemedi — hâlâ burada ancak bazı öğeleri silinmiş olabilir. {{reason}}"
+          "failedToast": "Bu kasa tamamen silinemedi — hâlâ burada ancak bazı öğeleri silinmiş olabilir. {{reason}}",
+          "teamFailedToast": "Bu kasa silinemedi — hiçbir şey silinmedi. {{reason}}"
         },
         "madePrivateToast_one": "Kasa artık özel. {{count}} üyenin erişimi kaldırıldı.",
         "madePrivateToast_other": "Kasa artık özel. {{count}} üyenin erişimi kaldırıldı.",
@@ -522,12 +801,15 @@
       },
       "rolesPanel": {
         "permGroup": {
+          "administration": "Yönetim",
           "dataAccess": "Veri Erişimi",
           "connectionManagement": "Bağlantı Yönetimi",
           "teamAdministration": "Ekip Yönetimi",
           "terminalSessions": "Terminal Oturumları"
         },
         "perm": {
+          "VIEW": "Bir nesneyi görmek",
+          "ADMINISTRATOR": "Kurallarından bağımsız olarak her nesnede her izin",
           "VIEW_SECRETS": "Parolaları ve özel anahtarları düz metin olarak görme",
           "COPY_SECRETS": "Parolaları ve anahtarları panoya kopyalama",
           "CONNECT": "SSH bağlantıları başlatma",
@@ -559,6 +841,7 @@
         "clearColor": "Temizle",
         "preview": "Önizleme",
         "permissionsLabel": "İzinler",
+        "objectOverrideNote": "Her ana bilgisayar, anahtar, kimlik, parçacık veya klasör bunları geçersiz kılabilir.",
         "saveChanges": "Değişiklikleri kaydet",
         "createRole": "Rol oluştur",
         "errorNameRequired": "Ad gereklidir",
@@ -566,9 +849,6 @@
         "builtinRoles": "Yerleşik roller",
         "customRoles": "Özel roller",
         "newRoleBtn": "Yeni rol",
-        "businessFeature": "Business planı özelliği",
-        "businessFeatureDesc": "Ayrıntılı izinlere sahip özel roller Business planında kullanılabilir.",
-        "upgradeBtn": "Business'a yükselt",
         "noCustomRolesCanEdit": "Henüz özel rol yok. Belirli izinler atamak için bir rol oluşturun.",
         "noCustomRoles": "Bu ekip için özel rol tanımlanmamış."
       }
@@ -635,7 +915,9 @@
       "consequence": {
         "autoUpdate": "Güncellemelerin otomatik indirilmesini kapatır; böylece güvenlik düzeltmeleri artık kendiliğinden gelmez.",
         "pluginInstallReview": "Eklenti kurulmadan önce gösterilen onay ekranını kapatır. Hassas bir izin isteyen eklenti yine de bu izni gösterir.",
-        "sessionTimeout": "Belirli bir süre işlem yapılmadığında kasanın otomatik kilitlenmesini kapatır."
+        "sessionTimeout": "Otomatik kilidi kapatır veya uzatır.",
+        "lockAction": "Kilitlemeyi, kasa anahtarını bellekte tutan ekran kilidine çevirir.",
+        "systemAuthUnlock": "Voltius'un cihaz girişiyle açılmasına izin verir; kilitliyken kasa anahtarı sistem anahtarlığında kalır."
       }
     },
     "about": {
@@ -644,16 +926,18 @@
       "updatesTitle": "Güncellemeler",
       "checkForUpdate": "Güncellemeleri denetle",
       "restartToUpdate": "Güncellemek için yeniden başlat · v{{version}}",
+      "downloadUpdate": "Güncellemeyi indir · v{{version}}",
       "status": {
         "idle": "Henüz denetlenmedi",
         "checking": "Güncellemeler denetleniyor…",
         "upToDate": "Güncelsiniz",
         "downloading": "v{{version}} indiriliyor — %{{progress}}",
-        "ready": "v{{version}} kurulmaya hazır"
+        "ready": "v{{version}} kurulmaya hazır",
+        "available": "v{{version}} mevcut"
       },
       "autoDownload": {
         "title": "Güncellemeleri otomatik indir",
-        "desc": "Yeni sürümleri arka planda denetleyip indirir"
+        "desc": "Yeni sürümleri arka planda indirir. Voltius her durumda güncellemeleri denetler."
       },
       "whatsNew": {
         "title": "Güncellemelerden sonra yenilikleri göster",
@@ -669,6 +953,28 @@
       },
       "reportBug": "Hata bildir"
     },
+    "devices": {
+      "fileAccess": {
+        "title": "Dosya erişimi",
+        "enable": { "title": "Cihazlarımın bu bilgisayardaki dosyaları açmasına izin ver", "desc": "Diğer Voltius cihazlarınız aşağıdaki klasörlere SFTP üzerinden göz atabilir. Varsayılan olarak kapalı." },
+        "folders": "Paylaşılan klasörler",
+        "addFolder": "Klasör ekle",
+        "noFolders": "Cihazlarınızla paylaşmak için bir klasör ekleyin.",
+        "removeFolder": "{{folder}} paylaşımını durdur",
+        "readOnly": { "title": "Salt okunur", "desc": "Cihazlar buradan dosya kopyalayabilir, değiştiremez veya silemez." }
+      },
+      "allowed": {
+        "title": "İzin verilen cihazlar",
+        "asksEachTime": "Her seferinde sor",
+        "alwaysAllowed": "Her zaman izinli",
+        "connectedNow": "bağlı",
+        "disconnect": "Bağlantıyı kes",
+        "revoke": "İptal et",
+        "needsKey": "İzin vermek için bir kez bağlanın",
+        "alwaysLabel": "{{name}} için her zaman izin ver",
+        "empty": "Henüz başka cihaz yok."
+      }
+    },
     "sftp": {
       "downloads": {
         "title": "İndirmeler",
@@ -680,8 +986,7 @@
         "title": "Aktarımlar",
         "tarAcceleration": {
           "title": "Tar hızlandırma",
-          "descPre": "Klasörleri aktarımdan önce tek bir tar.gz dosyasında paketler — çok sayıda küçük dosya için çok daha hızlıdır. Her iki tarafta da ",
-          "descPost": " gerekir."
+          "desc": "Klasörleri aktarımdan önce tek bir tar.gz dosyasında paketler — çok sayıda küçük dosya için çok daha hızlıdır. Her iki tarafta da <code>tar</code> gerekir."
         }
       },
       "filePanel": {
@@ -758,9 +1063,32 @@
           "detail": "Bağlantıyı canlı tutma yoklaması yok"
         }
       },
+      "proxy": {
+        "title": "Proxy",
+        "desc": "SSH, SFTP ve erişilebilirlik denetimlerini bir proxy üzerinden yönlendirir. Her sunucu için ayrı ayarlanabilir.",
+        "modes": {
+          "none": "Proxy yok",
+          "system": "Sistem",
+          "socks5": "SOCKS5",
+          "http": "HTTP",
+          "https": "HTTPS"
+        },
+        "detected": "Algılanan: {{kind}} {{host}}:{{port}}",
+        "detectedNone": "Algılanan: yok (doğrudan bağlanılıyor)",
+        "passwordSaveFailed": "Proxy parolası kaydedilemedi: {{error}}"
+      },
       "persistentSessions": {
         "title": "Kalıcı oturumlar",
         "desc": "Uzak kabuğu tmux içinde çalıştırarak (tmux yoksa screen kullanılır) kabuğunuzu ve çalışan işlemlerinizi bağlantı kesintilerinde canlı tutar. Sunucuda tmux veya screen gerekir. Bağlantı ayarlarındaki Gelişmiş bölümünden her sunucu için ayrı ayarlanabilir."
+      },
+      "detachedTtl": {
+        "title": "Boştaki ayrılmış oturumları kapat",
+        "desc": "Seçilen süre boyunca hiçbir cihaz bağlı değilse, sunucudaki kalıcı oturumu kapatır; ancak yalnızca içinde çalışan bir şey yoksa. tmux 3.2 veya daha yenisi olan Linux sunucularında çalışır; screen ve daha eski tmux sürümleri oturumları eskisi gibi korur. Bir değişiklik, oturuma bir sonraki bağlanışınızda uygulanır.",
+        "durationTitle": "Şu süreden sonra kapat",
+        "hours_one": "{{count}} saat",
+        "hours_other": "{{count}} saat",
+        "days_one": "{{count}} gün",
+        "days_other": "{{count}} gün"
       },
       "terminalTitle": "Terminal",
       "shellIntegration": {
@@ -771,9 +1099,87 @@
       "teamPresence": {
         "title": "Kullandığınız ekip kasası sunucularını paylaş",
         "desc": "Açıkken, bir sunucuya terminaliniz açık olduğu sürece avatarınız o sunucunun kartında görünür. Bunu yalnızca o sunucuya erişimi olan ekip arkadaşlarınız görür."
+      },
+      "sshConfig": {
+        "switch": {
+          "title": "~/.ssh/config'ten sürekli senkronize et",
+          "desc": "Yapılandırmanızdaki ana makineler Voltius'ta oluşturulur ve tüm bilgisayarlarınızda güncel tutulur. Bir araç yapılandırmayı yazdığında kullanışlıdır (gcloud, MDM…)."
+        },
+        "vault": {
+          "title": "Kasa",
+          "desc": "Yeni yönetilen ana makinelerin oluşturulacağı yer. Yalnızca kişisel kasalar.",
+          "personal": "Kişisel"
+        },
+        "status": {
+          "title": "Durum",
+          "line": "Son okuma {{when}} · {{managed}} yönetilen · {{skipped}} senkronize edilmeyen",
+          "never": "Henüz okunmadı",
+          "view": "Ana makineleri göster…",
+          "syncNow": "Şimdi senkronize et"
+        },
+        "off": {
+          "title": "Sürekli senkronizasyon kapatılsın mı?",
+          "message_one": "Yönetilen ana makine Voltius'ta kalır ve normal bir ana makineye dönüşür: hiçbir bilgisayarınızda artık ~/.ssh/config'i izlemez.",
+          "message_other": "{{count}} yönetilen ana makine Voltius'ta kalır ve normal ana makinelere dönüşür: hiçbir bilgisayarınızda artık ~/.ssh/config'i izlemezler.",
+          "confirm": "Kapat"
+        },
+        "dialog": {
+          "activateTitle": "Sürekli senkronizasyonu aç",
+          "reviewTitle": "~/.ssh/config ana makineleri",
+          "intro": "Bağlanan ana makineler adlarını, klasörlerini ve ayarlarını korur. Dosyayı yalnızca onun belirttikleri (adres, port ve varsa kullanıcı, anahtar veya atlama ana makineleri) izler; bu tüm bilgisayarlarınızda geçerlidir.",
+          "turnOn": "Aç",
+          "cancel": "İptal",
+          "close": "Kapat",
+          "linkAgain": "Yeniden bağla",
+          "recreate": "Yeniden oluştur",
+          "counts": "{{create}} oluşturulacak · {{link}} bağlanacak · {{skipped}} senkronize edilmeyen · kasa {{vault}}"
+        },
+        "row": {
+          "create": "Oluşturulacak",
+          "link": {
+            "legacy": "“{{name}}” ile bağlanacak · önceki senkronizasyon",
+            "detached": "“{{name}}” ile bağlanacak · daha önce ayrılmış",
+            "name": "“{{name}}” ile bağlanacak · aynı ad ve adres",
+            "address": "“{{name}}” ile bağlanacak · aynı adres"
+          },
+          "ambiguous": "Belirsiz ({{names}} eşleşiyor) · yeni bir ana makine oluşturulacak",
+          "managed": "Yönetilen · “{{name}}”",
+          "detached": "Ayrıldı · “{{name}}” artık dosyayı izlemiyor",
+          "deleted": "Silindi · senkronizasyon yeniden oluşturmaz",
+          "ignored": "Yok sayıldı · senkronize edilmeyecek",
+          "identityReplaced": "“{{name}}” kimliği dosyadaki anahtarla değiştirilecek",
+          "skipped": {
+            "pattern": "Senkronize edilmez · desen, ana makine değil",
+            "match": "Senkronize edilmez · Match bloğu",
+            "include": "Senkronize edilmez · Include okunamadı",
+            "includeOutside": "Senkronize edilmez · ~/.ssh dışındaki Include",
+            "proxyCommand": "Senkronize edilmez · ProxyCommand desteklenmiyor",
+            "key": "Anahtar okunamadı · ana makine anahtarsız oluşturuldu",
+            "keyNotCopied": "Anahtar kopyalanmadı · ana makine anahtarsız oluşturuldu",
+            "pending": "Bekleniyor · ana makine diğer cihazınızdan henüz gelmedi"
+          }
+        },
+        "keys": {
+          "title": "Anahtarlar",
+          "switch": "Özel anahtarları kasaya kopyala",
+          "warning": "Kopyalanan anahtarlar {{vault}} kasasına gider ve telefon dahil tüm cihazlarınıza senkronize edilir (şifreli).",
+          "settingDesc": "Kapalı: ana makineler kasada zaten bulunan bir anahtarı (aynı genel anahtar veya ad) kullanır, yoksa anahtarsız olur. Kopyalanan anahtarlar tüm cihazlarınıza senkronize edilir.",
+          "copy": "Kopyalanacak",
+          "notCopied": "Kopyalanmadı",
+          "exists": "Kasada zaten var",
+          "unreadable": "Okunamadı"
+        },
+        "here": {
+          "title": "Bu bilgisayar",
+          "desc": "Eşitleme hesabınızda açık, ancak bu bilgisayarın ~/.ssh/config dosyası henüz gözden geçirilmedi. Siz gözden geçirene kadar burada hiçbir şey okunmaz veya kopyalanmaz.",
+          "action": "Gözden geçir…"
+        }
       }
     },
     "toggleDefs": {
+      "commandHistory": {
+        "label": "Komut Geçmişi"
+      },
       "cursorBlink": {
         "label": "İmleç Yanıp Sönmesi"
       },
@@ -786,8 +1192,20 @@
       "dragSelectsText": {
         "label": "Sürükleyerek Metin Seç"
       },
+      "groupTabsByHost": {
+        "label": "Sekmeleri Ana Makineye Göre Grupla"
+      },
       "ignoreBracketedPaste": {
         "label": "Düz Metin Yapıştırma (Köşeli Ayraçsız)"
+      },
+      "pasteImageAsPath": {
+        "label": "Görüntüleri Dosya Yolu Olarak Yapıştır"
+      },
+      "volumeDownCtrl": {
+        "label": "Ses Kısma Tuşunu Ctrl Olarak Kullan"
+      },
+      "keywordHighlight": {
+        "label": "Anahtar Kelime Vurgulama"
       },
       "autoForward": {
         "label": "Otomatik Port Yönlendirme"
@@ -813,6 +1231,9 @@
       "persistentSessions": {
         "label": "Kalıcı Oturumlar"
       },
+      "detachedSessionTtl": {
+        "label": "Boştaki Ayrılmış Oturumları Kapat"
+      },
       "restoreWorkspace": {
         "label": "Başlangıçta Çalışma Alanını Geri Yükle"
       },
@@ -821,15 +1242,6 @@
       },
       "changelogPopup": {
         "label": "Güncellemelerden Sonra Yenilikleri Göster"
-      },
-      "category": {
-        "appearance": "Görünüm",
-        "portForwarding": "Port Yönlendirme",
-        "sftp": "SFTP",
-        "hosts": "Sunucular",
-        "updates": "Güncellemeler",
-        "plugins": "Eklentiler",
-        "integrations": "Entegrasyonlar"
       },
       "pluginInstallReview": {
         "label": "Eklentileri kurmadan önce izinleri incele"
@@ -905,6 +1317,10 @@
           "label": "Seçilenleri Sil",
           "desc": "Seçili öğeleri sil"
         },
+        "rename": {
+          "label": "Seçileni Yeniden Adlandır",
+          "desc": "Seçili öğeyi yerinde yeniden adlandır"
+        },
         "copy": {
           "label": "Kopyala",
           "desc": "Seçili öğeleri panoya kopyala"
@@ -944,6 +1360,10 @@
         "panelThemes": {
           "label": "Temalar Paneli",
           "desc": "Temaları sağ panelde aç"
+        },
+        "panelNotes": {
+          "label": "Notlar paneli",
+          "desc": "Sunucu notlarını sağ panelde aç"
         }
       }
     },
@@ -969,6 +1389,7 @@
         "sourceLocal": "Yerel",
         "sourceUrl": "URL",
         "sourceInstalled": "Kurulu",
+        "sourceOrganization": "Kuruluş",
         "unverified": "Doğrulanmamış",
         "update": "Güncelle",
         "updating": "Güncelleniyor…",
@@ -988,6 +1409,7 @@
         "addSourcePlaceholder": "https://example.com/plugins.json",
         "add": "Ekle",
         "installedBadge": "Kurulu",
+        "installsOff": "Kuruluşunuz eklenti kurmayı kapattı.",
         "byAuthor": "Geliştirici: {{author}} · v{{version}}",
         "noCatalog": "Katalogda eklenti yok.",
         "noResults": "Sonuç yok.",
@@ -1304,6 +1726,27 @@
           }
         }
       }
+    },
+    "search": {
+      "placeholder": "Ayarlarda ara",
+      "clear": "Aramayı temizle",
+      "changed": "Değiştirilenler",
+      "changedTitle": "Varsayılandan farklı olanlar",
+      "results_one": "{{count}} sonuç",
+      "results_other": "{{count}} sonuç",
+      "changedOnly": "Yalnızca değiştirilenler",
+      "open": "Aç",
+      "openSection": "{{section}} bölümünü aç",
+      "undo": "Geri al",
+      "resetAll": "Tümünü sıfırla",
+      "resetAllConfirm_one": "{{count}} ayar sıfırlansın mı? Ekibin yönettiği ayarlar, güvenlik ve eşitleme ayarları korunur.",
+      "resetAllConfirm_other": "{{count}} ayar sıfırlansın mı? Ekibin yönettiği ayarlar, güvenlik ve eşitleme ayarları korunur.",
+      "cancel": "İptal",
+      "emptyChanged": "Tüm ayarlar varsayılan değerinde.",
+      "emptyQuery": "“{{query}}” ile eşleşen ayar yok.",
+      "emptyQueryChanged": "“{{query}}” ile eşleşen değiştirilmiş ayar yok.",
+      "changedSub_one": "{{count}} ayar varsayılandan farklı",
+      "changedSub_other": "{{count}} ayar varsayılandan farklı"
     }
   }
 }

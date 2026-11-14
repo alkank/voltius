@@ -1,67 +1,82 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Icon } from "@iconify/react";
 import { useUIStore } from "@/stores/uiStore";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useThemeStore } from "@/stores/themeStore";
-import { getConnectionIcon, getConnectionIconColor } from "@/utils/icons";
-import { getSyncState, onSyncStateChange, type SyncStatus } from "@/services/sync";
-import { selectEffectiveSyncStatus, syncStatusColor } from "@/services/syncStatus";
-import { useGistSyncState } from "@/hooks/useGistSyncState";
+import { syncStatusTooltip } from "@/services/syncStatusText";
+import type { EffectiveSync } from "@/services/syncProviders";
+import { usePlanDisplay } from "@/services/planDisplay";
+import { useSyncProviders } from "@/hooks/useSyncProviders";
 import { useRipple } from "@/hooks/useRipple";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
+import { holdsControl } from "@/utils/multiplayerControl";
 import { ShareMenu } from "@/components/terminal/ShareMenu";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { usePfToastBridge } from "@/hooks/usePfToastBridge";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
-import { usePluginRegistryStore } from "@/stores/pluginRegistryStore";
 import { SyncDropdown } from "@/components/layout/SyncDropdown";
+import { usePluginInstaller } from "@/components/settings/usePluginInstaller";
 import { NewSessionPopover } from "@/components/layout/NewSessionPopover";
-import { useDragStore } from "@/stores/dragStore";
+import { clearTitlebarDropTarget, useDragStore } from "@/stores/dragStore";
 import { useMcpOwnershipStore } from "@/stores/mcpOwnershipStore";
 import { McpMark, mcpOwnerTitle } from "@/components/shared/McpMark";
 import { findLeaf, firstLeaf, getPaneSessionIds, useLayoutStore } from "@/stores/layoutStore";
 import { shouldSuppressDragClick } from "@/components/panes/usePaneDragController";
 import { mergeTitlebarItems } from "@/utils/titlebarOrder";
+import { orderPinnedFirst } from "@/utils/pinnedOrder";
 import { useAllConnections } from "@/hooks/useAllConnections";
 import { useStatusBarContributions } from "@/hooks/useStatusBarContributions";
-import { ContextMenu, useContextMenu } from "@/components/shared/ContextMenu";
-import { closeSession } from "@/services/closeSession";
-import { sessionMenuItems } from "@/utils/sessionMenuItems";
-import { InlineNameEditor } from "@/components/shared/InlineNameEditor";
+import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/shared/ContextMenu";
+import { closeSessionTabs, closeSplitTabSessions } from "@/services/closeSession";
+import { activateSessionTab, activateSplitTabPane } from "@/services/tabActivation";
+import { pinHostList } from "@/services/hostStack";
+import { sessionMenuItems, pinListExtra } from "@/utils/sessionMenuItems";
 import { StatusDot } from "@/components/shared/StatusDot";
-import { SyncStatusIcon, useSyncMotion } from "@/components/shared/SyncStatusIcon";
-import { STATUS_TONE_COLOR, sessionStatusTone } from "@/utils/statusTone";
+import { EffectiveSyncIcon, effectiveSyncColor, useSyncMotion } from "@/components/shared/SyncStatusIcon";
+import { sessionStatusTone } from "@/utils/statusTone";
 import { sessionLabel, splitTabLabel } from "@/utils/sessionLabel";
 import { focusSession } from "@/hooks/useTerminal";
 import { splitTabMenuItems } from "@/utils/splitTabMenuItems";
+import { fadeMask, useTabStripScroll } from "@/hooks/useTabStripScroll";
+import { TitlebarTab, sessionTabIcon, tabSurfaceStyle } from "@/components/layout/TitlebarTab";
+import { StackTab } from "@/components/layout/StackTab";
+import { buildTitlebarItems, stackGroupKey, titlebarKeyGroupOf, visibleTitlebarKeys } from "@/utils/titlebarItems";
+import { useToggle } from "@/stores/toggleSettingsStore";
+import { useLastActiveByHost, useSessionTabHandlers } from "@/hooks/useTitlebarTabState";
+import { SFTP_TAB_ICON } from "@/lib/conceptIcons";
 
 const appWindow = getCurrentWindow();
 
-type TitlebarItem =
-  | { key: string; type: "split"; tab: ReturnType<typeof useLayoutStore.getState>["splitTabs"][number] }
-  | { key: string; type: "session"; session: ReturnType<typeof useSessionStore.getState>["sessions"][number] };
+/** A split tab's title, noting how many more sessions it holds. */
+function splitTitle(t: TFunction, label: string, more: number): string {
+  return more > 0 ? t("layout.titleBar.splitLabelMore", { label, count: more }) : label;
+}
 
 export default function TitleBar() {
   const { t } = useTranslation();
   const setActiveNav = useUIStore((s) => s.setActiveNav);
+  const leaveTerminal = useUIStore((s) => s.leaveTerminal);
   const activeNav = useUIStore((s) => s.activeNav);
   const rightPanelOpen = useUIStore((s) => s.rightPanelOpen);
   const setRightPanelOpen = useUIStore((s) => s.setRightPanelOpen);
   const toggleRightPanel = useUIStore((s) => s.toggleRightPanel);
   const sftpPanelOpen = useUIStore((s) => s.sftpPanelOpen);
   const setSftpPanelOpen = useUIStore((s) => s.setSftpPanelOpen);
+  const hostPanelPinned = useUIStore((s) => s.hostPanelPinned);
+  const setHostPanelPinned = useUIStore((s) => s.setHostPanelPinned);
+  const [grouped] = useToggle("group-tabs-by-host");
   const activeThemeName = useThemeStore((s) => s.getActiveTheme().name);
-  const { sessions, activeSessionId, setActive } = useSessionStore();
+  const { sessions, activeSessionId } = useSessionStore();
   const connections = useAllConnections();
   const splitTabs = useLayoutStore((s) => s.splitTabs);
   const activeSplitTabId = useLayoutStore((s) => s.activeSplitTabId);
   const splitTabActive = useLayoutStore((s) => s.splitTabActive);
-  const setSplitTabActive = useLayoutStore((s) => s.setSplitTabActive);
-  const activateSplitTab = useLayoutStore((s) => s.activateSplitTab);
-  const closeSplitTab = useLayoutStore((s) => s.closeSplitTab);
   const titlebarOrder = useLayoutStore((s) => s.titlebarOrder);
+  const pinnedKeys = useLayoutStore((s) => s.pinnedKeys);
+  const isPinned = (key: string) => pinnedKeys.includes(key);
   const syncTitlebarOrder = useLayoutStore((s) => s.syncTitlebarOrder);
   const isDraggingTitlebarItem = useDragStore((s) => s.isDragging && s.dragType === "tab");
   const isDraggingPane = useDragStore((s) => s.isDragging && s.dragType === "pane");
@@ -74,24 +89,14 @@ export default function TitleBar() {
 
   usePfToastBridge();
 
-  const [syncState, setSyncState] = useState(getSyncState);
-  useEffect(() => { return onSyncStateChange(() => setSyncState(getSyncState())); }, []);
+  const { providers: syncProviders, effective: sync } = useSyncProviders();
+  const syncInstaller = usePluginInstaller();
 
-  const gistSyncState = useGistSyncState();
-
-  const gistPluginEnabled = usePluginRegistryStore((s) => s.isEnabled("plugin-gist-sync", false));
   const accountMode = useSubscriptionStore((s) => s.accountMode);
-  const isPro = useSubscriptionStore((s) => s.isPro);
-
-  const {
-    configured: effectiveConfigured,
-    status: effectiveSyncStatus,
-    lastSync: effectiveLastSync,
-    error: effectiveError,
-  } = selectEffectiveSyncStatus({ voltius: syncState, gist: gistSyncState, accountMode, isPro, gistPluginEnabled });
 
   const { pos: tabMenuPos, open: openTabMenu, close: closeTabMenu } = useContextMenu();
   const [menuTarget, setMenuTarget] = useState<{ kind: "session" | "split"; id: string } | null>(null);
+  const [menuExtras, setMenuExtras] = useState<ContextMenuItem[]>([]);
   // The tab being renamed in place. Its label becomes an input; committing an
   // empty name clears it, so the tab falls back to its connection again.
   const [renaming, setRenaming] = useState<{ kind: "session" | "split"; id: string } | null>(null);
@@ -137,48 +142,44 @@ export default function TitleBar() {
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const isActiveSessionMultiplayer = activeSession?.type === "multiplayer";
-  const isActiveSessionSharing = activeSessionId ? !!mpConnections[activeSessionId] && !mpConnections[activeSessionId]?.ended : false;
-  const isActiveSessionEnded = activeSessionId ? !!mpConnections[activeSessionId]?.ended : false;
+  const activeMp = activeSessionId ? mpConnections[activeSessionId] : undefined;
+  const isActiveSessionSharing = !!activeMp && !activeMp.ended;
+  const isActiveSessionEnded = !!activeMp?.ended;
+
+  const lastActiveByHost = useLastActiveByHost(activeSession, sessions);
+  const pinnedHost = hostPanelPinned && activeNav === "terminal" && !sftpPanelOpen && activeSession ? stackGroupKey(activeSession) : null;
 
   const isSftpCompact = !sftpPanelOpen && sessions.length > 0;
-  const splitSessionIds = splitTabs.flatMap((tab) => getPaneSessionIds(tab.root));
-  const splitSessionIdSet = new Set(splitSessionIds);
-  const visibleSessions = sessions.filter((session) => !splitSessionIdSet.has(session.id));
   const draggedSession = titlebarDropActive ? sessions.find((session) => session.id === draggedSessionId) : null;
-  const splitItems: TitlebarItem[] = splitTabs.map((tab) => ({ key: `split:${tab.id}`, type: "split", tab }));
-  const sessionItems: TitlebarItem[] = visibleSessions.map((session) => ({ key: `session:${session.id}`, type: "session", session }));
-  const titlebarItemMap = new Map([...splitItems, ...sessionItems].map((item) => [item.key, item]));
-  const visibleItemKeys = [...splitItems, ...sessionItems].map((item) => item.key);
-  const orderedItemKeys = mergeTitlebarItems(titlebarOrder, visibleItemKeys);
-  const titlebarItems = orderedItemKeys.flatMap((key) => {
-    const item = titlebarItemMap.get(key);
-    return item ? [item] : [];
-  });
+  const visibleItemKeys = visibleTitlebarKeys(sessions, splitTabs);
+  const orderedItemKeys = orderPinnedFirst(mergeTitlebarItems(titlebarOrder, visibleItemKeys), isPinned);
+  const titlebarItems = buildTitlebarItems(orderedItemKeys, sessions, splitTabs, grouped, isPinned);
+
+  const activeItemKey = activeNav !== "terminal" || sftpPanelOpen
+    ? null
+    : splitTabActive ? `split:${activeSplitTabId}` : `session:${activeSessionId}`;
+  const tabStrip = useTabStripScroll(`${activeItemKey}|${visibleItemKeys.length}`);
+  const isDraggingIntoTitlebar = isDraggingTitlebarItem || isDraggingPane;
 
   useEffect(() => {
-    syncTitlebarOrder(visibleItemKeys);
-  }, [syncTitlebarOrder, visibleItemKeys.join("|")]);
+    if (!isDraggingIntoTitlebar) tabStrip.stopAutoScroll();
+  }, [isDraggingIntoTitlebar, tabStrip.stopAutoScroll]);
 
-  // Ensure the user never gets stuck on an empty terminal view.
-  // When all sessions are gone, fall back to Vaults.
   useEffect(() => {
-    if (sessions.length === 0 && activeNav === "terminal") {
-      setActiveNav("hosts");
-    }
-  }, [sessions.length, activeNav, setActiveNav]);
+    syncTitlebarOrder(visibleItemKeys, grouped ? titlebarKeyGroupOf : undefined);
+  }, [syncTitlebarOrder, visibleItemKeys.join("|"), grouped]);
+
+  useEffect(() => {
+    if (sessions.length === 0) leaveTerminal();
+  }, [sessions.length, activeNav, leaveTerminal]);
 
   const handleTabClick = (sessionId: string) => {
     if (shouldSuppressDragClick()) return;
-    setSftpPanelOpen(false);
-    setSplitTabActive(false);
-    setActive(sessionId);
-    setActiveNav("terminal");
+    activateSessionTab(sessionId);
   };
 
   const closeTabById = (sessionId: string) => {
-    closeSession(sessionId);
-    useLayoutStore.getState().removeSession(sessionId);
-    if (sessions.length <= 1) setActiveNav("hosts");
+    closeSessionTabs([sessionId]);
   };
 
   const handleTabClose = (e: React.MouseEvent, sessionId: string) => {
@@ -186,28 +187,18 @@ export default function TitleBar() {
     closeTabById(sessionId);
   };
 
+  const sessionTabHandlers = useSessionTabHandlers({
+    t, isRenaming, handleTabClick, handleTabClose, startRenameFromLabel, setRenaming, setMenuTarget, setMenuExtras, openTabMenu, endRename,
+  });
+  const stackTabProps = { sessions, connections, activeSessionId, activeNav, sftpPanelOpen, splitTabActive, setHostPanelPinned, lastActiveByHost, buildHandlers: sessionTabHandlers };
+
   const handleUnifiedTabClick = (tabId: string, paneId?: string) => {
     if (shouldSuppressDragClick()) return;
-    setSftpPanelOpen(false);
-    activateSplitTab(tabId);
-    if (paneId) {
-      useLayoutStore.getState().setActivePane(paneId);
-      // A maximized sibling would otherwise keep the whole tab, so the pane the
-      // user just picked would stay hidden behind it.
-      if (useLayoutStore.getState().maximizedPaneId) useLayoutStore.getState().setMaximized(paneId);
-    }
-    const layout = useLayoutStore.getState();
-    const leaf = findLeaf(layout.root, layout.activePaneId) ?? firstLeaf(layout.root);
-    if (leaf) setActive(leaf.sessionId);
-    setActiveNav("terminal");
+    activateSplitTabPane(tabId, paneId);
   };
 
   const closeUnifiedTab = (tabId: string) => {
-    const tab = useLayoutStore.getState().splitTabs.find((candidate) => candidate.id === tabId);
-    const ids = tab ? getPaneSessionIds(tab.root) : [];
-    closeSplitTab(tabId);
-    ids.forEach(closeSession);
-    if (sessions.length <= ids.length) setActiveNav("hosts");
+    closeSplitTabSessions(tabId);
   };
 
   const handleUnifiedTabClose = (e: React.MouseEvent, tabId: string) => {
@@ -228,6 +219,8 @@ export default function TitleBar() {
   const updateTitlebarDropTarget = (e: React.MouseEvent<HTMLDivElement>) => {
     const drag = useDragStore.getState();
     if (drag.dragType !== "pane" && drag.dragType !== "tab") return;
+    if (drag.fromStackList) return;
+    tabStrip.autoScrollNear(e.clientX);
     const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-titlebar-key]");
     if (!tab || !e.currentTarget.contains(tab)) {
       useDragStore.getState().setDropTarget({ type: "titlebar", targetKey: null, placement: "after" });
@@ -333,7 +326,7 @@ export default function TitleBar() {
             }
           }}
         >
-          <Icon icon="lucide:folder-closed" width={20} />
+          <Icon icon={SFTP_TAB_ICON} width={20} />
           {!isSftpCompact && <span>{t("layout.titleBar.sftp")}</span>}
         </button>
 
@@ -342,9 +335,8 @@ export default function TitleBar() {
           <div className="shrink-0 w-px h-[1.667rem] bg-(--t-bg-card-hover)" />
         )}
 
-        {/* Scrollable session tabs */}
         <div
-          className="flex items-center gap-1.5 overflow-x-auto flex-1 h-full min-w-0 rounded-xl transition-colors"
+          className="flex items-center gap-1.5 flex-1 h-full min-w-0 rounded-xl transition-colors"
           style={{
             background: titlebarDropActive
               ? "color-mix(in srgb, var(--t-accent) 10%, transparent)"
@@ -353,8 +345,14 @@ export default function TitleBar() {
           onMouseEnter={updateTitlebarDropTarget}
           onMouseMove={updateTitlebarDropTarget}
           onMouseLeave={() => {
-            if (useDragStore.getState().dropTarget?.type === "titlebar") useDragStore.getState().setDropTarget(null);
+            tabStrip.stopAutoScroll();
+            clearTitlebarDropTarget();
           }}
+        >
+        <div
+          ref={tabStrip.ref}
+          className="flex items-center gap-1.5 h-full min-w-0 overflow-x-auto scrollbar-none"
+          style={fadeMask(tabStrip.overflow)}
         >
         {titlebarItems.map((item) => {
           if (item.type === "split") {
@@ -365,65 +363,54 @@ export default function TitleBar() {
             const isActiveSplitTab = splitTabActive && activeSplitTabId === tab.id && activeNav === "terminal" && !sftpPanelOpen;
             const splitTabTitle = t("layout.titleBar.unifiedSplitTab");
             const splitTabMcpTooltip = mcpTooltip(tabSessionIds);
+            const splitLabel = splitTabLabel(tab, tabActiveSession ?? undefined, t("layout.titleBar.splitFallback"));
 
             return (
               <div key={item.key} className="contents">
                 {renderTitlebarDropCue(item.key, "before")}
-                {isRenaming("split", tab.id) ? (
-                  <div
-                    data-titlebar-key={item.key}
-                    className="relative flex items-center gap-2 h-9 px-2 rounded-xl text-base font-medium-bold shrink-0 overflow-hidden"
-                    style={{
-                      background: isActiveSplitTab ? "var(--t-tab-active-bg)" : "var(--t-tab-bg)",
-                      color: isActiveSplitTab ? "var(--t-tab-active-text)" : "var(--t-text-secondary)",
-                      border: isActiveSplitTab ? "1px solid var(--t-tab-active-border)" : "1px solid transparent",
-                    }}
-                  >
-                    <Icon icon="lucide:layout-dashboard" width={18} />
-                    <InlineNameEditor
-                      value={splitTabLabel(tab, tabActiveSession ?? undefined, t("layout.titleBar.splitFallback"))}
-                      ariaLabel={t("layout.titleBar.renameTab")}
-                      onCommit={(name) => { useLayoutStore.getState().renameSplitTab(tab.id, name); endRename(tabActiveSession?.id); }}
-                      onCancel={() => endRename(tabActiveSession?.id)}
-                    />
-                  </div>
-                ) : (
-                <button
-                  data-titlebar-key={item.key}
+                <TitlebarTab
+                  itemKey={item.key}
+                  active={isActiveSplitTab}
+                  icon={<Icon icon="lucide:layout-dashboard" width={18} />}
+                  label={splitTitle(t, splitLabel, tabSessionIds.length - 1)}
+                  title={splitTabMcpTooltip ? `${splitTabTitle}\n${splitTabMcpTooltip}` : splitTabTitle}
+                  mcpBar={renderMcpBar(tab.id, tabSessionIds)}
+                  renaming={isRenaming("split", tab.id)}
+                  renameValue={splitLabel}
+                  renameAriaLabel={t("layout.titleBar.renameTab")}
+                  onRenameCommit={(name) => { useLayoutStore.getState().renameSplitTab(tab.id, name); endRename(tabActiveSession?.id); }}
+                  onRenameCancel={() => endRename(tabActiveSession?.id)}
                   onClick={() => handleUnifiedTabClick(tab.id)}
+                  onLabelClick={(e) => startRenameFromLabel(e, isActiveSplitTab, { kind: "split", id: tab.id })}
+                  onClose={(e) => handleUnifiedTabClose(e, tab.id)}
                   onContextMenu={(e) => { setMenuTarget({ kind: "split", id: tab.id }); openTabMenu(e); }}
                   onDoubleClick={() => setRenaming({ kind: "split", id: tab.id })}
                   onPointerDown={(e) => {
                     if (e.button === 0) useDragStore.getState().beginSplitTabDrag(tab.id, e.clientX, e.clientY);
                     if (e.button === 1) { e.preventDefault(); handleUnifiedTabClose(e, tab.id); }
                   }}
-                  className="group relative flex items-center gap-2 h-9 px-2 rounded-xl text-base font-medium-bold shrink-0 transition-all overflow-hidden"
-                  title={splitTabMcpTooltip ? `${splitTabTitle}\n${splitTabMcpTooltip}` : splitTabTitle}
-                  style={{
-                    background: isActiveSplitTab ? "var(--t-tab-active-bg)" : "var(--t-tab-bg)",
-                    color: isActiveSplitTab ? "var(--t-tab-active-text)" : "var(--t-text-secondary)",
-                    border: isActiveSplitTab ? "1px solid var(--t-tab-active-border)" : "1px solid transparent",
-                  }}
-                >
-                  {renderMcpBar(tab.id, tabSessionIds)}
-                  <Icon icon="lucide:layout-dashboard" width={18} />
-                  <span
-                    className="max-w-[140px] truncate"
-                    onClick={(e) => startRenameFromLabel(e, isActiveSplitTab, { kind: "split", id: tab.id })}
-                  >
-                    {splitTabLabel(tab, tabActiveSession ?? undefined, t("layout.titleBar.splitFallback"))}{tabSessionIds.length > 1 ? t("layout.titleBar.splitCountSuffix", { count: tabSessionIds.length - 1 }) : ""}
-                  </span>
-                  <span
-                    onClick={(e) => handleUnifiedTabClose(e, tab.id)}
-                    className="ml-0.5 opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5"
-                    style={{ color: isActiveSplitTab ? "var(--t-tab-active-text)" : "var(--t-text-muted)" }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--t-status-error)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = isActiveSplitTab ? "var(--t-tab-active-text)" : "var(--t-text-muted)"; }}
-                  >
-                    <span className="[&_path]:stroke-[2.1]"><Icon icon="lucide:x" width={20} /></span>
-                  </span>
-                </button>
-                )}
+                  sessionIds={tabSessionIds}
+                  closeTitle={t("layout.titleBar.closeTab")}
+                  compact={isPinned(item.key)}
+                />
+                {renderTitlebarDropCue(item.key, "after")}
+              </div>
+            );
+          }
+
+          if (item.type === "stack") {
+            return (
+              <div key={item.key} className="contents">
+                {renderTitlebarDropCue(item.key, "before")}
+                <StackTab
+                  itemKey={item.key}
+                  groupKey={item.groupKey}
+                  members={item.members}
+                  mcpBar={renderMcpBar(item.key, item.members.map((m) => m.id))}
+                  title={mcpTooltip(item.members.map((m) => m.id))}
+                  panelShowsThisHost={pinnedHost === item.groupKey}
+                  {...stackTabProps}
+                />
                 {renderTitlebarDropCue(item.key, "after")}
               </div>
             );
@@ -431,110 +418,32 @@ export default function TitleBar() {
 
           const session = item.session;
           const isActive = session.id === activeSessionId && activeNav === "terminal" && !sftpPanelOpen && !splitTabActive;
+          const panelShowsThisSession = pinnedHost === stackGroupKey(session);
           const statusTone = sessionStatusTone(session.status);
           const connection = connections.find((c) => c.id === session.connectionId);
-          const isLocal = session.type === "local";
-          const connectionIcon = !isLocal && connection ? (connection.icon || connection.distro) : null;
-          const distroIcon = connectionIcon ? getConnectionIcon(connectionIcon) : null;
-          const distroBg = connectionIcon ? getConnectionIconColor(connectionIcon) : null;
-          const tabIcon = distroIcon ? (
-            <span
-              className="flex items-center justify-center size-6 rounded-md shrink-0"
-              style={{ background: distroBg ?? "transparent", color: "#fff" }}
-            >
-              <Icon icon={distroIcon} width={16} />
-            </span>
-          ) : isLocal ? (
-            <span
-              className="flex items-center justify-center size-6 rounded-md shrink-0"
-              style={{ color: isActive ? "var(--t-tab-active-text)" : STATUS_TONE_COLOR[statusTone] }}
-            >
-              <Icon icon="lucide:terminal" width={14} />
-            </span>
-          ) : (
-            <StatusDot tone={statusTone} />
-          );
+          const tabIcon = sessionTabIcon(session, connection, isActive, statusTone);
 
           return (
             <div key={item.key} className="contents">
               {renderTitlebarDropCue(item.key, "before")}
-              {isRenaming("session", session.id) ? (
-                <div
-                  data-titlebar-key={item.key}
-                  className="relative flex items-center gap-2 h-9 px-2 rounded-xl text-base font-medium-bold shrink-0 overflow-hidden"
-                  style={{
-                    background: isActive ? "var(--t-tab-active-bg)" : "var(--t-tab-bg)",
-                    color: isActive ? "var(--t-tab-active-text)" : "var(--t-text-secondary)",
-                    border: isActive ? "1px solid var(--t-tab-active-border)" : "1px solid transparent",
-                  }}
-                >
-                  {tabIcon}
-                  <InlineNameEditor
-                    value={sessionLabel(session)}
-                    ariaLabel={t("layout.titleBar.renameTab")}
-                    onCommit={(name) => { useSessionStore.getState().renameSession(session.id, name); endRename(session.id); }}
-                    onCancel={() => endRename(session.id)}
-                  />
-                </div>
-              ) : (
-              <button
-                data-titlebar-key={item.key}
-                onClick={() => handleTabClick(session.id)}
-                onContextMenu={(e) => { setMenuTarget({ kind: "session", id: session.id }); openTabMenu(e); }}
-                onDoubleClick={() => setRenaming({ kind: "session", id: session.id })}
-                onPointerDown={(e) => {
-                  if (e.button === 0) useDragStore.getState().beginTabDrag(session.id, e.clientX, e.clientY, item.key);
-                  if (e.button === 1) { e.preventDefault(); handleTabClose(e, session.id); }
-                }}
-                className="group relative flex items-center gap-2 h-9 px-2 rounded-xl text-base font-medium-bold shrink-0 transition-all overflow-hidden"
+              <TitlebarTab
+                itemKey={item.key}
+                active={isActive}
+                icon={tabIcon}
+                label={sessionLabel(session)}
                 title={mcpTooltip([session.id])}
-                style={{
-                  background: isActive ? "var(--t-tab-active-bg)" : "var(--t-tab-bg)",
-                  color: isActive ? "var(--t-tab-active-text)" : "var(--t-text-secondary)",
-                  border: isActive ? "1px solid var(--t-tab-active-border)" : "1px solid transparent",
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) {
-                    (e.currentTarget as HTMLButtonElement).style.background = "var(--t-bg-toolbar)";
-                    (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-primary)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) {
-                    (e.currentTarget as HTMLButtonElement).style.background = "var(--t-tab-bg)";
-                    (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-secondary)";
-                  }
-                }}
-              >
-                {renderMcpBar(session.id, [session.id])}
-                {tabIcon}
-                <span
-                  className="max-w-[140px] truncate"
-                  onClick={(e) => startRenameFromLabel(e, isActive, { kind: "session", id: session.id })}
-                >
-                  {sessionLabel(session)}
-                </span>
-                <span
-                  onClick={(e) => handleTabClose(e, session.id)}
-                  className="ml-0.5 opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5"
-                  style={{ color: isActive ? "var(--t-tab-active-text)" : "var(--t-text-muted)" }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; (e.currentTarget as HTMLElement).style.color = "var(--t-status-error)"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = isActive ? "var(--t-tab-active-text)" : "var(--t-text-muted)"; }}
-                >
-                  <span className="[&_path]:stroke-[2.1]">
-                  <Icon icon="lucide:x" width={20} />
-                  </span>
-                </span>
-              </button>
-              )}
+                mcpBar={renderMcpBar(session.id, [session.id])}
+                compact={isPinned(item.key)}
+                {...sessionTabHandlers(session, item.key, isActive, [pinListExtra(t, panelShowsThisSession, () => (panelShowsThisSession ? setHostPanelPinned(false) : pinHostList(session.id)))])}
+              />
               {renderTitlebarDropCue(item.key, "after")}
             </div>
           );
         })}
 
         {renderTitlebarDropCue(null, "after")}
+        </div>
 
-        {/* New tab button */}
         <NewTabButton />
         </div>
       </div>
@@ -548,6 +457,7 @@ export default function TitleBar() {
                 closeLabel: t("layout.titleBar.closeTab"),
                 onClose: () => closeTabById(menuSession.id),
                 onRename: () => setRenaming({ kind: "session", id: menuSession.id }),
+                extras: menuExtras,
               })
             : splitTabMenuItems({
                 tab: menuSplitTab!,
@@ -566,21 +476,18 @@ export default function TitleBar() {
       {/* Sync indicator */}
       <SyncIndicator
         anchorRef={syncButtonRef}
-        status={effectiveSyncStatus}
-        lastSync={effectiveLastSync}
-        error={effectiveError}
+        sync={sync}
         active={syncDropdownOpen}
-        configured={effectiveConfigured}
         onClick={() => setSyncDropdownOpen((o) => !o)}
       />
       <SyncDropdown
         anchorRef={syncButtonRef}
         open={syncDropdownOpen}
         onClose={() => setSyncDropdownOpen(false)}
-        cloudActive={syncState.cloudActive}
-        gistPluginEnabled={gistPluginEnabled}
-        accountMode={accountMode}
+        providers={syncProviders}
+        installer={syncInstaller}
       />
+      {syncInstaller.modal}
 
       {/* Watching / Ended badge — guest in a multiplayer session */}
       {showTerminal && isActiveSessionMultiplayer && (
@@ -607,7 +514,7 @@ export default function TitleBar() {
               }}
             >
               <StatusDot tone="accent" size="sm" motion="pulse" />
-              {t("layout.titleBar.watching")}
+              {activeMp && holdsControl(activeMp) ? t("terminal.multiplayerBar.youHaveControl") : t("layout.titleBar.watching")}
             </span>
           )}
         </div>
@@ -657,7 +564,7 @@ export default function TitleBar() {
               open={shareDropdownOpen}
               onClose={() => setShareDropdownOpen(false)}
               activeSessionId={activeSessionId}
-              connectionName={activeSession?.connectionName ?? t("layout.titleBar.terminalFallback")}
+              connectionName={activeSession ? sessionLabel(activeSession) : t("layout.titleBar.terminalFallback")}
               connectionVaultId={connections.find((c) => c.id === activeSession?.connectionId)?.vault_id}
               isLoggedIn={accountMode === "server"}
               tier={tier}
@@ -743,7 +650,7 @@ function NewTabButton() {
         {rippleEls}
         <Icon icon="lucide:plus" width={22} />
       </button>
-      {open && <NewSessionPopover anchorRef={buttonRef} onClose={() => setOpen(false)} />}
+      <NewSessionPopover open={open} anchorRef={buttonRef} onClose={() => setOpen(false)} />
     </>
   );
 }
@@ -751,38 +658,13 @@ function NewTabButton() {
 function DetachedPanePreview({ session }: { session: ReturnType<typeof useSessionStore.getState>["sessions"][number] }) {
   const connections = useAllConnections();
   const connection = connections.find((c) => c.id === session.connectionId);
-  const isLocal = session.type === "local";
-  const connectionIcon = !isLocal && connection ? (connection.icon || connection.distro) : null;
-  const distroIcon = connectionIcon ? getConnectionIcon(connectionIcon) : null;
-  const distroBg = connectionIcon ? getConnectionIconColor(connectionIcon) : null;
   return (
     <div
       className="pointer-events-none flex items-center gap-2 h-9 px-2 rounded-xl text-base font-medium-bold shrink-0 transition-all"
-      style={{
-        background: "var(--t-tab-active-bg)",
-        color: "var(--t-tab-active-text)",
-        border: "1px solid var(--t-tab-active-border)",
-        boxShadow: "0 0 0 1px color-mix(in srgb, var(--t-accent) 35%, transparent)",
-      }}
+      style={{ ...tabSurfaceStyle(true), boxShadow: "0 0 0 1px color-mix(in srgb, var(--t-accent) 35%, transparent)" }}
     >
-      {distroIcon ? (
-        <span
-          className="flex items-center justify-center size-6 rounded-md shrink-0"
-          style={{ background: distroBg ?? "transparent", color: "#fff" }}
-        >
-          <Icon icon={distroIcon} width={16} />
-        </span>
-      ) : isLocal ? (
-        <span
-          className="flex items-center justify-center size-6 rounded-md shrink-0"
-          style={{ color: "var(--t-tab-active-text)" }}
-        >
-          <Icon icon="lucide:terminal" width={14} />
-        </span>
-      ) : (
-        <StatusDot tone={sessionStatusTone(session.status)} />
-      )}
-      <span className="max-w-[140px] truncate">{session.connectionName}</span>
+      {sessionTabIcon(session, connection, true, sessionStatusTone(session.status))}
+      <span className="max-w-[140px] truncate">{sessionLabel(session)}</span>
     </div>
   );
 }
@@ -813,25 +695,10 @@ function TitleBarBtn({ onClick, title, children }: {
 }
 
 
-function SubscriptionBadge() {
-  const { t } = useTranslation();
+export function SubscriptionBadge() {
   const openSettings = useUIStore((s) => s.openSettings);
-  const { tier, trialEndsAt, trialUsed, trialKnown, isTrialActive } = useSubscriptionStore();
+  const plan = usePlanDisplay();
   const [hovered, setHovered] = useState(false);
-
-  const isPremium = tier !== "free";
-
-  const daysLeft = trialEndsAt
-    ? Math.max(0, Math.ceil((trialEndsAt.getTime() - Date.now()) / 86_400_000))
-    : 0;
-
-  const hoverLabel = isTrialActive
-    ? t("layout.titleBar.plan.proTrial", { daysLeft })
-    : tier === "teams" ? t("layout.titleBar.plan.teams")
-    : tier === "business" ? t("layout.titleBar.plan.business")
-    : tier === "pro" ? t("layout.titleBar.plan.pro")
-    : trialKnown && !trialUsed ? t("layout.titleBar.plan.upgradeTrial")
-    : t("layout.titleBar.plan.upgrade");
 
   return (
     <div className="flex items-center px-1 shrink-0">
@@ -846,54 +713,37 @@ function SubscriptionBadge() {
           whiteSpace: "nowrap",
           transition: "max-width 250ms ease, padding 250ms ease, color 150ms ease",
           color: hovered
-            ? isPremium ? "#f59e0b" : "var(--t-accent)"
-            : isPremium ? "#f59e0b" : "var(--t-text-secondary)",
+            ? plan.premium ? "#f59e0b" : "var(--t-accent)"
+            : plan.premium ? "#f59e0b" : "var(--t-text-secondary)",
           background: hovered ? "var(--t-bg-elevated)" : "transparent",
         }}
-        title={hoverLabel}
+        title={plan.viaTooltip ?? plan.badge}
       >
         <Icon
-          icon={isPremium ? "lucide:crown" : "lucide:circle-fading-arrow-up"}
+          icon={plan.icon}
           width={14}
           className="shrink-0"
         />
         <span className="text-xs font-medium overflow-hidden" style={{ opacity: hovered ? 1 : 0, transition: "opacity 150ms ease" }}>
-          {hoverLabel}
+          {plan.badge}
         </span>
       </button>
     </div>
   );
 }
 
-function SyncIndicator({
-  anchorRef,
-  status: engineStatus,
-  lastSync,
-  error,
-  active,
-  configured,
-  onClick,
-}: {
+function SyncIndicator({ anchorRef, sync, active, onClick }: {
   anchorRef: React.RefObject<HTMLButtonElement | null>;
-  status: SyncStatus;
-  lastSync: Date | null;
-  error: string | null;
+  sync: EffectiveSync;
   active: boolean;
-  configured: boolean;
   onClick: () => void;
 }) {
   const { t } = useTranslation();
   const { createRipple, rippleEls } = useRipple();
-  const sync = useSyncMotion(engineStatus);
-  const status = sync.status;
-  const color = !configured ? "var(--t-text-dim)" : syncStatusColor(status);
-
-  const title = !configured ? t("layout.sync.status.notConfigured") :
-    status === "syncing" ? t("layout.sync.status.syncing") :
-    status === "success" ? (lastSync ? t("layout.sync.status.syncedAt", { time: lastSync.toLocaleTimeString() }) : t("layout.sync.status.synced")) :
-    status === "error"   ? t("layout.sync.status.errorDetail", { error: error ?? t("layout.sync.status.unknown") }) :
-    status === "offline" ? t("layout.sync.status.offline") :
-                           t("layout.sync.status.default");
+  const motion = useSyncMotion(sync.status);
+  const status = motion.status;
+  const color = effectiveSyncColor(sync, motion);
+  const title = syncStatusTooltip(t, sync, status);
 
   return (
     <div className="flex items-center px-1 shrink-0">
@@ -923,7 +773,7 @@ function SyncIndicator({
         }}
       >
         {rippleEls}
-        {configured ? <SyncStatusIcon sync={sync} width={18} /> : <Icon icon="lucide:cloud-off" width={18} />}
+        <EffectiveSyncIcon sync={sync} motion={motion} width={18} />
       </button>
     </div>
   );

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const conn = { id: "c1", name: "web", host: "h", port: 22, username: "u", vault_id: "personal" };
@@ -139,6 +140,15 @@ describe("import/export domain", () => {
     });
     const ctx = vi.mocked(runImport).mock.calls[0][1];
     expect(ctx.existingKeys.map((k: { id: string }) => k.id)).toContain(newKey.id);
+  });
+
+  it("skips duplicates, as import_objects promises, so references resolve to the existing items", async () => {
+    const { runImport } = await import("@/services/import-export/registry");
+    await importObjects({
+      content: JSON.stringify({ version: 1, folders: [], connections: [], identities: [], keys: [], snippets: [], portForwardingRules: [] }),
+      vaultId: "personal", dryRun: false,
+    });
+    expect(vi.mocked(runImport).mock.calls[0][1].skipDupes).toBe(true);
   });
 
   it("dry_run reports counts and writes nothing", async () => {

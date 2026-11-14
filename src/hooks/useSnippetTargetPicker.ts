@@ -1,22 +1,23 @@
 import { useMemo, useState } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useConnectionStore } from "@/stores/connectionStore";
+import { useAllConnections } from "@/hooks/useAllConnections";
 import { useUIStore } from "@/stores/uiStore";
 import { useLayoutStore } from "@/stores/layoutStore";
-import { matchesSearch } from "@/utils/connectionFilter";
-import { useIsAndroid } from "@/utils/platform";
+import { partitionRecentHosts } from "@/utils/recentHosts";
+import { sessionMatchesQuery } from "@/utils/sessionLabel";
+import { useIsMobile } from "@/utils/platform";
 import { getSnippetInjectionTargetIds, waitForConnectedSessionIds } from "@/components/shared/sessionPickerTargets";
 import { useLocalShells } from "@/hooks/useLocalShells";
 
 export function useSnippetTargetPicker() {
   const sessions = useSessionStore((s) => s.sessions);
-  const connections = useConnectionStore((s) => s.connections);
+  const connections = useAllConnections();
   const [search, setSearch] = useState("");
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
   const [selectedConnectionIds, setSelectedConnectionIds] = useState<Set<string>>(new Set());
   const [localShell, setLocalShell] = useState<string | null>(null);
   const shells = useLocalShells();
-  const isAndroid = useIsAndroid();
+  const isMobile = useIsMobile();
 
   const activeSessions = useMemo(
     () => sessions.filter((s) => s.status === "connected" && s.type !== "multiplayer"),
@@ -26,14 +27,12 @@ export function useSnippetTargetPicker() {
   const filteredSessions = useMemo(
     () => !search
       ? activeSessions
-      : activeSessions.filter((s) => s.connectionName.toLowerCase().includes(search.toLowerCase())),
+      : activeSessions.filter((s) => sessionMatchesQuery(s, search)),
     [activeSessions, search],
   );
 
-  const filteredHosts = useMemo(
-    () => connections
-      .filter((c) => c.connection_type !== "serial")
-      .filter((c) => matchesSearch(c, search)),
+  const { recent: recentHosts, hosts: filteredHosts } = useMemo(
+    () => partitionRecentHosts(connections.filter((c) => c.connection_type !== "serial"), search),
     [connections, search],
   );
 
@@ -53,16 +52,19 @@ export function useSnippetTargetPicker() {
     });
   }
 
+  const selectedConnections = useMemo(
+    () => connections.filter((c) => selectedConnectionIds.has(c.id)),
+    [connections, selectedConnectionIds],
+  );
+
   const totalSelected = selectedSessionIds.size + selectedConnectionIds.size + (localShell !== null ? 1 : 0);
 
   async function confirm(onResolved: (ids: string[]) => void): Promise<void> {
     const sessionIds = [...selectedSessionIds];
-    const pickedConnections = connections.filter((c) => selectedConnectionIds.has(c.id));
-
     onResolved(sessionIds);
 
-    const connectionSessionIds = pickedConnections.length > 0
-      ? await useSessionStore.getState().connectMany(pickedConnections.map((conn) => conn.id)).catch(() => [])
+    const connectionSessionIds = selectedConnections.length > 0
+      ? await useSessionStore.getState().connectMany(selectedConnections.map((conn) => conn.id)).catch(() => [])
       : [];
 
     const localSessionId = localShell !== null
@@ -97,9 +99,10 @@ export function useSnippetTargetPicker() {
   }
 
   return {
-    search, setSearch, isAndroid, shells,
-    activeSessions, filteredSessions, filteredHosts,
-    selectedSessionIds, selectedConnectionIds, localShell, setLocalShell,
+    search, setSearch, isMobile, shells,
+    activeSessions, filteredSessions, recentHosts, filteredHosts,
+    hasHosts: recentHosts.length + filteredHosts.length > 0,
+    selectedSessionIds, selectedConnectionIds, selectedConnections, localShell, setLocalShell,
     toggleSession, toggleConnection, totalSelected, confirm,
   };
 }

@@ -18,15 +18,11 @@
       "notInstalled": "未安装“{{family}}”——终端将回退到其他字体"
     },
     "varSearch": {
-      "usage_one": "{{count}} 个元素使用",
-      "usage_other": "{{count}} 个元素使用",
-      "suffix": "或点击关闭"
+      "hint_other": "{{count}} 个元素使用 <var>{{name}}</var> — 按 <kbd>Esc</kbd> 或点击关闭"
     },
     "pickOverlay": {
-      "prefix": "点击任意元素——",
-      "suffix": "取消"
+      "hint": "点击任意元素——按 <kbd>Esc</kbd> 取消"
     },
-    "escKey": "Esc",
     "editor": {
       "general": "通用",
       "name": "名称",
@@ -35,7 +31,8 @@
       "sizePx": "大小（px）",
       "lineHeight": "行高",
       "terminalFont": "终端字体",
-      "highlightUsing": "高亮使用 {{varName}} 的元素"
+      "highlightUsing": "高亮使用 {{varName}} 的元素",
+      "resetColor": "恢复默认"
     },
     "groups": {
       "backgrounds": "背景",
@@ -85,6 +82,7 @@
       "foreground": "前景",
       "cursor": "光标",
       "selectionBackground": "选择",
+      "selectionForeground": "选中文本",
       "black": "黑色",
       "red": "红色",
       "green": "绿色",
@@ -101,6 +99,7 @@
       "brightMagenta": "亮洋红色",
       "brightCyan": "亮青色",
       "brightWhite": "亮白色"
-    }
+    },
+    "defaultName": "我的主题"
   }
 }

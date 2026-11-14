@@ -1,6 +1,10 @@
 {
   "settings": {
     "terminal": {
+      "commandHistory": {
+        "title": "Command history",
+        "desc": "Remember the commands you run in terminals. A line is kept only when the terminal shows it back, so passwords typed at hidden prompts are never saved. Lines starting with a space are never saved. Turning this off stops recording; what was saved stays until you clear it from the History panel."
+      },
       "heading": "Terminal behavior",
       "preferredShell": {
         "title": "Preferred shell"
@@ -36,12 +40,55 @@
       "ignoreBracketedPaste": {
         "title": "Plain paste (no bracketed paste)",
         "desc": "Paste as plain text without the \\x1b[200~ / \\x1b[201~ markers. Fixes garbled input (e.g. \"200~\") when pasting into sudo prompts or CLI apps that don't support bracketed paste."
+      },
+      "pasteImageAsPath": {
+        "title": "Paste images as a file path",
+        "desc": "When the clipboard holds an image, upload it to the SSH host (~/.cache/voltius/pastes, owner-only, pruned after 7 days) and paste its path. Lets tools on the host such as Claude Code attach a screenshot. If you SSH further from there, the path points to this first host."
+      },
+      "volumeDownCtrl": {
+        "title": "Use Volume Down as Ctrl",
+        "desc": "While typing in a terminal, hold the Volume Down button to add Ctrl to the keys you press: Volume Down + C sends Ctrl+C. Outside a terminal the button changes the volume as usual."
+      },
+      "keywordHighlight": {
+        "title": "Keyword highlighting",
+        "desc": "Color words such as “error” or “warning” in command output. Works in sessions with shell integration.",
+        "addRule": "Add rule",
+        "deleteRule": "Delete rule",
+        "ruleEnabled": "Enable rule",
+        "color": "Color",
+        "wordsPlaceholder": "Add a word…",
+        "removeWord": "Remove {{word}}"
       }
     },
     "appearance": {
+      "marketplace": {
+        "installedLabel": "Marketplace",
+        "available": "From the marketplace",
+        "get": "Get",
+        "remove": "Remove",
+        "fromSource": "from {{source}}",
+        "desktopOnly": "Desktop only",
+        "partOfPlugin": "Part of {{plugin}}. Manage it in Plugins.",
+        "browseAll": "Browse all in marketplace",
+        "loading": "Loading themes…",
+        "unreachable_one": "{{count}} marketplace unreachable",
+        "unreachable_other": "{{count}} marketplaces unreachable"
+      },
+      "themeActions": "Theme actions",
       "interface": "Interface",
       "language": {
         "title": "Language"
+      },
+      "timeFormat": {
+        "title": "Time format",
+        "desc": "How times of day are shown across the app.",
+        "auto": "Automatic (language)",
+        "12h": "12-hour",
+        "24h": "24-hour"
+      },
+      "groupTabsByHost": {
+        "title": "Group tabs by host",
+        "desc": "Sessions on the same host share one tab. Hover it to switch between them."
       },
       "colorTheme": "Color Theme",
       "import": "Import",
@@ -52,7 +99,9 @@
       "editTheme": "Edit theme",
       "deleteTheme": "Delete theme",
       "newCustomTheme": "New Custom Theme",
+      "dynamicThemeHint": "From your wallpaper",
       "uiScale": {
+        "clickHintMobile": "Tap to enter a value",
         "title": "UI Scale",
         "desc": "Zoom or dezoom the entire interface.",
         "clickHint": "Click to enter a value",
@@ -62,6 +111,7 @@
         "reset": "Reset"
       },
       "terminalFontSize": {
+        "clickHintMobile": "Tap to enter a value",
         "title": "Terminal Font Size",
         "desc": "Size the terminal text on its own, without scaling the rest of the interface.",
         "clickHint": "Click to enter a value",
@@ -92,6 +142,7 @@
     },
     "nav": {
       "appearance": {
+        "mobileSub": "Theme, scale, language",
         "label": "Appearance",
         "keywords": [
           "theme",
@@ -101,6 +152,7 @@
         ]
       },
       "account": {
+        "mobileSub": "Account mode, app lock",
         "label": "Account",
         "keywords": [
           "profile",
@@ -109,16 +161,27 @@
         ]
       },
       "sync": {
+        "mobileSub": "Cloud, local network and what gets synced",
         "label": "Sync",
         "keywords": [
           "backup",
           "cloud",
           "gist",
           "sync",
-          "pro"
+          "pro",
+          "local",
+          "network",
+          "nearby",
+          "wifi",
+          "lan",
+          "pair",
+          "devices",
+          "tailscale",
+          "vpn"
         ]
       },
       "plugins": {
+        "mobileSub": "Installed plugins and the catalog",
         "label": "Plugins",
         "keywords": [
           "extensions",
@@ -127,6 +190,7 @@
         ]
       },
       "integrations": {
+        "mobileSub": "MCP server for AI agents",
         "label": "Integrations",
         "keywords": [
           "mcp",
@@ -138,6 +202,7 @@
         ]
       },
       "terminal": {
+        "mobileSub": "Cursor, scrollback, paste",
         "label": "Terminal",
         "keywords": [
           "scrollback",
@@ -149,7 +214,13 @@
           "buffer"
         ]
       },
+      "devices": {
+        "mobileSub": "Let your devices open files here",
+        "label": "Devices",
+        "keywords": ["devices", "files", "sftp", "share", "folders", "access"]
+      },
       "sftp": {
+        "mobileSub": "Downloads, transfers, editor",
         "label": "SFTP",
         "keywords": [
           "file",
@@ -159,6 +230,7 @@
         ]
       },
       "portForwarding": {
+        "mobileSub": "Automatic forwarding",
         "label": "Port Forwarding",
         "keywords": [
           "tunnel",
@@ -169,6 +241,7 @@
         ]
       },
       "hosts": {
+        "mobileSub": "Reachability, keepalive, proxy",
         "label": "Hosts",
         "keywords": [
           "ping",
@@ -188,6 +261,7 @@
         ]
       },
       "diagnostics": {
+        "mobileSub": "Logs and bug reports",
         "label": "Diagnostics",
         "keywords": [
           "diagnostics",
@@ -199,6 +273,7 @@
         ]
       },
       "about": {
+        "mobileSub": "Version and links",
         "label": "About",
         "keywords": [
           "version",
@@ -212,11 +287,19 @@
       "title": "Settings",
       "close": "Close settings",
       "back": "Back",
-      "openHint": "Ctrl+, to open",
+      "openHint": "{{shortcut}} to open",
       "expandPluginGroup": "Expand plugin settings",
       "collapsePluginGroup": "Collapse plugin settings"
     },
     "shared": {
+      "reset": "Reset",
+      "rowActions": "Setting actions",
+      "sync": {
+        "label": "Sync this setting",
+        "on": "Synced across your devices",
+        "off": "Kept on this device",
+        "deviceDefault": "Kept on this device by default"
+      },
       "cancel": "Cancel",
       "resetToDefault": "Reset to default",
       "modifiedFromDefault": "Modified from default"
@@ -231,17 +314,66 @@
         "unknown": "Unknown"
       },
       "sessionSecurity": {
+        "rememberPassword": {
+          "toggle": "Remember master password",
+          "desc": "Opens your vault at launch without asking for it. While this is on, the password is stored in this device's system keychain, where on Linux and Windows other programs running as you can read it. Turn it off to type it at every launch.",
+          "enableTitle": "Remember your master password",
+          "enableBody": "Enter your master password to store it in this device's system keychain.",
+          "systemAuthNeedsIt": "Needs Remember master password on this device. Without it, Voltius asks for your master password at launch and after the vault locks; only the lock screen opens with system authentication.",
+          "removeFailed": "The stored master password could not be removed from the system keychain.",
+          "storeFailed": "The master password could not be stored in the system keychain."
+        },
         "title": "Session Security",
-        "autoLockLabel": "Auto-lock vault after inactivity",
-        "autoLockDesc": "Locks your vault and asks for your master password when your session expires.",
-        "noPasswordHint": "Enable a master password to use auto-lock and session timeout.",
+        "autoLockLabel": "Auto-lock after inactivity",
+        "autoLockDesc": "Locks Voltius after this much inactivity, or as soon as you leave the app.",
         "timeout": {
           "never": "Never",
           "5min": "5 minutes",
           "15min": "15 minutes",
           "30min": "30 minutes",
           "1h": "1 hour",
-          "4h": "4 hours"
+          "4h": "4 hours",
+          "minutes_one": "{{count}} minute",
+          "minutes_other": "{{count}} minutes",
+          "immediately": "Immediately"
+        },
+        "lockAction": {
+          "label": "When locking",
+          "vault": "Lock vault (close sessions)",
+          "screen": "Lock screen (keep sessions running)",
+          "vaultDesc": "Removes your vault key from memory. Open sessions close and Voltius reloads.",
+          "screenDesc": "Covers Voltius while sessions, port forwards and transfers keep running."
+        },
+        "systemAuth": {
+          "toggle": "Unlock with system authentication",
+          "desc": "Use {{method}} instead of typing your master password.",
+          "unavailable": "Not available on this device.",
+          "status": {
+            "bound": "Bound to this device's hardware.",
+            "unbound": "Not bound to this device's hardware yet.",
+            "os-login": "Protected by your device login.",
+            "no-password": "Protected by your device login. Set a master password to bind the key to this device's hardware."
+          },
+          "bindNow": "Bind now",
+          "confirm": "Confirm",
+          "enableTitle": "Bind your vault key to this device",
+          "enableBody": "Enter your master password. You'll need it if this device's sign-in changes.",
+          "disableTitle": "Turn off system authentication",
+          "disableBody": "Enter your master password to keep unlocking at launch without a prompt.",
+          "method": {
+            "windows": "Windows Hello",
+            "macos": "Touch ID or your Mac password",
+            "linux": "your system password",
+            "android": "your fingerprint or screen lock",
+            "ios": "Face ID, Touch ID or your passcode"
+          }
+        },
+        "needsSystemAuth": "Turn on system authentication to lock an account without a master password.",
+        "immediateVaultWarning": "With Lock vault, leaving Voltius even briefly closes your open sessions. Lock screen keeps them running.",
+        "policy": {
+          "timeout": "Set by {{teams}}: at most {{duration}}.",
+          "timeoutImmediately": "Set by {{teams}}: lock as soon as you leave Voltius.",
+          "vault": "Set by {{teams}}: Lock vault is required."
         }
       },
       "email": "Email",
@@ -253,13 +385,12 @@
         "errorInvalidEmail": "Invalid email address",
         "errorSameEmail": "New email must differ from the current one",
         "errorPasswordRequired": "Password is required to confirm the change",
-        "updatedPrefix": "Email updated to ",
-        "updatedSuffix": ". Check your inbox for a verification link.",
         "pausedNote": "Until verified, paid features will be paused.",
         "done": "Done",
         "saving": "Saving…",
         "save": "Save",
-        "toastVerification": "Verification email sent to {{email}}."
+        "toastVerification": "Verification email sent to {{email}}.",
+        "updated": "Email updated to <email>{{email}}</email>. Check your inbox for a verification link."
       },
       "handle": {
         "title": "Handle",
@@ -270,6 +401,7 @@
         "chooseSub": "A custom handle makes you findable by people outside your teams.",
         "generatedNote": "Your current handle already works for anyone you give it to.",
         "unverified": "Verify your email to choose a custom handle.",
+        "managed": "Managed by your organization. Ask your administrator to change it.",
         "placeholder": "your-handle",
         "inputLabel": "Handle",
         "save": "Save",
@@ -288,6 +420,11 @@
         "sub": "Update your password without re-encrypting your vault",
         "title": "Change master password",
         "currentPlaceholder": "Current password",
+        "verifyWithDevice": "Forgot it? Confirm with {{method}} instead",
+        "verifiedWithDevice": "Confirmed on this device",
+        "deviceReason": "Confirm to change your master password",
+        "deviceFailed": "This device could not confirm it's you. Type your current password instead.",
+        "deviceSignedOut": "This device was signed out, likely after a password change on another device. Sign in again with the new password.",
         "newPlaceholder": "New password (min 8 chars)",
         "confirmPlaceholder": "Confirm new password",
         "errorCurrentRequired": "Current password is required",
@@ -299,13 +436,99 @@
         "changing": "Changing…",
         "changeBtn": "Change password"
       },
+      "sessions": {
+        "title": "Signed-in devices",
+        "loading": "Loading devices…",
+        "empty": "No devices to show yet.",
+        "unknownDevice": "Unknown device",
+        "thisDevice": "This device",
+        "cli": "CLI",
+        "signedIn": "Signed in {{date}}",
+        "lastActive": "Active {{ago}}",
+        "signOut": "Sign out",
+        "signOutNamed": "Sign out {{name}}",
+        "signOutOthers": "Sign out other devices",
+        "signOutEverywhere": "Sign out everywhere",
+        "working": "Signing out…",
+        "retry": "Retry",
+        "note": "Signing a device out ends its access to your account; data already on it is not erased. Devices signed in before this update appear here after they next refresh their sign-in.",
+        "offline": "You're offline.",
+        "unsupported": "Your server doesn't support this yet.",
+        "unavailable": "The device list hasn't loaded.",
+        "ended": "This device is signed out. Sign in again to manage your devices.",
+        "confirm": {
+          "one": {
+            "title": "Sign out {{name}}?",
+            "message": "{{name}} loses access to your account and must sign in again. Data already on it is not erased."
+          },
+          "this": {
+            "title": "Sign out this device?",
+            "message": "This device stops syncing until you sign in again. Its data stays here."
+          },
+          "others": {
+            "title": "Sign out other devices?",
+            "message": "Every other device must sign in again, including ones not listed yet. This device stays signed in. Data already on them is not erased."
+          },
+          "all": {
+            "title": "Sign out everywhere?",
+            "message": "Every device, this one included, must sign in again. Data already on them is not erased."
+          }
+        }
+      },
+      "twoFactor": {
+        "label": "Two-factor authentication",
+        "subOff": "Ask for a code or a passkey when signing in on a new device",
+        "subOn": "On. Signing in on a new device asks for a second step",
+        "intro": "After your master password, signing in on a new device will ask for a second step. Pick one; you can add the other later.",
+        "introDevices": "Turning this on signs out your other devices. They need a recent version of Voltius to sign back in.",
+        "continue": "Continue",
+        "scan": "Scan this with your authenticator app, or type the key below into it.",
+        "qrLabel": "QR code for your authenticator app",
+        "copyKey": "Copy key",
+        "confirmPrompt": "Then enter the 6-digit code it shows.",
+        "turnOn": "Turn on",
+        "codesTitle": "Save your recovery codes",
+        "codesBody": "Each code signs you in once if you lose your authenticator or passkey. They are not shown again.",
+        "copy": "Copy",
+        "copied": "Copied",
+        "save": "Save to file",
+        "saved": "I saved them",
+        "manageBody": "Signing in on a new device asks for one of these after your master password.",
+        "newCodes": "New recovery codes",
+        "newCodesSub": "The current ones stop working",
+        "turnOff": "Turn off",
+        "turnOffSub": "Sign in with the master password alone",
+        "generate": "Generate",
+        "regeneratePrompt": "Confirm with a second factor to replace your recovery codes.",
+        "disablePrompt": "Enter your master password and confirm with a second factor to turn two-factor authentication off.",
+        "authenticator": "Authenticator app",
+        "authenticatorSub": "6-digit codes from an app on your phone",
+        "authenticatorOn": "On",
+        "authenticatorIntro": "Signing in on a new device will ask for a 6-digit code from an authenticator app.",
+        "passkey": "Passkey",
+        "passkeys": "Passkeys",
+        "passkeySub": "Fingerprint, face or a security key, through your browser",
+        "passkeyIntro": "Voltius opens your browser to create the passkey, then brings you back here.",
+        "passkeyName": "Name, for example Laptop",
+        "passkeyCreate": "Continue in browser",
+        "passkeyAdd": "Add a passkey",
+        "passkeyAdded": "Added {{date}}",
+        "passkeyUsed": "last used {{date}}",
+        "passkeyRemove": "Remove {{name}}",
+        "remove": "Remove",
+        "removeAuthenticatorPrompt": "Enter your master password and confirm with a second factor to remove the authenticator app.",
+        "removePasskeyPrompt": "Enter your master password and confirm with a second factor to remove the passkey “{{name}}”.",
+        "lastFactor": "This is your only second factor. Removing it turns two-factor authentication off and signs out your other devices.",
+        "codesLeft": "Unused codes: {{count}}",
+        "back": "Back"
+      },
       "setMasterPassword": {
         "label": "Set a master password",
         "sub": "Protect your vault locally without cloud sync"
       },
       "lockVault": {
-        "label": "Lock vault",
-        "sub": "Lock now and require your master password"
+        "label": "Lock now",
+        "sub": "Locks Voltius with the action chosen above"
       },
       "signOut": {
         "label": "Sign out of cloud account",
@@ -316,10 +539,8 @@
         "sub": "Permanently deletes all connections, keys, vault, and keychain entries"
       },
       "confirmWipe": {
-        "descPre": "This will permanently delete ",
-        "descBold": "all local data",
-        "descPost": ": connections, SSH keys, identities, vault secrets, and OS keychain entries. This cannot be undone.",
-        "confirm": "Wipe everything"
+        "confirm": "Wipe everything",
+        "desc": "This will permanently delete <strong>all local data</strong>: connections, SSH keys, identities, vault secrets, and OS keychain entries. This cannot be undone."
       },
       "setPassword": {
         "desc": "Choose a master password. Your existing data will be re-encrypted.",
@@ -337,14 +558,19 @@
       },
       "loading": "Working...",
       "plan": {
-        "title": "Plan",
-        "badge": {
-          "business": "Business",
-          "teams": "Teams",
-          "proTrial": "Pro Trial — {{daysLeft}}d left",
+        "name": {
+          "free": "Free",
           "pro": "Pro",
-          "free": "Free"
+          "teams": "Teams",
+          "business": "Business"
         },
+        "trialName": "{{plan}} trial",
+        "trialLeft": "{{plan}} — {{daysLeft}}d left",
+        "viaSeat": "{{plan}} · through your seat in {{team}}",
+        "viaTooltip": "Through {{team}}",
+        "throughSeat": "Through your seat in {{team}}",
+        "ownLine": "Your {{plan}} subscription",
+        "title": "Plan",
         "manageBilling": "Manage billing →",
         "subscription": {
           "cancelled": "Cancels on {{date}}. You keep access until then.",
@@ -356,20 +582,35 @@
         "seatsUsed": "{{used}} / {{total}} used",
         "upgradeToPro": "Upgrade to unlock cloud sync and more",
         "upgrade": "Upgrade",
-        "upgradeToTeams": "Upgrade to Teams for shared vaults and unlimited guests",
-        "teamsButton": "Teams →",
+        "upgradeToTeams": "Try Teams free for {{days}} days: shared vaults and roles for your team. Card required.",
+        "teamsButton": "Try free →",
         "viewAllPlans": "View all plans →",
+        "everythingIn": "Everything in {{plan}}, plus:",
+        "nextAdds": "{{plan}} adds:",
+        "freeForEveryone": "Free for everyone:",
         "feature": {
-          "localVault": "Local vault",
-          "auditLogs": "Audit logs",
-          "gistSync": "GitHub Gist sync",
-          "realtimeSync": "Real-time cloud sync",
+          "privateVault": "1 private vault",
+          "localSync": "Local network sync",
+          "deviceFiles": "File transfer between your devices",
+          "syncPlugins": "Gist, Cloudflare and S3 sync plugins",
+          "cli": "Command line (voltius-cli)",
+          "machinePolicy": "Machine policy for fleet rollouts",
+          "mdm": "Managed configuration (MDM)",
+          "auditLogs": "Local audit logs",
+          "cloudSync": "Cloud sync, even when your devices are never online together",
+          "cloudBackup": "Encrypted backup on Voltius Cloud",
+          "crossDeviceSessions": "Cross-device sessions",
           "unlimitedVaults": "Unlimited private vaults",
-          "terminalSharing": "Terminal sharing (1 session · 1 guest)",
-          "teamVaults": "Shared team vaults",
-          "teamSharing": "Team sharing (5 sessions · 10 guests)",
-          "seats": "Seats (as purchased)",
-          "customRoles": "Custom roles"
+          "terminalSharing_one": "Terminal sharing: 1 session, 1 guest",
+          "terminalSharing_other": "Terminal sharing: {{count}} sessions, {{guests}} guests each",
+          "teamVaults": "Shared team vaults & invites",
+          "builtInRoles": "Built-in roles",
+          "teamAuditLogs": "Team audit logs",
+          "granularPermissions": "Custom roles, per-member & per-object permissions",
+          "teamPolicy": "Team policy: lock any setting for every member",
+          "enrolment": "Device enrolment tokens for fleet rollouts",
+          "commercialLicense": "Commercial license for self-hosting",
+          "prioritySupport": "Priority support"
         }
       },
       "buySeats": {
@@ -452,7 +693,9 @@
       "consequence": {
         "autoUpdate": "Turns off automatic update downloads, so security fixes stop arriving on their own.",
         "pluginInstallReview": "Turns off the consent screen shown before installing a plugin. A plugin that asks for a sensitive permission still shows it.",
-        "sessionTimeout": "Turns off the automatic vault lock after a period of inactivity."
+        "sessionTimeout": "Turns off or lengthens the automatic lock.",
+        "lockAction": "Switches locking to a screen lock that keeps your vault key in memory.",
+        "systemAuthUnlock": "Lets the device login unlock Voltius, keeping your vault key in the system keychain while locked."
       }
     },
     "about": {
@@ -461,16 +704,18 @@
       "updatesTitle": "Updates",
       "checkForUpdate": "Check for update",
       "restartToUpdate": "Restart to update · v{{version}}",
+      "downloadUpdate": "Download update · v{{version}}",
       "status": {
         "idle": "Not checked yet",
         "checking": "Checking for updates…",
         "upToDate": "You're up to date",
         "downloading": "Downloading v{{version}} — {{progress}}%",
-        "ready": "v{{version}} ready to install"
+        "ready": "v{{version}} ready to install",
+        "available": "v{{version}} available"
       },
       "autoDownload": {
         "title": "Auto-download updates",
-        "desc": "Check & download new versions in the background"
+        "desc": "Download new versions in the background. Voltius checks for them either way."
       },
       "whatsNew": {
         "title": "Show what's new after updates",
@@ -488,14 +733,26 @@
     },
     "sync": {
       "voltiusCloud": "Voltius Cloud",
+      "local": {
+        "pairSub": "Sync with another device on your network without an account.",
+        "title": "Local sync",
+        "pauseSub": "Stops syncing with your other devices nearby until you resume.",
+        "footer": "Your personal vault syncs directly between your devices on the same network or over a VPN like Tailscale, while both are online. Free, with no server in between. Team vaults are not included."
+      },
       "active": {
         "title": "Cloud sync active",
         "syncing": "Syncing…",
         "error": "Error: {{error}}",
         "lastSync": "Last sync: {{time}}",
-        "offline": "Offline",
+        "offline": "Can't reach server",
+        "offlineDetail": "Can't reach server: {{error}}",
         "idle": "Not synced yet",
+        "paused": "Paused on this device",
         "syncNow": "Sync now"
+      },
+      "pause": {
+        "label": "Pause cloud sync on this device",
+        "sub": "Stops background sync with the server. Team vaults stop updating and do not load at launch until you resume. Sync now only syncs your own data."
       },
       "requiresPro": {
         "title": "Cloud sync",
@@ -503,18 +760,13 @@
         "upgrade": "Upgrade"
       },
       "notConnected": {
-        "title": "Cloud account not connected",
-        "sub": "Sign in or create a cloud account to sync across devices.",
+        "title": "Not signed in",
+        "sub": "Voltius Cloud keeps your devices in sync even when they're not online together, with an encrypted backup. With a free account, your devices pair automatically.",
         "signIn": "Sign in"
       },
-      "gistTitle": "GitHub Gist (E2EE)",
-      "gist": {
-        "title": "Gist Sync plugin",
-        "sub": "End-to-end encrypted sync via GitHub Gist",
-        "configure": "Configure →"
-      },
+      "providersTitle": "Sync plugins",
       "prefsTitle": "Sync Preferences",
-      "prefsFooter": "Disabled types are never uploaded. Individual objects can also be excluded from their edit panel.",
+      "prefsFooter": "Disabled types never leave this device. Individual objects can also be excluded from their edit panel.",
       "quickToggleLabel": "Sync {{label}}",
       "objectType": {
         "connection": {
@@ -543,7 +795,7 @@
         }
       },
       "settingsTitle": "Settings",
-      "settingsFooter": "Anything switched off stays on this device. It is never uploaded, even encrypted. Turning sync back on publishes this device's values.",
+      "settingsFooter": "Anything switched off stays on this device and is never sent anywhere, even encrypted. Turning sync back on publishes this device's values.",
       "settingDomain": {
         "themes": { "label": "Themes", "sub": "Active theme and custom themes" },
         "uiPreferences": { "label": "Interface", "sub": "Scale, layouts and sort order" },
@@ -567,10 +819,39 @@
         "deviceDefault": "device default",
         "yourChoice": "your choice",
         "resume": "Resume syncing"
+      },
+      "devices": {
+        "title": "Your devices",
+        "footer": "Each device uploads its own encrypted copy. This list shows whether this device could read the latest copy from each one.",
+        "empty": "No other device has synced yet.",
+        "unnamed": "Device {{id}}",
+        "state": {
+          "synced": "Synced",
+          "pending": "Waiting for the next sync",
+          "unavailable": "Couldn't download",
+          "unavailableStatus": "Couldn't download (HTTP {{status}})",
+          "undecryptable": "Can't decrypt: encrypted with a key this device doesn't have",
+          "unreadable": "Its copy is damaged and can't be read"
+        },
+        "hint": {
+          "unavailable": "Usually temporary. Voltius tries again on the next sync.",
+          "undecryptable": "That device may still use an older vault key. Open Voltius on it so it uploads a new copy, or remove it here if you no longer use it.",
+          "unreadable": "Open Voltius on that device so it uploads a new copy, or remove it here if you no longer use it."
+        },
+        "changed": "Changed {{time}}",
+        "lastSynced": "Last read {{time}}",
+        "neverSynced": "Never read",
+        "retry": "Retry",
+        "retryNone": "Nothing to retry",
+        "remove": "Remove",
+        "removeTitle": "Remove {{name}} from cloud sync?",
+        "removeBody": "Its encrypted copy is deleted from the server. What this device already synced from it stays. If you still use that device, it uploads a new copy the next time it syncs.",
+        "removeFailed": "Couldn't remove the device: {{error}}"
       }
     },
     "vaults": {
       "general": {
+        "renameFailedToast": "Couldn't rename this vault. {{reason}}",
         "vaultNameLabel": "Vault name",
         "save": "Save",
         "makePrivate": {
@@ -587,9 +868,11 @@
         "deleteVault": {
           "title": "Delete vault",
           "confirmDesc": "Permanently deletes this vault and its {{count}} items. This cannot be undone.",
+          "confirmDescTeam": "Permanently deletes this vault and its {{count}} items for every member. This cannot be undone.",
           "confirmBtn": "Confirm delete",
           "deleting": "Deleting…",
-          "failedToast": "Couldn't finish deleting this vault — it is still here, but some of its items may already be gone. {{reason}}"
+          "failedToast": "Couldn't finish deleting this vault — it is still here, but some of its items may already be gone. {{reason}}",
+          "teamFailedToast": "Couldn't delete this vault — nothing was deleted. {{reason}}"
         },
         "madePrivateToast_one": "Vault is now private. {{count}} member lost access.",
         "madePrivateToast_other": "Vault is now private. {{count}} members lost access.",
@@ -597,12 +880,15 @@
       },
       "rolesPanel": {
         "permGroup": {
+          "administration": "Administration",
           "dataAccess": "Data Access",
           "connectionManagement": "Connection Management",
           "teamAdministration": "Team Administration",
           "terminalSessions": "Terminal Sessions"
         },
         "perm": {
+          "VIEW": "See an object at all",
+          "ADMINISTRATOR": "Every permission on every object, whatever its rules",
           "VIEW_SECRETS": "See passwords and private keys in plain text",
           "COPY_SECRETS": "Copy passwords and keys to clipboard",
           "CONNECT": "Launch SSH connections",
@@ -634,6 +920,7 @@
         "clearColor": "Clear",
         "preview": "Preview",
         "permissionsLabel": "Permissions",
+        "objectOverrideNote": "Any host, key, identity, snippet or folder can override these.",
         "saveChanges": "Save changes",
         "createRole": "Create role",
         "errorNameRequired": "Name is required",
@@ -641,9 +928,6 @@
         "builtinRoles": "Built-in roles",
         "customRoles": "Custom roles",
         "newRoleBtn": "New role",
-        "businessFeature": "Business plan feature",
-        "businessFeatureDesc": "Custom roles with granular permissions are available on the Business plan.",
-        "upgradeBtn": "Upgrade to Business",
         "noCustomRolesCanEdit": "No custom roles yet. Create one to assign specific permissions.",
         "noCustomRoles": "No custom roles defined for this team."
       }
@@ -670,6 +954,7 @@
         "sourceLocal": "Local",
         "sourceUrl": "URL",
         "sourceInstalled": "Installed",
+        "sourceOrganization": "Organization",
         "unverified": "Unverified",
         "update": "Update",
         "updating": "Updating…",
@@ -689,6 +974,7 @@
         "addSourcePlaceholder": "https://example.com/plugins.json",
         "add": "Add",
         "installedBadge": "Installed",
+        "installsOff": "Your organization has turned off installing plugins.",
         "byAuthor": "by {{author}} · v{{version}}",
         "noCatalog": "No plugins in catalog.",
         "noResults": "No results.",
@@ -799,6 +1085,28 @@
         }
       }
     },
+    "devices": {
+      "fileAccess": {
+        "title": "File access",
+        "enable": { "title": "Let my devices open files on this computer", "desc": "Your other Voltius devices can browse the folders below from SFTP. Off by default." },
+        "folders": "Shared folders",
+        "addFolder": "Add folder",
+        "noFolders": "Add a folder to share it with your devices.",
+        "removeFolder": "Stop sharing {{folder}}",
+        "readOnly": { "title": "Read-only", "desc": "Devices can copy files from here, not change or delete them." }
+      },
+      "allowed": {
+        "title": "Allowed devices",
+        "asksEachTime": "Asks each time",
+        "alwaysAllowed": "Always allowed",
+        "connectedNow": "connected now",
+        "disconnect": "Disconnect",
+        "revoke": "Revoke",
+        "needsKey": "Connect once to allow",
+        "alwaysLabel": "Always allow {{name}}",
+        "empty": "No other devices yet."
+      }
+    },
     "sftp": {
       "downloads": {
         "title": "Downloads",
@@ -810,8 +1118,7 @@
         "title": "Transfers",
         "tarAcceleration": {
           "title": "Tar acceleration",
-          "descPre": "Pack directories into a single tar.gz before transfer — much faster for many small files. Requires ",
-          "descPost": " on both sides."
+          "desc": "Pack directories into a single tar.gz before transfer — much faster for many small files. Requires <code>tar</code> on both sides."
         }
       },
       "filePanel": {
@@ -888,9 +1195,32 @@
           "detail": "No keepalive probes"
         }
       },
+      "proxy": {
+        "title": "Proxy",
+        "desc": "Route SSH, SFTP and reachability checks through a proxy. Hosts can override this.",
+        "modes": {
+          "none": "No proxy",
+          "system": "System",
+          "socks5": "SOCKS5",
+          "http": "HTTP",
+          "https": "HTTPS"
+        },
+        "detected": "Detected: {{kind}} {{host}}:{{port}}",
+        "detectedNone": "Detected: none (connecting directly)",
+        "passwordSaveFailed": "Couldn't save the proxy password: {{error}}"
+      },
       "persistentSessions": {
         "title": "Persistent sessions",
         "desc": "Keep your shell and running processes alive across disconnects by wrapping the remote shell in tmux (falls back to screen). Requires tmux or screen on the host. Can be overridden per host, under Advanced in the connection's settings."
+      },
+      "detachedTtl": {
+        "title": "Close idle detached sessions",
+        "desc": "Close a persistent session on the host once no device has been attached to it for the chosen time, but only if nothing is running in it. Works on Linux hosts with tmux 3.2 or newer; screen and older tmux keep sessions as before. A change applies to a session the next time it is attached.",
+        "durationTitle": "Close after",
+        "hours_one": "{{count}} hour",
+        "hours_other": "{{count}} hours",
+        "days_one": "{{count}} day",
+        "days_other": "{{count}} days"
       },
       "terminalTitle": "Terminal",
       "shellIntegration": {
@@ -901,71 +1231,155 @@
       "teamPresence": {
         "title": "Share which team-vault hosts you're using",
         "desc": "When on, your avatar appears on a host card while you have a terminal open to it. Only teammates with access to the host see it."
+      },
+      "sshConfig": {
+        "switch": {
+          "title": "Sync continuously from ~/.ssh/config",
+          "desc": "Hosts in your config are created and kept up to date in Voltius, on all your computers. Useful when a tool writes the config (gcloud, MDM…)."
+        },
+        "vault": {
+          "title": "Vault",
+          "desc": "Where new managed hosts are created. Personal vaults only.",
+          "personal": "Personal"
+        },
+        "status": {
+          "title": "Status",
+          "line": "Last read {{when}} · {{managed}} managed · {{skipped}} not synced",
+          "never": "Not read yet",
+          "view": "View hosts…",
+          "syncNow": "Sync now"
+        },
+        "off": {
+          "title": "Turn off continuous sync?",
+          "message_one": "The managed host stays in Voltius and becomes a normal host: it no longer follows ~/.ssh/config, on any of your computers.",
+          "message_other": "The {{count}} managed hosts stay in Voltius and become normal hosts: they no longer follow ~/.ssh/config, on any of your computers.",
+          "confirm": "Turn off"
+        },
+        "dialog": {
+          "activateTitle": "Turn on continuous sync",
+          "reviewTitle": "Hosts from ~/.ssh/config",
+          "intro": "Linked hosts keep their name, folder and settings. Only what the file sets (host, port, and user, key or jump hosts when present) will follow it, on all your computers.",
+          "turnOn": "Turn on",
+          "cancel": "Cancel",
+          "close": "Close",
+          "linkAgain": "Link again",
+          "recreate": "Recreate",
+          "counts": "{{create}} to create · {{link}} to link · {{skipped}} not synced · vault {{vault}}"
+        },
+        "row": {
+          "create": "Will be created",
+          "link": {
+            "legacy": "Will be linked to “{{name}}” · previous sync",
+            "detached": "Will be linked to “{{name}}” · detached earlier",
+            "name": "Will be linked to “{{name}}” · same name and address",
+            "address": "Will be linked to “{{name}}” · same address"
+          },
+          "ambiguous": "Ambiguous ({{names}} match) · a new host will be created",
+          "managed": "Managed · “{{name}}”",
+          "detached": "Detached · “{{name}}” no longer follows the file",
+          "deleted": "Deleted · not recreated by the sync",
+          "ignored": "Ignored · will not be synced",
+          "identityReplaced": "The identity “{{name}}” will be replaced by the file's key",
+          "skipped": {
+            "pattern": "Not synced · pattern, not a host",
+            "match": "Not synced · Match block",
+            "include": "Not synced · Include could not be read",
+            "includeOutside": "Not synced · Include outside ~/.ssh",
+            "proxyCommand": "Not synced · ProxyCommand not supported",
+            "key": "Key unreadable · host created without a key",
+            "keyNotCopied": "Key not copied · host created without a key",
+            "pending": "Waiting · the host has not arrived from your other device yet"
+          }
+        },
+        "keys": {
+          "title": "Keys",
+          "switch": "Copy private keys to the vault",
+          "warning": "Copied keys go to {{vault}} and sync to all your devices, phone included (encrypted).",
+          "settingDesc": "Off: hosts use a key already in the vault (same public key or name), or no key. Copied keys sync to all your devices.",
+          "copy": "Will be copied",
+          "notCopied": "Not copied",
+          "exists": "Already in the vault",
+          "unreadable": "Unreadable"
+        },
+        "here": {
+          "title": "This computer",
+          "desc": "Sync is on for your account, but this computer's ~/.ssh/config has not been reviewed. Nothing is read or copied here until you review it.",
+          "action": "Review…"
+        }
       }
     },
     "toggleDefs": {
+      "commandHistory": {
+        "label": "Command history"
+      },
       "cursorBlink": {
-        "label": "Cursor Blink"
+        "label": "Cursor blink"
       },
       "scrollMinimap": {
-        "label": "Scroll Minimap"
+        "label": "Scroll minimap"
       },
       "selectToCopy": {
-        "label": "Select to Copy"
+        "label": "Select to copy"
       },
       "dragSelectsText": {
-        "label": "Drag Selects Text"
+        "label": "Drag selects text"
+      },
+      "groupTabsByHost": {
+        "label": "Group tabs by host"
       },
       "ignoreBracketedPaste": {
-        "label": "Plain Paste (No Bracketed Paste)"
+        "label": "Plain paste (no bracketed paste)"
+      },
+      "pasteImageAsPath": {
+        "label": "Paste images as a file path"
+      },
+      "volumeDownCtrl": {
+        "label": "Use Volume Down as Ctrl"
+      },
+      "keywordHighlight": {
+        "label": "Keyword highlighting"
       },
       "autoForward": {
-        "label": "Automatic Port Forwarding"
+        "label": "Automatic port forwarding"
       },
       "forwardingNotifications": {
-        "label": "Port Forwarding Notifications"
+        "label": "Port forwarding notifications"
       },
       "sftpTar": {
-        "label": "SFTP Tar Acceleration"
+        "label": "SFTP tar acceleration"
       },
       "sftpAutoRefresh": {
-        "label": "SFTP Auto-Refresh"
+        "label": "SFTP auto-refresh"
       },
       "reachability": {
-        "label": "Reachability Check"
+        "label": "Reachability check"
       },
       "teamPresence": {
-        "label": "Team Presence"
+        "label": "Team presence"
       },
       "shellIntegration": {
-        "label": "Shell Integration"
+        "label": "Shell integration"
       },
       "persistentSessions": {
-        "label": "Persistent Sessions"
+        "label": "Persistent sessions"
+      },
+      "detachedSessionTtl": {
+        "label": "Close idle detached sessions"
       },
       "restoreWorkspace": {
-        "label": "Restore Workspace on Launch"
+        "label": "Restore workspace on launch"
       },
       "crossDeviceSessions": {
-        "label": "Cross-Device Sessions"
+        "label": "Cross-device sessions"
       },
       "changelogPopup": {
-        "label": "Show What's New After Updates"
-      },
-      "category": {
-        "appearance": "Appearance",
-        "portForwarding": "Port Forwarding",
-        "sftp": "SFTP",
-        "hosts": "Hosts",
-        "updates": "Updates",
-        "plugins": "Plugins",
-        "integrations": "Integrations"
+        "label": "Show what's new after updates"
       },
       "pluginInstallReview": {
         "label": "Review permissions before installing plugins"
       },
       "mcpServer": {
-        "label": "MCP Server"
+        "label": "MCP server"
       }
     },
     "shortcuts": {
@@ -1035,6 +1449,10 @@
           "label": "Delete Selected",
           "desc": "Delete selected items"
         },
+        "rename": {
+          "label": "Rename Selected",
+          "desc": "Rename the selected item in place"
+        },
         "copy": { "label": "Copy", "desc": "Copy the selected items to the clipboard" },
         "cut": { "label": "Cut", "desc": "Cut the selected items to the clipboard" },
         "paste": { "label": "Paste", "desc": "Paste clipboard items into the current folder" },
@@ -1065,8 +1483,33 @@
         "panelThemes": {
           "label": "Themes Panel",
           "desc": "Open themes in right panel"
+        },
+        "panelNotes": {
+          "label": "Notes Panel",
+          "desc": "Open host notes in right panel"
         }
       }
+    },
+    "search": {
+      "placeholder": "Search settings",
+      "clear": "Clear search",
+      "changed": "Changed",
+      "changedTitle": "Changed from default",
+      "results_one": "{{count}} result",
+      "results_other": "{{count}} results",
+      "changedOnly": "Changed only",
+      "open": "Open",
+      "openSection": "Open {{section}}",
+      "undo": "Undo",
+      "resetAll": "Reset all",
+      "resetAllConfirm_one": "Reset {{count}} setting? Team-managed, security and sync settings stay.",
+      "resetAllConfirm_other": "Reset {{count}} settings? Team-managed, security and sync settings stay.",
+      "cancel": "Cancel",
+      "emptyChanged": "Every setting is at its default.",
+      "emptyQuery": "No setting matches “{{query}}”.",
+      "emptyQueryChanged": "No changed setting matches “{{query}}”.",
+      "changedSub_one": "{{count}} setting differs from default",
+      "changedSub_other": "{{count}} settings differ from default"
     }
   }
 }

@@ -30,6 +30,17 @@ describe("SheetActionRow", () => {
     expect(container.querySelector("[data-host-action='copy-to-vault']")).not.toBeNull();
   });
 
+  test("a disabled row does not fire", () => {
+    const onTap = vi.fn();
+    const { container } = render(
+      <SheetActionRow attr="a" it={{ icon: "i", label: "Sync now", disabled: true, onTap }} />,
+    );
+    const button = container.querySelector("button")!;
+    fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+    expect(onTap).not.toHaveBeenCalled();
+  });
+
   test("danger rows are tinted, ordinary rows are not", () => {
     const { container: danger } = render(
       <SheetActionRow attr="a" it={{ icon: "i", label: "Delete", danger: true, onTap: () => {} }} />,
@@ -59,9 +70,7 @@ describe("sheets using the shared row", () => {
     const onNewItem = vi.fn();
     render(
       <AddChoiceSheet
-        newItemLabel="New host"
-        newItemIcon="lucide:server"
-        onNewItem={onNewItem}
+        items={[{ slug: "item", icon: "lucide:server", label: "New host", onTap: onNewItem }]}
         onNewFolder={() => {}}
         onClose={() => {}}
       />,
@@ -78,7 +87,7 @@ describe("sheets using the shared row", () => {
       id: "f1", name: "Prod", object_type: "connection", vault_id: "personal",
       created_at: "", updated_at: "", clocks: {},
     } as Folder;
-    render(<FolderActionsSheet folder={folder} onRename={() => {}} onDelete={() => {}} onClose={() => {}} />);
+    render(<FolderActionsSheet folder={folder} onSave={() => {}} onDelete={() => {}} onClose={() => {}} />);
     expect(document.querySelector("[data-folder-action='rename']")).not.toBeNull();
     const del = document.querySelector<HTMLButtonElement>("[data-folder-action='delete']");
     expect(del).not.toBeNull();

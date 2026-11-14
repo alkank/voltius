@@ -1,3 +1,4 @@
+import { memo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useSessionStore } from "@/stores/sessionStore";
 import { sessionClosed } from "@/stores/reconnectBackoff";
@@ -26,6 +27,8 @@ import { usePaneDragController } from "@/components/panes/usePaneDragController"
 import { DropZones } from "@/components/panes/DropZones";
 import { DragGhost } from "@/components/panes/DragGhost";
 import { getPaneSessionIds, useLayoutStore } from "@/stores/layoutStore";
+import { isStatusBarVisible } from "@/utils/sessionVisibility";
+import type { TerminalSession } from "@/types";
 
 function NoVaultSelected() {
   const { t } = useTranslation();
@@ -54,12 +57,56 @@ function NoVaultSelected() {
 
 const PLACEHOLDER_PAGES: Record<string, { icon: string; title: string; description: string }> = {};
 
+const SessionTab = memo(function SessionTab({
+  session,
+  selected,
+  showSplitWorkspace,
+  covered,
+  sftpPanelOpen,
+}: {
+  session: TerminalSession;
+  selected: boolean;
+  showSplitWorkspace: boolean;
+  covered: boolean;
+  sftpPanelOpen: boolean;
+}) {
+  // Hidden under a vault page, or it refits to the vault layout and back.
+  const visible = !showSplitWorkspace && selected && !covered;
+  const onClosed = useCallback(
+    (remoteExit: boolean) => sessionClosed(session.type, session.id, remoteExit),
+    [session.type, session.id],
+  );
+  return (
+    <div className={`absolute inset-0 ${visible ? "z-10" : "z-0 invisible"}`}>
+      <SessionConnectionOverlay session={session} />
+      {session.type === "multiplayer" ? (
+        <div className="absolute inset-0 flex flex-col">
+          <MultiplayerTerminalView localSessionId={session.id} active={selected && !covered} visible={visible} />
+          <MultiplayerBar localSessionId={session.id} />
+        </div>
+      ) : (
+        <HostAwareTerminalView
+          session={session}
+          active={selected && session.status === "connected" && !covered}
+          visible={visible}
+          statusBarVisible={isStatusBarVisible({
+            sessionId: session.id,
+            activeSessionId: selected ? session.id : null,
+            showSplitWorkspace,
+            overlayContent: covered,
+            sftpPanelOpen,
+          })}
+          onClosed={onClosed}
+        />
+      )}
+      {selected && !covered && <DropZones target={{ type: "session", sessionId: session.id }} />}
+    </div>
+  );
+});
+
 export default function MainPanel() {
-  const { sessions, activeSessionId } = useSessionStore();
-  const reconnect = useSessionStore((s) => s.reconnect);
-  const reconnectWithPassphrase = useSessionStore((s) => s.reconnectWithPassphrase);
-  const retryConnect = useSessionStore((s) => s.retryConnect);
-  const removeSession = useSessionStore((s) => s.removeSession);
+  const sessions = useSessionStore((s) => s.sessions);
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const homeView = useUIStore((s) => s.homeView);
   const activeNav = useUIStore((s) => s.activeNav);
   const sftpPanelOpen = useUIStore((s) => s.sftpPanelOpen);
@@ -124,7 +171,7 @@ export default function MainPanel() {
             <div className="flex-1 relative">
               {splitRoot && (
                 <div className={`absolute inset-0 flex overflow-hidden${showSplitWorkspace ? "" : " invisible pointer-events-none"}`}>
-                  <PaneView node={splitRoot} />
+                  <PaneView node={splitRoot} visible={showSplitWorkspace} />
                 </div>
               )}
               {showSplitWorkspace && !splitRoot && (
@@ -135,40 +182,14 @@ export default function MainPanel() {
               {sessions
                 .filter((session) => !splitSessionIds.includes(session.id))
                 .map((session) => (
-                  <div
+                  <SessionTab
                     key={session.id}
-                    className={`absolute inset-0 ${
-                      !showSplitWorkspace && session.id === activeSessionId ? "z-10" : "z-0 invisible"
-                    }`}
-                  >
-                    {(session.status === "connecting" || session.status === "error" || session.status === "disconnected") && session.type !== "multiplayer" && (
-                      <SessionConnectionOverlay
-                        session={session}
-                        onDismiss={() => removeSession(session.id)}
-                        onRetry={(session.type === "ssh" || session.type === "serial") ? () => reconnect(session.id) : undefined}
-                        onRetryWithPassphrase={session.type === "ssh" ? (passphrase, save) => void reconnectWithPassphrase(session.id, passphrase, save) : undefined}
-                        onRetryWithAuth={session.type === "ssh" ? (override, save) => void retryConnect(session.id, override, save) : undefined}
-                      />
-                    )}
-                    {session.type === "multiplayer" ? (
-                      <div className="absolute inset-0 flex flex-col">
-                        <MultiplayerTerminalView
-                          localSessionId={session.id}
-                          active={session.id === activeSessionId && !overlayContent}
-                        />
-                        <MultiplayerBar localSessionId={session.id} />
-                      </div>
-                    ) : (
-                      <HostAwareTerminalView
-                        session={session}
-                        active={session.id === activeSessionId && session.status === "connected" && !overlayContent}
-                        onClosed={(remoteExit) => sessionClosed(session.type, session.id, remoteExit)}
-                      />
-                    )}
-                    {session.id === activeSessionId && !overlayContent && (
-                      <DropZones target={{ type: "session", sessionId: session.id }} />
-                    )}
-                  </div>
+                    session={session}
+                    selected={session.id === activeSessionId}
+                    showSplitWorkspace={showSplitWorkspace}
+                    covered={!!overlayContent}
+                    sftpPanelOpen={sftpPanelOpen}
+                  />
                 ))}
             </div>
           </div>

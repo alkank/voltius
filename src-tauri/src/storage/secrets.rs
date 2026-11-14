@@ -1,4 +1,4 @@
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Key, XChaCha20Poly1305, XNonce,
@@ -24,9 +24,12 @@ struct StoreInner {
 
 const NONCE_LEN: usize = 24;
 
-/// Reported verbatim to the frontend, which classifies the locked vault by matching
-/// it; see `the_locked_error_text_matches_the_frontend`.
-pub const LOCKED_ERR: &str = "Secrets store is locked";
+const LOCKED_ERR: &str = "Secrets store is locked";
+
+/// The frontend offers to unlock on its code; see `a_locked_store_sends_the_vault_locked_code`.
+fn locked() -> AppError {
+    AppError::coded(ErrorCode::VaultLocked, LOCKED_ERR)
+}
 
 /// On-disk / in-blob representation of the secrets store.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -40,13 +43,15 @@ fn now_ts() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+pub const SECRETS_FILE: &str = "secrets.enc";
+
 fn secrets_path(app: &AppHandle) -> PathBuf {
     let dir = app
         .path()
         .app_data_dir()
         .expect("failed to get app data dir");
     std::fs::create_dir_all(&dir).ok();
-    dir.join("secrets.enc")
+    dir.join(SECRETS_FILE)
 }
 
 impl SecretsStore {
@@ -57,18 +62,26 @@ impl SecretsStore {
     }
 
     pub fn unlock(&self, path: PathBuf, enc_key: [u8; 32]) -> Result<(), AppError> {
-        let data = if path.exists() {
-            let bytes = std::fs::read(&path).map_err(|e| format!("Read failed: {e}"))?;
+        let existed = path.exists();
+        let data = if existed {
+            let bytes = std::fs::read(&path).map_err(read_failed)?;
             decrypt(&enc_key, &bytes)?
         } else {
             SecretsData::default()
         };
-        *self.inner.lock().unwrap() = Some(StoreInner {
+        let inner = StoreInner {
             enc_key,
             secrets: data.secrets,
             clocks: data.clocks,
             path,
-        });
+        };
+        // Without a file, the next unlock has nothing to check a password against.
+        if !existed {
+            if let Err(e) = save(&inner) {
+                log::warn!("could not write the empty vault: {e}");
+            }
+        }
+        *self.inner.lock().unwrap() = Some(inner);
         Ok(())
     }
 
@@ -78,13 +91,13 @@ impl SecretsStore {
 
     pub fn get(&self, key: &str) -> Result<Option<String>, AppError> {
         let guard = self.inner.lock().unwrap();
-        let inner = guard.as_ref().ok_or(LOCKED_ERR)?;
+        let inner = guard.as_ref().ok_or_else(locked)?;
         Ok(inner.secrets.get(key).cloned())
     }
 
     pub fn set(&self, key: String, value: String) -> Result<(), AppError> {
         let mut guard = self.inner.lock().unwrap();
-        let inner = guard.as_mut().ok_or(LOCKED_ERR)?;
+        let inner = guard.as_mut().ok_or_else(locked)?;
         inner.clocks.insert(key.clone(), now_ts());
         inner.secrets.insert(key, value);
         save(inner)
@@ -92,11 +105,43 @@ impl SecretsStore {
 
     pub fn delete(&self, key: &str) -> Result<(), AppError> {
         let mut guard = self.inner.lock().unwrap();
-        let inner = guard.as_mut().ok_or(LOCKED_ERR)?;
+        let inner = guard.as_mut().ok_or_else(locked)?;
         inner.secrets.remove(key);
         // Leave a tombstone (clock without value) so the deletion propagates on sync.
         inner.clocks.insert(key.to_string(), now_ts());
         save(inner)
+    }
+
+    /// Tombstones only keys that existed, and skips the write when none did.
+    /// A failed write restores the entries, so a retry still finds them to purge.
+    pub fn purge(&self, keys: &[String]) -> Result<Vec<String>, AppError> {
+        let mut guard = self.inner.lock().unwrap();
+        let inner = guard.as_mut().ok_or_else(locked)?;
+        let removed: Vec<(String, String, Option<String>)> = keys
+            .iter()
+            .filter_map(|k| {
+                let value = inner.secrets.remove(k.as_str())?;
+                Some((k.clone(), value, inner.clocks.get(k.as_str()).cloned()))
+            })
+            .collect();
+        if removed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let now = now_ts();
+        for (k, _, _) in &removed {
+            inner.clocks.insert(k.clone(), now.clone());
+        }
+        if let Err(e) = save(inner) {
+            for (k, value, clock) in removed {
+                match clock {
+                    Some(c) => inner.clocks.insert(k.clone(), c),
+                    None => inner.clocks.remove(&k),
+                };
+                inner.secrets.insert(k, value);
+            }
+            return Err(e);
+        }
+        Ok(removed.into_iter().map(|(k, _, _)| k).collect())
     }
 
     #[allow(dead_code)]
@@ -107,7 +152,7 @@ impl SecretsStore {
     /// Export all secrets plus their per-secret clocks (for backup/sync export).
     pub fn export_all(&self) -> Result<SecretsData, AppError> {
         let guard = self.inner.lock().unwrap();
-        let inner = guard.as_ref().ok_or(LOCKED_ERR)?;
+        let inner = guard.as_ref().ok_or_else(locked)?;
         Ok(SecretsData {
             secrets: inner.secrets.clone(),
             clocks: inner.clocks.clone(),
@@ -123,7 +168,7 @@ impl SecretsStore {
         clocks: HashMap<String, String>,
     ) -> Result<(), AppError> {
         let mut guard = self.inner.lock().unwrap();
-        let inner = guard.as_mut().ok_or(LOCKED_ERR)?;
+        let inner = guard.as_mut().ok_or_else(locked)?;
         inner.secrets = secrets;
         inner.clocks = clocks;
         save(inner)
@@ -159,9 +204,11 @@ fn temp_path(path: &std::path::Path) -> Result<PathBuf, AppError> {
 }
 
 /// Write `bytes` to `path` through a staged sibling file, so an interrupted write
-/// leaves the previous vault intact rather than a truncated one that no key opens.
-fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), AppError> {
-    write_atomic_via(path, &temp_path(path)?, bytes)
+/// leaves the previous file intact rather than a truncated one.
+pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), AppError> {
+    // Stage beside a symlink's target, so a file linked into a dotfiles repo stays a link.
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    write_atomic_via(&path, &temp_path(&path)?, bytes)
 }
 
 fn write_atomic_via(
@@ -172,7 +219,7 @@ fn write_atomic_via(
     stage(tmp, path, bytes)?;
     std::fs::rename(tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(tmp);
-        AppError::Msg(format!("Write failed: {e}"))
+        write_failed(e)
     })
 }
 
@@ -181,26 +228,30 @@ fn write_atomic_via(
 /// A failure removes the scratch file, so no half-written sibling is left behind.
 /// The scratch file takes `like`'s permissions, which the rename then carries over.
 fn stage(tmp: &std::path::Path, like: &std::path::Path, bytes: &[u8]) -> Result<(), AppError> {
-    match write_and_sync(tmp, like, bytes) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = std::fs::remove_file(tmp);
-            Err(e)
-        }
-    }
+    write_and_sync(tmp, like, bytes).map_err(|e| {
+        let _ = std::fs::remove_file(tmp);
+        write_failed(e)
+    })
 }
 
 fn write_and_sync(
     tmp: &std::path::Path,
     like: &std::path::Path,
     bytes: &[u8],
-) -> Result<(), AppError> {
+) -> std::io::Result<()> {
     use std::io::Write;
-    let mut file = open_staged(tmp, like).map_err(|e| format!("Write failed: {e}"))?;
-    file.write_all(bytes)
-        .map_err(|e| format!("Write failed: {e}"))?;
-    file.sync_all().map_err(|e| format!("Write failed: {e}"))?;
-    Ok(())
+    let mut file = open_staged(tmp, like)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Coded after the cause, so a full disk or a denied write reads as such.
+fn write_failed(e: std::io::Error) -> AppError {
+    AppError::caused("Write failed", &e)
+}
+
+fn read_failed(e: std::io::Error) -> AppError {
+    AppError::caused("Read failed", &e)
 }
 
 /// A fresh scratch file wearing `like`'s mode, or owner-only when `like` is not
@@ -248,7 +299,13 @@ fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<SecretsData, AppError> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let plaintext = cipher
         .decrypt(nonce, &data[NONCE_LEN..])
-        .map_err(|_| "Decryption failed — wrong key or corrupted file".to_string())?;
+        // Possibly readable with another key: the frontend must not discard it on this.
+        .map_err(|_| {
+            AppError::coded(
+                ErrorCode::VaultUnreadable,
+                "Decryption failed — wrong key or corrupted file",
+            )
+        })?;
     parse_secrets(&plaintext)
 }
 
@@ -294,7 +351,7 @@ pub fn secrets_verify(
         return Ok(());
     }
     // Try to decrypt without mutating state
-    let data = std::fs::read(&path).map_err(|e| format!("Read failed: {e}"))?;
+    let data = std::fs::read(&path).map_err(read_failed)?;
     decrypt(&key, &data).map(|_| ())
 }
 
@@ -318,7 +375,7 @@ pub fn secrets_reencrypt(
         .try_into()
         .map_err(|_| "new_enc_key must be 32 bytes")?;
     let mut guard = state.inner.lock().unwrap();
-    let inner = guard.as_mut().ok_or(LOCKED_ERR)?;
+    let inner = guard.as_mut().ok_or_else(locked)?;
     inner.enc_key = new_key;
     save(inner)
 }
@@ -341,14 +398,14 @@ pub fn secrets_rekey(
 
     let path = secrets_path(&app);
     let data = if path.exists() {
-        let bytes = std::fs::read(&path).map_err(|e| format!("Read failed: {e}"))?;
+        let bytes = std::fs::read(&path).map_err(read_failed)?;
         decrypt(&old_key, &bytes)?
     } else {
         SecretsData::default()
     };
 
     let mut guard = state.inner.lock().unwrap();
-    let inner = guard.as_mut().ok_or(LOCKED_ERR)?;
+    let inner = guard.as_mut().ok_or_else(locked)?;
     inner.secrets = data.secrets;
     inner.clocks = data.clocks;
     inner.enc_key = new_key;
@@ -375,6 +432,14 @@ pub fn secrets_set(
 #[tauri::command]
 pub fn secrets_delete(state: tauri::State<SecretsStore>, key: String) -> Result<(), AppError> {
     state.delete(&key)
+}
+
+#[tauri::command]
+pub fn secrets_purge(
+    state: tauri::State<SecretsStore>,
+    keys: Vec<String>,
+) -> Result<Vec<String>, AppError> {
+    state.purge(&keys)
 }
 
 const QUARANTINE_KEEP: usize = 3;
@@ -409,7 +474,7 @@ fn rename_aside(path: &std::path::Path, now: u128) -> Result<String, AppError> {
         return Err("No vault file to set aside".into());
     }
     let (target, file) = next_backup_path(path, now, false)?;
-    std::fs::rename(path, &target).map_err(|e| format!("Set aside failed: {e}"))?;
+    std::fs::rename(path, &target).map_err(|e| AppError::caused("Set aside failed", &e))?;
     Ok(file)
 }
 
@@ -474,7 +539,7 @@ fn restore_backup_at(
     let source = resolve_backup(path, file)?;
 
     // Staged before anything moves, so a failed read cannot leave the vault gone.
-    let bytes = std::fs::read(&source).map_err(|e| format!("Read failed: {e}"))?;
+    let bytes = std::fs::read(&source).map_err(read_failed)?;
     let tmp = temp_path(path)?;
     stage(&tmp, path, &bytes)?;
 
@@ -501,13 +566,13 @@ fn commit_restore(
             Some((target, file))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(format!("Read failed: {e}").into()),
+        Err(e) => return Err(read_failed(e)),
     };
     if let Err(e) = std::fs::rename(tmp, path) {
         if let Some((target, _)) = &displaced {
             let _ = std::fs::remove_file(target);
         }
-        return Err(format!("Restore failed: {e}").into());
+        return Err(AppError::caused("Restore failed", &e));
     }
     Ok(displaced.map(|(_, file)| file))
 }
@@ -775,6 +840,22 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"v1");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_write_through_a_symlink_keeps_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dotfiles-settings.json");
+        let link = dir.path().join("settings.json");
+        std::fs::write(&target, b"v1").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write_atomic(&link, b"v2").expect("write through link");
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&target).unwrap(), b"v2");
+    }
+
     #[test]
     fn a_completed_write_replaces_the_content_and_leaves_no_temp_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -1020,11 +1101,29 @@ mod tests {
         assert_eq!(mode_of(&dir.path().join(set_aside)), 0o600);
     }
 
-    // src/services/vault.ts classifies a locked vault by matching this exact text,
-    // so a rename that does not reach the frontend must fail here.
+    // src/services/vault.ts classifies a locked or unreadable vault by these codes;
+    // the payloads are the ones vault.test.ts feeds it.
     #[test]
-    fn the_locked_error_text_matches_the_frontend() {
-        assert_eq!(LOCKED_ERR, "Secrets store is locked");
+    fn a_locked_store_sends_the_vault_locked_code() {
+        let store = SecretsStore::new();
+        let err = store.get("k").unwrap_err();
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            serde_json::json!({ "code": "vault-locked", "message": "Secrets store is locked" })
+        );
+    }
+
+    #[test]
+    fn a_wrong_key_sends_the_vault_unreadable_code() {
+        let sealed = encrypt(&[1; 32], b"{}").unwrap();
+        let err = decrypt(&[2; 32], &sealed).err().unwrap();
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            serde_json::json!({
+                "code": "vault-unreadable",
+                "message": "Decryption failed — wrong key or corrupted file",
+            })
+        );
     }
 
     // backup_paths must not mistake an interrupted write for a restorable backup.
@@ -1033,5 +1132,89 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("secrets.enc.tmp"), b"partial").unwrap();
         assert!(backup_paths(dir.path(), "secrets.enc").is_empty());
+    }
+
+    fn unlocked_store(dir: &tempfile::TempDir) -> (SecretsStore, PathBuf) {
+        let path = dir.path().join("secrets.enc");
+        let store = SecretsStore::new();
+        store.unlock(path.clone(), [7u8; 32]).unwrap();
+        (store, path)
+    }
+
+    #[test]
+    fn unlocking_without_a_file_writes_one_only_that_key_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, path) = unlocked_store(&dir);
+        assert!(path.exists());
+        assert!(SecretsStore::new().unlock(path.clone(), [8u8; 32]).is_err());
+        assert!(SecretsStore::new().unlock(path, [7u8; 32]).is_ok());
+    }
+
+    #[test]
+    fn purge_removes_only_present_keys_and_tombstones_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = unlocked_store(&dir);
+        store.set("password:a".into(), "pw".into()).unwrap();
+        store.set("key:k:private".into(), "pem".into()).unwrap();
+
+        let removed = store
+            .purge(&["password:a".to_string(), "password:absent".to_string()])
+            .unwrap();
+
+        assert_eq!(removed, vec!["password:a".to_string()]);
+        assert_eq!(store.get("password:a").unwrap(), None);
+        assert_eq!(store.get("key:k:private").unwrap().as_deref(), Some("pem"));
+        let data = store.export_all().unwrap();
+        assert!(data.clocks.contains_key("password:a"));
+        assert!(!data.clocks.contains_key("password:absent"));
+    }
+
+    #[test]
+    fn purge_with_nothing_present_does_not_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, path) = unlocked_store(&dir);
+        let before = std::fs::read(&path).unwrap();
+        assert!(store.purge(&["password:x".to_string()]).unwrap().is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn purge_is_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, path) = unlocked_store(&dir);
+        store.set("password:a".into(), "pw".into()).unwrap();
+        store.purge(&["password:a".to_string()]).unwrap();
+        store.lock();
+        store.unlock(path, [7u8; 32]).unwrap();
+        assert_eq!(store.get("password:a").unwrap(), None);
+    }
+
+    fn point_store_at(store: &SecretsStore, path: PathBuf) {
+        store.inner.lock().unwrap().as_mut().unwrap().path = path;
+    }
+
+    #[test]
+    fn a_purge_that_cannot_write_keeps_the_entries_for_a_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, path) = unlocked_store(&dir);
+        store.set("password:a".into(), "pw".into()).unwrap();
+        let clock_before = store.export_all().unwrap().clocks["password:a"].clone();
+
+        point_store_at(&store, dir.path().join("missing").join("secrets.enc"));
+        assert!(store.purge(&["password:a".to_string()]).is_err());
+        assert_eq!(store.get("password:a").unwrap().as_deref(), Some("pw"));
+        assert_eq!(
+            store.export_all().unwrap().clocks["password:a"],
+            clock_before
+        );
+
+        point_store_at(&store, path.clone());
+        assert_eq!(
+            store.purge(&["password:a".to_string()]).unwrap(),
+            vec!["password:a".to_string()]
+        );
+        store.lock();
+        store.unlock(path, [7u8; 32]).unwrap();
+        assert_eq!(store.get("password:a").unwrap(), None);
     }
 }

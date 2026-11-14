@@ -1,34 +1,180 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Toggle } from "@/components/shared/Toggle";
-import { getSyncState, onSyncStateChange, syncNow } from "@/services/sync";
-import { runManualSync } from "@/services/syncIntent";
+import { setSyncPaused, type SyncStatus } from "@/services/sync";
+import { useSyncProviders } from "@/hooks/useSyncProviders";
+import { useSyncNow } from "@/hooks/useSyncProviderPanel";
+import { useAvailableSyncProviders } from "@/hooks/useAvailableSyncProviders";
+import { usePluginInstaller } from "@/components/settings/usePluginInstaller";
+import { runSyncProviderAction } from "@/services/syncProviderAction";
+import { VOLTIUS_PROVIDER_ID, type SyncProviderView } from "@/services/syncProviders";
+import { AvailableSyncProviderRow } from "@/components/shared/AvailableSyncProviderRow";
 import { useSyncPrefsStore, SYNC_OBJECT_TYPES, SYNC_SETTING_DOMAINS } from "@/stores/syncPrefsStore";
-import { useSubscriptionStore } from "@/stores/subscriptionStore";
-import { useUIStore } from "@/stores/uiStore";
-import { openBillingCheckout } from "@/services/billingCheckout";
 import { setDomainSync, setKeySync } from "@/services/user-data/syncChoice";
 import { heldBackKeys } from "@/services/user-data/syncFilter";
 import { isDeviceScopedDefault } from "@/services/user-data/settingKeys";
-import { SettingsGroup } from "./shared";
+import { ManagedNote, ManagedWhen } from "@/components/shared/ManagedNote";
+import { isEnforcedLock, usePolicyLock, usePolicyRefresh } from "@/stores/policyStore";
+import { SETTINGS_ROW_BUTTON, SettingsGroup } from "./shared";
+import { SyncDevicesGroup } from "./SyncDevicesGroup";
+import { setLocalSyncPaused, useLocalNetworkStatus } from "@/hooks/useLocalNetworkStatus";
+import { openPairDeviceDialog } from "@/stores/pairDeviceDialogStore";
+import { formatTime } from "@/utils/localeFormat";
+import { SettingMark } from "@/components/settings/Setting";
 
-function SyncToggleRow({ domain, label, sub, checked, onChange }: {
+function syncStateLine(t: TFunction, s: { status: SyncStatus; lastSync: Date | null; error: string | null }): string {
+  switch (s.status) {
+    case "syncing": return t("settings.sync.active.syncing");
+    case "error": return t("settings.sync.active.error", { error: s.error ?? "unknown" });
+    case "success": return s.lastSync ? t("settings.sync.active.lastSync", { time: formatTime(s.lastSync) }) : "";
+    case "partial": return [syncStateLine(t, { ...s, status: "success" }), s.error ?? t("layout.sync.status.partial")].filter(Boolean).join(" · ");
+    case "offline": return s.error ? t("settings.sync.active.offlineDetail", { error: s.error }) : t("settings.sync.active.offline");
+    default: return t("settings.sync.active.idle");
+  }
+}
+
+function SyncNowButton({ provider }: { provider: SyncProviderView }) {
+  const { t } = useTranslation();
+  const { available, busy: syncing, run } = useSyncNow(provider);
+  if (!available) return null;
+
+  return (
+    <button
+      onClick={run}
+      disabled={syncing}
+      className="flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors shrink-0 bg-(--t-bg-input)"
+      style={{
+        color: provider.state.status === "error" ? "var(--t-status-error)" : "var(--t-text-muted)",
+        opacity: syncing ? 0.5 : 1,
+      }}
+    >
+      <Icon icon="lucide:refresh-cw" width={18} />
+      {t("settings.sync.active.syncNow")}
+    </button>
+  );
+}
+
+function PluginProviderRow({ provider }: { provider: SyncProviderView }) {
+  const { t } = useTranslation();
+  const { availability, state, action } = provider;
+  const sub = availability === "disabled" ? t("layout.sync.pluginDisabled")
+    : availability === "not_configured" ? t("layout.sync.notConfigured")
+    : syncStateLine(t, state);
+
+  return (
+    <div data-sync-provider={provider.id} className="flex items-center justify-between gap-3 px-4 py-3">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <Icon icon={provider.icon} width={16} className="shrink-0 text-(--t-text-muted)" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-(--t-text-primary)">{provider.label}</p>
+          <p className="text-xs mt-0.5 text-(--t-text-dim)">{sub}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {action && (
+          <button
+            onClick={() => runSyncProviderAction(action)}
+            className={SETTINGS_ROW_BUTTON}
+          >
+            {t(availability === "disabled" ? "layout.sync.enableArrow" : "layout.sync.configureArrow")}
+          </button>
+        )}
+        <SyncNowButton provider={provider} />
+      </div>
+    </div>
+  );
+}
+
+function VoltiusSyncGroup({ provider }: { provider: SyncProviderView }) {
+  const { t } = useTranslation();
+  const runAction = () => { if (provider.action) runSyncProviderAction(provider.action); };
+
+  if (provider.availability === "locked") {
+    return (
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.notConnected.title")}</p>
+          <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.sync.notConnected.sub")}</p>
+        </div>
+        <button
+          onClick={runAction}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors shrink-0 bg-(--t-bg-input) text-(--t-text-primary)"
+        >
+          {t("settings.sync.notConnected.signIn")}
+        </button>
+      </div>
+    );
+  }
+
+  if (provider.availability === "needs_upgrade") {
+    return (
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.requiresPro.title")}</p>
+          <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.sync.requiresPro.sub")}</p>
+        </div>
+        {provider.action && (
+          <button
+            onClick={runAction}
+            className="text-xs px-2.5 py-1 rounded-md font-medium shrink-0 bg-(--t-accent) text-(--t-on-accent) hover:opacity-85 transition-opacity"
+          >
+            {t("settings.sync.requiresPro.upgrade")}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const paused = provider.availability === "paused";
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.active.title")}</p>
+          <p className="text-xs mt-0.5 text-(--t-text-dim)">
+            {paused ? t("settings.sync.active.paused") : syncStateLine(t, provider.state)}
+          </p>
+        </div>
+        <SyncNowButton provider={provider} />
+      </div>
+      <SyncToggleRow
+        domain="pause"
+        label={t("settings.sync.pause.label")}
+        sub={t("settings.sync.pause.sub")}
+        ariaLabel={t("settings.sync.pause.label")}
+        checked={paused}
+        onChange={setSyncPaused}
+      />
+    </>
+  );
+}
+
+function SyncToggleRow({ domain, policyKey, settingId, label, sub, ariaLabel, checked, onChange }: {
   /** Stable hook for tests and UI automation; also the handler key for settings rows. */
   domain: string;
+  policyKey?: string;
+  /** Registry entry whose changed dot and reset sit next to the label. */
+  settingId?: string;
   label: string;
   sub: string;
+  /** Defaults to "Sync <label>", which is wrong for a row that does not switch a kind of data. */
+  ariaLabel?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const toggle = <Toggle checked={checked} onChange={onChange} aria-label={ariaLabel ?? t("settings.sync.quickToggleLabel", { label })} />;
+  const lock = usePolicyLock(policyKey ?? "");
   return (
-    <div data-sync-domain={domain} className="flex items-center justify-between gap-3 px-4 py-3">
+    <div data-sync-domain={domain} data-setting-row data-ripple className="relative flex items-center justify-between gap-3 px-4 py-3">
       <div>
-        <p className="text-sm font-medium text-(--t-text-primary)">{label}</p>
+        <p className="text-sm font-medium text-(--t-text-primary)">{settingId ? <SettingMark id={settingId}>{label}</SettingMark> : label}</p>
         <p className="text-xs mt-0.5 text-(--t-text-dim)">{sub}</p>
+        {lock.locked && <ManagedNote className="mt-1" teams={lock.teams} />}
       </div>
-      <Toggle checked={checked} onChange={onChange} aria-label={t("settings.sync.quickToggleLabel", { label })} />
+      <ManagedWhen locked={lock.locked} note={false}>{toggle}</ManagedWhen>
     </div>
   );
 }
@@ -40,6 +186,7 @@ function HeldBackKeys({ domain }: { domain: string }) {
   // back from a settings page while this panel is mounted.
   const overrides = useSyncPrefsStore((s) => s.settingSyncOverrides);
   void useSyncPrefsStore((s) => s.syncSettingDomains);
+  usePolicyRefresh();
   const keys = heldBackKeys(domain);
   if (keys.length === 0) return null;
 
@@ -55,118 +202,126 @@ function HeldBackKeys({ domain }: { domain: string }) {
       </button>
       {open && (
         <ul className="mt-2 space-y-1">
-          {keys.map((k) => (
-            <li key={k.id} className="flex items-center justify-between gap-3">
-              <span className="text-xs text-(--t-text-dim)">
-                {t(k.labelKey)}
-                {" · "}
-                {t(
-                  isDeviceScopedDefault(k.id, overrides ?? {})
-                    ? "settings.sync.heldBack.deviceDefault"
-                    : "settings.sync.heldBack.yourChoice",
+          {keys.map((k) => {
+            const managed = isEnforcedLock(k.id) || isEnforcedLock(`sync.settings.${k.id}`);
+            return (
+              <li key={k.id} data-testid={`held-${k.id}`} className="flex items-center justify-between gap-3">
+                <span className="text-xs text-(--t-text-dim)">
+                  {t(k.labelKey)}
+                  {" · "}
+                  {t(
+                    managed
+                      ? "common.policy.managed"
+                      : isDeviceScopedDefault(k.id, overrides ?? {})
+                        ? "settings.sync.heldBack.deviceDefault"
+                        : "settings.sync.heldBack.yourChoice",
+                  )}
+                </span>
+                {!managed && (
+                  <button
+                    data-testid={`resume-${k.id}`}
+                    onClick={() => setKeySync(k.id, true)}
+                    className="text-xs shrink-0 text-(--t-accent) hover:opacity-75 transition-opacity"
+                  >
+                    {t("settings.sync.heldBack.resume")}
+                  </button>
                 )}
-              </span>
-              <button
-                data-testid={`resume-${k.id}`}
-                onClick={() => setKeySync(k.id, true)}
-                className="text-xs shrink-0 text-(--t-accent) hover:opacity-75 transition-opacity"
-              >
-                {t("settings.sync.heldBack.resume")}
-              </button>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
   );
 }
 
-export default function SyncSection() {
+function LocalNetworkGroup() {
   const { t } = useTranslation();
-  const [syncState, setSyncState] = useState(getSyncState);
-  useEffect(() => onSyncStateChange(() => setSyncState(getSyncState())), []);
-
-  const accountMode = useSubscriptionStore((s) => s.accountMode);
-  const isPro = useSubscriptionStore((s) => s.isPro);
-  const openSettings = useUIStore((s) => s.openSettings);
-  const openCloudAuth = useUIStore((s) => s.openCloudAuth);
-  const { syncTypes, setSyncType, isDomainSynced } = useSyncPrefsStore();
-
-  const isLoggedIn = accountMode === "server";
+  const { hidden, canPair, isPaused, line, fix } = useLocalNetworkStatus();
+  if (hidden) return null;
 
   return (
-    <div className="p-6 max-w-lg space-y-6">
-      <SettingsGroup title={t("settings.sync.voltiusCloud")}>
-        {isLoggedIn && isPro ? (
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.active.title")}</p>
-              <p className="text-xs mt-0.5 text-(--t-text-dim)">
-                {syncState.status === "syncing" && t("settings.sync.active.syncing")}
-                {syncState.status === "error" && t("settings.sync.active.error", { error: syncState.error ?? "unknown" })}
-                {syncState.status === "success" && syncState.lastSync && t("settings.sync.active.lastSync", { time: syncState.lastSync.toLocaleTimeString() })}
-                {syncState.status === "offline" && t("settings.sync.active.offline")}
-                {syncState.status === "idle" && t("settings.sync.active.idle")}
-              </p>
-            </div>
-            <button
-              onClick={() => { if (syncState.status !== "syncing") runManualSync(syncNow).catch(() => {}); }}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors shrink-0 bg-(--t-bg-input)"
-              style={{
-                color: syncState.status === "error" ? "var(--t-status-error)" : "var(--t-text-muted)",
-                opacity: syncState.status === "syncing" ? 0.5 : 1,
-              }}
-              disabled={syncState.status === "syncing"}
-            >
-              <Icon icon="lucide:refresh-cw" width={18} />
-              {t("settings.sync.active.syncNow")}
-            </button>
+    <div>
+      <SettingsGroup title={t("layout.sync.local.title")} divided>
+        <div data-lan-status className="flex items-center justify-between gap-3 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.local.title")}</p>
+            <p className="text-xs mt-0.5" style={{ color: line.color }}>{line.label}</p>
           </div>
-        ) : isLoggedIn && !isPro ? (
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.requiresPro.title")}</p>
-              <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.sync.requiresPro.sub")}</p>
-            </div>
+          {fix && (
             <button
-              onClick={() => void openBillingCheckout("pro")}
-              className="text-xs px-2.5 py-1 rounded-md font-medium shrink-0 bg-(--t-accent) text-white hover:opacity-85 transition-opacity"
+              onClick={fix.onTap}
+              className={SETTINGS_ROW_BUTTON}
             >
-              {t("settings.sync.requiresPro.upgrade")}
+              {fix.label}
             </button>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between gap-3 px-4 py-3">
+          )}
+        </div>
+        <SyncToggleRow
+          domain="lanPause"
+          label={t("layout.sync.local.pause")}
+          sub={t("settings.sync.local.pauseSub")}
+          ariaLabel={t("layout.sync.local.pause")}
+          checked={isPaused}
+          onChange={setLocalSyncPaused}
+        />
+        {canPair && (
+          <div data-setting-row className="flex items-center justify-between gap-3 px-4 py-3">
             <div>
-              <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.notConnected.title")}</p>
-              <p className="text-xs mt-0.5 text-(--t-text-dim)">
-                {t("settings.sync.notConnected.sub")}
-              </p>
+              <p className="text-sm font-medium text-(--t-text-primary)">{t("layout.sync.local.pair.title")}</p>
+              <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.sync.local.pairSub")}</p>
             </div>
             <button
-              onClick={() => openCloudAuth("signin")}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors shrink-0 bg-(--t-bg-input) text-(--t-text-primary)"
+              data-sync-pair
+              onClick={openPairDeviceDialog}
+              className="min-h-11 text-xs px-2.5 py-1 rounded-md font-medium shrink-0 bg-(--t-accent) text-(--t-on-accent) hover:opacity-85 transition-opacity"
             >
-              {t("settings.sync.notConnected.signIn")}
+              {t("layout.sync.local.pair.title")}
             </button>
           </div>
         )}
       </SettingsGroup>
+      <p className="text-xs mt-2 px-1 text-(--t-text-muted)">{t("settings.sync.local.footer")}</p>
+    </div>
+  );
+}
 
-      <SettingsGroup title={t("settings.sync.gistTitle")}>
-        <div className="flex items-center justify-between gap-3 px-4 py-3">
-          <div>
-            <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.sync.gist.title")}</p>
-            <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.sync.gist.sub")}</p>
-          </div>
-          <button
-            onClick={() => openSettings("plugins", "plugin-gist-sync:gist-sync-settings")}
-            className="text-xs px-2.5 py-1.5 rounded-lg font-medium shrink-0 bg-(--t-bg-input) text-(--t-text-primary) transition-opacity hover:opacity-75"
-          >
-            {t("settings.sync.gist.configure")}
-          </button>
-        </div>
+export default function SyncSection() {
+  const { t } = useTranslation();
+  const { setSyncType, isTypeSynced, isDomainSynced } = useSyncPrefsStore();
+  usePolicyRefresh();
+
+  const providers = useSyncProviders().providers;
+  const voltiusProvider = providers.find((p) => p.id === VOLTIUS_PROVIDER_ID);
+  const pluginProviders = providers.filter((p) => p.id !== VOLTIUS_PROVIDER_ID);
+  const { available, appVersion } = useAvailableSyncProviders();
+  const installer = usePluginInstaller();
+
+  return (
+    <div className="p-6 space-y-6">
+      <SettingsGroup title={t("settings.sync.voltiusCloud")} divided>
+        {voltiusProvider && <VoltiusSyncGroup provider={voltiusProvider} />}
       </SettingsGroup>
+
+      {(voltiusProvider?.availability === "active" || voltiusProvider?.availability === "paused") && <SyncDevicesGroup />}
+
+      <LocalNetworkGroup />
+
+      {pluginProviders.length + available.length > 0 && (
+        <SettingsGroup title={t("settings.sync.providersTitle")} divided>
+          {pluginProviders.map((provider) => <PluginProviderRow key={provider.id} provider={provider} />)}
+          {available.map((plugin) => (
+            <AvailableSyncProviderRow
+              key={plugin.id}
+              plugin={plugin}
+              appVersion={appVersion}
+              busy={installer.busy.has(plugin.id)}
+              onInstall={() => installer.startInstall(plugin)}
+            />
+          ))}
+        </SettingsGroup>
+      )}
+      {installer.modal}
 
       <div>
         <SettingsGroup title={t("settings.sync.prefsTitle")} divided>
@@ -174,9 +329,11 @@ export default function SyncSection() {
             <SyncToggleRow
               key={id}
               domain={id}
+              policyKey={`sync.types.${id}`}
+              settingId={`sync.type.${id}`}
               label={t(`settings.sync.objectType.${id}.label`)}
               sub={t(`settings.sync.objectType.${id}.sub`)}
-              checked={syncTypes[id] ?? true}
+              checked={isTypeSynced(id)}
               onChange={(v) => setSyncType(id, v)}
             />
           ))}
@@ -192,6 +349,8 @@ export default function SyncSection() {
             <div key={id}>
               <SyncToggleRow
                 domain={id}
+                policyKey={`sync.domains.${id}`}
+                settingId={`sync.domain.${id}`}
                 label={t(`settings.sync.settingDomain.${id}.label`)}
                 sub={t(`settings.sync.settingDomain.${id}.sub`)}
                 checked={isDomainSynced(id)}

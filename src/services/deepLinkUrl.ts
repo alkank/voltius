@@ -1,6 +1,8 @@
+import { GRANT_SECRET_RE } from "@/services/grantSecret";
 import { isSessionId, isUuid } from "@/services/sessionId";
 import { isSettingsSection, type SettingsSection } from "@/stores/uiStore";
 import { isValidPluginId } from "@/plugins/pluginId";
+import { parseEnrollmentToken, type EnrollmentTokenParts } from "@/services/enrollment/enrollmentToken";
 
 export type JoinIntent = { route: "join"; sessionId: string; token: string };
 export type InviteIntent = { route: "invite"; handle: string };
@@ -8,11 +10,16 @@ export type VerifiedIntent = { route: "verified"; userId: string };
 export type NotificationIntent = { route: "notification"; entryId: string | null };
 export type SettingsIntent = { route: "settings"; section: SettingsSection };
 export type BillingIntent = { route: "billing" };
+export type PortForwardingIntent = { route: "port-forwarding" };
 export type SnippetInstallIntent = { route: "snippet-install"; entryId: string };
 export type PluginInstallIntent = { route: "plugin-install"; pluginId: string; sourceId: string };
 /** Carries a grant id and its secret only — never key material, never
  *  `account_id`, which is the KDF salt for the user's password. */
 export type VaultJoinIntent = { route: "vault-join"; grantId: string; secret: string };
+/** Android launcher shortcut (LauncherShortcuts.kt): the id of a saved host, nothing else. */
+export type ConnectIntent = { route: "connect"; hostId: string };
+/** The token is a bearer capability for joining a server: handled in memory only, never logged. */
+export type EnrollIntent = { route: "enroll"; token: string };
 export type DeepLinkIntent =
   | JoinIntent
   | InviteIntent
@@ -20,9 +27,12 @@ export type DeepLinkIntent =
   | NotificationIntent
   | SettingsIntent
   | BillingIntent
+  | PortForwardingIntent
   | SnippetInstallIntent
   | PluginInstallIntent
-  | VaultJoinIntent;
+  | VaultJoinIntent
+  | ConnectIntent
+  | EnrollIntent;
 
 type TrustClass = "confirm" | "attenuated" | "silent" | "navigate";
 type Route = DeepLinkIntent["route"];
@@ -81,6 +91,7 @@ const TRUST = {
   notification: "navigate",
   settings: "navigate",
   billing: "navigate",
+  "port-forwarding": "navigate",
   // Writes snippets — shell commands the user will later run — into a vault, so
   // nothing lands until the user accepts.
   "snippet-install": "confirm",
@@ -91,6 +102,15 @@ const TRUST = {
   // Membership is a capability even though no key travels in the link, and
   // leaving again is a separate act.
   "vault-join": "confirm",
+  // Opens a session to a host already saved on this device, exactly like tapping it on
+  // Hosts: the link names a host id and carries no credential, so a forged one can only
+  // connect the user to their own server with their own settings. Android also refuses
+  // it from anywhere but the app's own launcher shortcuts (MainActivity drops any other
+  // voltius://connect), it is scheme-only (SCHEME_ONLY), and only the mobile shell acts
+  // on it (deepLinkHandlers).
+  connect: "attenuated",
+  // The link names its own server; the enrol form looks the token up there but signs in only after the user goes ahead.
+  enroll: "confirm",
 } as const satisfies Record<Route, TrustClass>;
 
 type RouteOfClass<C extends TrustClass> = {
@@ -131,9 +151,6 @@ export const DEFAULT_PLUGIN_SOURCE_ID = "voltius";
 /** A source id is a catalogue key, not a URL; this only stops an absurd one. */
 const MAX_SOURCE_ID = 100;
 
-/** As the server mints it: 32 random bytes, unpadded base64url, 43 chars. */
-const GRANT_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
-
 /**
  * Mirrors the server's custom-handle rule (server: `src/handles.rs`,
  * `validate_custom_handle`): 3–30 ASCII lowercase/digit/`-`/`_`, never starting
@@ -143,6 +160,13 @@ const GRANT_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
  * nobody anyway.
  */
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$/;
+
+/** A saved host id: an opaque lookup key (UUIDs today), never a path or a URL. */
+const HOST_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Routes only the custom scheme may carry: the https App Link form reaches the app from
+ *  any web page, while Android lets only the launcher shortcuts deliver these. */
+const SCHEME_ONLY: ReadonlySet<Route> = new Set(["connect"]);
 
 const ROUTES: { [K in Route]: RouteCodec<K> } = {
   join: {
@@ -195,6 +219,10 @@ const ROUTES: { [K in Route]: RouteCodec<K> } = {
     parse: () => ({ route: "billing" }),
     params: () => ({}),
   },
+  "port-forwarding": {
+    parse: () => ({ route: "port-forwarding" }),
+    params: () => ({}),
+  },
   "snippet-install": {
     parse: (params) => {
       const entryId = params.get("id") ?? "";
@@ -231,6 +259,21 @@ const ROUTES: { [K in Route]: RouteCodec<K> } = {
       return { route: "vault-join", grantId, secret };
     },
     params: ({ grantId, secret }) => ({ g: grantId, k: secret }),
+  },
+  connect: {
+    parse: (params) => {
+      const hostId = params.get("host") ?? "";
+      if (!HOST_ID_RE.test(hostId)) return null;
+      return { route: "connect", hostId };
+    },
+    params: ({ hostId }) => ({ host: hostId }),
+  },
+  enroll: {
+    parse: (params) => {
+      const token = params.get("t") ?? "";
+      return parseEnrollmentToken(token) ? { route: "enroll", token } : null;
+    },
+    params: ({ token }) => ({ t: token }),
   },
 };
 
@@ -284,7 +327,8 @@ export function parseDeepLink(url: string): DeepLinkIntent | null {
     WEB_HOSTS.has(parsed.hostname) &&
     parsed.pathname.replace(/\/+$/, "") === WEB_PATH
   ) {
-    return parseFragment(parsed.hash);
+    const intent = parseFragment(parsed.hash);
+    return intent && SCHEME_ONLY.has(intent.route) ? null : intent;
   }
 
   return null;
@@ -309,6 +353,12 @@ function parseRoute(route: string, params: URLSearchParams): DeepLinkIntent | nu
 // resolve to a function rather than a route.
 function isRoute(value: string): value is Route {
   return Object.prototype.hasOwnProperty.call(TRUST, value);
+}
+
+/** A pasted enrolment token, bare or as its enrol link. */
+export function parseEnrollInput(text: string): EnrollmentTokenParts | null {
+  const intent = parseDeepLink(text);
+  return parseEnrollmentToken(intent?.route === "enroll" ? intent.token : text);
 }
 
 /**

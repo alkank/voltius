@@ -2,6 +2,7 @@ import i18n from "@/i18n";
 import { useThemeStore } from "@/stores/themeStore";
 import type { AppTheme } from "@/themes/types";
 import type { ThemeMode, GeoLocation } from "@/services/themeAutomation";
+import { isAdminDefaultWrite } from "@/stores/appSettingsTimestampStore";
 import { lastWriteWins, type UserDataHandler } from "../handler";
 
 interface ThemesData {
@@ -17,7 +18,6 @@ interface ThemesData {
 
 export const themesHandler: UserDataHandler = {
   key: "themes",
-  label: "Themes",
   icon: "lucide:palette",
 
   export(): ThemesData {
@@ -55,7 +55,7 @@ export const themesHandler: UserDataHandler = {
     }
     if (Object.keys(patch).length === 0) return;
     useThemeStore.setState(patch);
-    useThemeStore.getState().persist();
+    if (!isAdminDefaultWrite()) useThemeStore.getState().persist();
   },
 
   merge: lastWriteWins,

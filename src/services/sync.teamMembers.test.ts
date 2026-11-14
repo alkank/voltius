@@ -1,8 +1,12 @@
+// @vitest-environment jsdom
 import { test, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   reconcileTeamVaultKeys: vi.fn(async () => {}),
   checkAndRotateTeamKey: vi.fn(async () => {}),
+  fetchTeamData: vi.fn().mockResolvedValue(undefined),
+  listJoinRequests: vi.fn(async () => []),
+  loadMyRequests: vi.fn(async () => {}),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
@@ -19,9 +23,16 @@ vi.mock("@/services/teamService", async (importOriginal) => ({
   listPendingInvitations: vi.fn(async () => []),
 }));
 
+vi.mock("@/services/enrollment/enrollmentApi", () => ({ enrollmentApi: { listJoinRequests: h.listJoinRequests } }));
+
+vi.mock("@/stores/enrollmentStore", () => ({
+  useEnrollmentStore: { getState: () => ({ loadMyRequests: h.loadMyRequests, myRequests: null }) },
+}));
+
 vi.mock("@/services/teamVaultSync", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/services/teamVaultSync")>()),
   reconcileTeamVaultKeys: h.reconcileTeamVaultKeys,
+  fetchTeamData: h.fetchTeamData,
 }));
 
 vi.mock("@/services/teamKeyRotation", () => ({
@@ -33,6 +44,7 @@ import { handleRealtimeEvent } from "./sync";
 beforeEach(() => {
   h.reconcileTeamVaultKeys.mockClear();
   h.checkAndRotateTeamKey.mockClear();
+  h.fetchTeamData.mockClear();
 });
 
 test("a team_members event checks for a DEK rotation alongside key reconciliation", async () => {
@@ -40,4 +52,27 @@ test("a team_members event checks for a DEK rotation alongside key reconciliatio
 
   expect(h.reconcileTeamVaultKeys).toHaveBeenCalledWith("t1");
   expect(h.checkAndRotateTeamKey).toHaveBeenCalledWith("t1");
+});
+
+test("a role or permission change refreshes the team's vault in the background", async () => {
+  await handleRealtimeEvent("team_members:t1", "dev1");
+  await vi.waitFor(() => expect(h.fetchTeamData).toHaveBeenCalledWith("t1", { background: true }));
+});
+
+test("a join_requests event reloads requests and nothing else", async () => {
+  h.fetchTeamData.mockClear();
+  h.reconcileTeamVaultKeys.mockClear();
+  h.listJoinRequests.mockClear();
+  await handleRealtimeEvent("join_requests:t1", "device-1");
+  await vi.waitFor(() => expect(h.listJoinRequests).toHaveBeenCalledWith("t1"));
+  expect(h.fetchTeamData).not.toHaveBeenCalled();
+  expect(h.reconcileTeamVaultKeys).not.toHaveBeenCalled();
+});
+
+test("sse my_join_requests_changed reloads requests and nothing else", async () => {
+  h.fetchTeamData.mockClear();
+  h.loadMyRequests.mockClear();
+  await handleRealtimeEvent("my_join_requests_changed:u1", "device-1");
+  expect(h.loadMyRequests).toHaveBeenCalledTimes(1);
+  expect(h.fetchTeamData).not.toHaveBeenCalled();
 });

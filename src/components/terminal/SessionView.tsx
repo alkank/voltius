@@ -1,18 +1,23 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSessionStore, type ConnectRetryOverride } from "@/stores/sessionStore";
+import { useSessionStore } from "@/stores/sessionStore";
 import { wakeBackoff } from "@/stores/reconnectBackoffCore";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
+import { hasInputControl } from "@/services/broadcast";
 import TerminalView from "@/components/terminal/Terminal";
 import { TerminalSearch } from "@/components/terminal/TerminalSearch";
 import { MultiplayerBar } from "@/components/terminal/MultiplayerBar";
 import { TerminalStatusBar } from "@/components/terminal/TerminalStatusBar";
 import { useMultiplayerHostBroadcast } from "@/hooks/useMultiplayerHostBroadcast";
 import ConnectionOverlay, { getSshSteps, getSerialSteps } from "@/components/terminal/connection-overlay";
-import { useAllConnections } from "@/hooks/useAllConnections";
+import { useConnection } from "@/hooks/useAllConnections";
+import { NO_CONNECTION, useCredentialPlan } from "@/hooks/useCredentialPlan";
 import { getConnectionIcon } from "@/utils/icons";
-import type { TerminalSession } from "@/types";
+import type { ConnectRetryOverride, TerminalSession } from "@/types";
 import { EphemeralSerialConfigOverlay } from "@/components/connections/EphemeralSerialConfigOverlay";
+import { knocksOnConnect } from "@/services/portKnock";
+import { needsConnectionOverlay, sshOverlaySubtitle } from "./sessionOverlay";
+import { closeSessionTabs } from "@/services/closeSession";
 
 export function HostAwareTerminalView({
   session,
@@ -20,24 +25,26 @@ export function HostAwareTerminalView({
   onClosed,
   compact,
   statusBar = true,
+  statusBarVisible = true,
+  visible = true,
 }: {
   session: TerminalSession;
   active: boolean;
+  /** False while mounted off screen (a background tab, a hidden split workspace). */
+  visible?: boolean;
   onClosed: (remoteExit: boolean) => void;
   /** Mobile: render the terminal compact (no minimap) and suppress the status-bar footer. */
   compact?: boolean;
   /** Split panes carry no status bar of their own. */
   statusBar?: boolean;
+  /** Whether this session's status bar, if rendered, is the one currently on screen. */
+  statusBarVisible?: boolean;
 }) {
-  useMultiplayerHostBroadcast(session.id, session.type);
-  const mpState = useTeamSessionStore((s) => s.connections[session.id]);
-  const isSharing = !!mpState;
+  useMultiplayerHostBroadcast(session.id, session.type, session.encoding);
+  const isSharing = useTeamSessionStore((s) => !!s.connections[session.id]);
 
   const inputGateRef = useRef<() => boolean>(() => true);
-  inputGateRef.current = () => {
-    if (!mpState) return true;
-    return mpState.controlHolder === "" || mpState.controlHolder === mpState.myUserId;
-  };
+  inputGateRef.current = () => hasInputControl(session.id);
 
   const [dimensions, setDimensions] = useState<{ cols: number; rows: number } | undefined>();
 
@@ -54,6 +61,7 @@ export function HostAwareTerminalView({
           sessionId={session.id}
           sessionType={terminalType as "ssh" | "local" | "serial"}
           active={active}
+          visible={visible}
           onClosed={onClosed}
           inputGate={inputGateRef}
           encoding={session.encoding}
@@ -72,26 +80,30 @@ export function HostAwareTerminalView({
           serialConfig={session.serialConfig}
           sessionStatus={session.status}
           dimensions={dimensions}
+          visible={statusBarVisible}
         />
       )}
     </div>
   );
 }
 
-export function SessionConnectionOverlay({
-  session, onDismiss, onRetry, onRetryWithPassphrase, onRetryWithAuth,
-}: {
-  session: TerminalSession;
-  onDismiss?: () => void;
-  onRetry?: () => void;
-  onRetryWithPassphrase?: (passphrase: string, save: boolean) => void;
-  onRetryWithAuth?: (override: ConnectRetryOverride, save: boolean) => void;
-}) {
+export function SessionConnectionOverlay({ session }: { session: TerminalSession }) {
+  if (!needsConnectionOverlay(session)) return null;
+  return <SessionConnectionOverlayPanel session={session} />;
+}
+
+function SessionConnectionOverlayPanel({ session }: { session: TerminalSession }) {
   const { t } = useTranslation();
-  const connections = useAllConnections();
-  const connection = connections.find((c) => c.id === session.connectionId);
+  const connection = useConnection(session.connectionId);
+  const { plan } = useCredentialPlan(connection ?? NO_CONNECTION);
   const connectSerialEphemeralFinalize = useSessionStore((s) => s.connectSerialEphemeralFinalize);
   const resetSerialEphemeral = useSessionStore((s) => s.resetSerialEphemeral);
+  const reconnect = useSessionStore((s) => s.reconnect);
+  const reconnectWithPassphrase = useSessionStore((s) => s.reconnectWithPassphrase);
+  const retryConnect = useSessionStore((s) => s.retryConnect);
+  const enableLegacyAlgorithms = useSessionStore((s) => s.enableLegacyAlgorithms);
+  const onDismiss = () => closeSessionTabs([session.id]);
+  const onRetry = () => void reconnect(session.id);
   const reconnectProps = { reconnectWait: session.reconnectWait, onRetryNow: () => wakeBackoff(session.id) };
 
   if (session.type === "serial") {
@@ -134,7 +146,7 @@ export function SessionConnectionOverlay({
 
   const displayIcon = connection ? (connection.icon || connection.distro) : null;
   const icon = displayIcon ? (getConnectionIcon(displayIcon) ?? "lucide:monitor") : "lucide:monitor";
-  const subtitle = connection ? `${connection.username}@${connection.host}:${connection.port}` : undefined;
+  const subtitle = connection ? sshOverlaySubtitle(connection, plan, session.skipIdentityPick) : undefined;
   return (
     <ConnectionOverlay
       sessionId={session.id}
@@ -145,14 +157,22 @@ export function SessionConnectionOverlay({
       subtitle={subtitle}
       icon={icon}
       vaultId={connection?.vault_id}
-      steps={getSshSteps()}
+      connectionId={connection?.id}
+      steps={getSshSteps(!!connection && knocksOnConnect(connection))}
       stepEventName={`ssh-step-${session.id}`}
       conflictEventName={`ssh-host-key-conflict-${session.id}`}
       onDismiss={onDismiss}
-      onRetry={onRetry}
+      onRetry={session.type === "ssh" ? onRetry : undefined}
       {...reconnectProps}
-      onRetryWithPassphrase={onRetryWithPassphrase}
-      onRetryWithAuth={onRetryWithAuth}
+      onRetryWithPassphrase={
+        session.type === "ssh" ? (passphrase, save) => void reconnectWithPassphrase(session.id, passphrase, save) : undefined
+      }
+      identityPick={session.identityPick}
+      onUseHostCredential={session.type === "ssh" ? () => void reconnect(session.id, { skipIdentityPick: true }) : undefined}
+      onRetryWithAuth={
+        session.type === "ssh" ? (override: ConnectRetryOverride, save) => void retryConnect(session.id, override, save) : undefined
+      }
+      onEnableLegacyAlgorithms={session.type === "ssh" ? () => void enableLegacyAlgorithms(session.id) : undefined}
     />
   );
 }

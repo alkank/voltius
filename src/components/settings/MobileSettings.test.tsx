@@ -38,20 +38,20 @@ const AI_PAGE = {
   icon: "lucide:sparkles",
   component: () => <div data-testid="ai-page">ai page body</div>,
 };
-const SSH_PAGE = {
-  id: "plugin-ssh-config:settings",
-  label: "SSH Config Sync",
-  icon: "lucide:file-code",
-  component: () => <div data-testid="ssh-page">ssh page body</div>,
+const GIST_PAGE = {
+  id: "plugin-gist-sync:gist-sync-settings",
+  label: "GitHub Gist Sync",
+  icon: "lucide:github",
+  component: () => <div data-testid="gist-page">gist page body</div>,
 };
 
 beforeEach(() => {
   localStorage.clear();
-  loaded.list = [manifest("plugin-ai-agent"), manifest("plugin-ssh-config")];
+  loaded.list = [manifest("plugin-ai-agent"), manifest("plugin-gist-sync")];
   usePluginStore.setState({
     settingsPages: new Map([
       [AI_PAGE.id, AI_PAGE],
-      [SSH_PAGE.id, SSH_PAGE],
+      [GIST_PAGE.id, GIST_PAGE],
     ]),
   });
   usePluginRegistryStore.setState({ overrides: {} });
@@ -107,4 +107,20 @@ test("the chevron collapses children without pushing anything", () => {
   fireEvent.click(screen.getByLabelText("settings.chrome.collapsePluginGroup"));
   expect(childButton("AI Agent")).toBeFalsy();
   expect(screen.queryByTestId("builtin-section")).toBeNull();
+});
+
+test("one back pattern: ← on the list closes settings, no ✕ anywhere", () => {
+  render(<MobileSettings />);
+  expect(screen.queryByLabelText("settings.chrome.close")).toBeNull();
+  fireEvent.click(screen.getByLabelText("settings.chrome.back"));
+  expect(useUIStore.getState().settingsOpen).toBe(false);
+});
+
+test("a sub-page has the same ← in its top bar, which returns to the list", () => {
+  render(<MobileSettings />);
+  fireEvent.click(childButton("Plugins") as HTMLElement);
+  expect(screen.queryByLabelText("settings.chrome.close")).toBeNull();
+  fireEvent.click(screen.getByLabelText("settings.chrome.back"));
+  expect(useUIStore.getState().settingsSubPage).toBeNull();
+  expect(useUIStore.getState().settingsOpen).toBe(true);
 });

@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { getSecret, storeSecret } from "@/services/vault";
-import { saveTeamVaultSecretForVault } from "@/services/teamVaultSecrets";
+import { reportUploadFailure } from "@/services/secretRouting";
 import { isValidSshPublicKey } from "@/services/sshPublicKey";
 import type { SshKey } from "@/types";
 
@@ -50,7 +50,12 @@ export async function ensurePublicKey(sshKey: SshKey): Promise<string | null> {
   if ("error" in result) return null;
   if (!isValidSshPublicKey(result.publicKey)) return null;
 
-  await storeSecret(localKey, result.publicKey);
-  await saveTeamVaultSecretForVault(sshKey.vault_id, localKey, result.publicKey).catch(() => {});
+  await storeSecret(localKey, result.publicKey).catch(reportUploadFailure("ensurePublicKey", { toast: false }));
   return result.publicKey;
+}
+
+/** Each key's public half by key id, for keys that have or can derive one. */
+export async function loadPublicKeys(keys: SshKey[]): Promise<Map<string, string>> {
+  const entries = await Promise.all(keys.map(async (k) => [k.id, await ensurePublicKey(k).catch(() => null)] as const));
+  return new Map(entries.filter((e): e is readonly [string, string] => !!e[1]));
 }

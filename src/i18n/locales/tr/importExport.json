@@ -17,6 +17,7 @@
       "encryptBackup": "Yedeği şifrele",
       "plaintextSecretsWarning": "Bu dışa aktarma parolaları, anahtarları veya sunucu notlarını düz metin olarak içeriyor. Bilerek şifrelenmemiş bir dosyaya ihtiyacınız yoksa şifrelemeyi açık tutun.",
       "snippetRefMissing": "“{{name}}”, bu dışa aktarmaya dahil olmayan başka bir kod parçacığını ({{target}}) çalıştırıyor. Onu da seçime ekleyin veya o adımı kaldırın.",
+      "exportFailed": "Dışa aktarılamadı: {{error}}",
       "confirmPasswordPlaceholder": "Parolayı onayla",
       "passwordsDontMatch": "Parolalar eşleşmiyor",
       "building": "Hazırlanıyor…",
@@ -26,8 +27,15 @@
       "showPreview": "Önizlemeyi göster",
       "selectedItem_one": "{{count}} seçili öğe",
       "selectedItem_other": "{{count}} seçili öğe",
-      "autoIncludeIdentity": "{{count}} kimlik",
-      "autoIncludeKey": "{{count}} anahtar",
+      "autoInclude": {
+        "connections_one": "{{count}} bağlantı",
+        "connections_other": "{{count}} bağlantı",
+        "snippets_one": "{{count}} kod parçacığı",
+        "snippets_other": "{{count}} kod parçacığı"
+      },
+      "autoIncludeHint": "Ayrıca dahil: dışa aktarılan öğeler bunları kullanıyor, içe aktarmadan sonra da çalışmaları için",
+      "relatedCredentials": "Bağlı kimlik bilgilerini dahil et",
+      "relatedCredentialsHint": "Bu bağlantıların kullandığı kimlikler ve SSH anahtarları. Yalnızca bağlantı ayarlarını dışa aktarmak için kapalı bırakın; içe aktarırken kasada zaten bulunan eşleşen kimlik veya anahtara yeniden bağlanırlar.",
       "checkboxLabel": {
         "connections_one": "Bağlantı ({{count}})",
         "connections_other": "Bağlantılar ({{count}})",
@@ -43,13 +51,16 @@
       "importFrom": "İçe aktarma kaynağı",
       "importInto": "İçe aktarma hedefi",
       "autoExtractTitle": "{{label}} verilerini otomatik çıkar",
-      "autoExtractDescription": "Yerel {{label}} verilerinizi okur ve şifresini çözer — elle dışa aktarmaya gerek yok",
+      "autoExtractDescription": "Yerel {{label}} verilerinizi okur — elle dışa aktarmaya gerek yok",
       "extracting": "Çıkarılıyor…",
       "extractFrom": "{{label}} verilerini çıkar",
+      "chooseConfigFolder": "Ya da bir {{label}} Config klasörü seçin…",
       "orImportFromFile": "veya dosyadan içe aktarın",
       "openFileLabel": "{{sub}} dosyası aç…",
       "encryptedBackupTitle": "Şifreli yedek — kilidi açmak için parolanızı girin",
       "unlock": "Kilidi aç",
+      "configPassphraseTitle": "Bu SecureCRT yapılandırması bir yapılandırma parolasıyla korunuyor — kayıtlı parolaları içe aktarmak için girin",
+      "skipPasswords": "Kayıtlı parolalar olmadan içe aktar",
       "reviewItems_one": "{{count}} öğeyi incele",
       "reviewItems_other": "{{count}} öğeyi incele",
       "back": "Geri",
@@ -60,6 +71,9 @@
       "groupConnections": "Bağlantılar",
       "groupKeys": "SSH anahtarları",
       "groupIdentities": "Kimlikler",
+      "groupLinkedCredentials": "Bağlı kimlik bilgileri",
+      "linkedTo": "Bu kasadaki “{{name}}” ile bağlandı",
+      "linkedNotFound": "Bu kasada yok — içe aktarmadan sonra atayın",
       "groupPortForwarding": "Port yönlendirme",
       "selectAll": "Tümünü seç",
       "deselectAll": "Tüm seçimleri kaldır",
@@ -77,11 +91,23 @@
       "actionSkip": "Atla",
       "actionInclude": "İçe aktar",
       "actionOverwrite": "Üzerine yaz",
-      "resultImportedWithErrors": "{{count}} öğe içe aktarıldı{{vaultNote}}, {{errors}} öğe başarısız oldu.",
       "resultImportedSuccess_one": "{{count}} öğe başarıyla içe aktarıldı{{vaultNote}}.",
       "resultImportedSuccess_other": "{{count}} öğe başarıyla içe aktarıldı{{vaultNote}}.",
       "resultVaultNote": " ({{count}} kasaya)",
-      "resultError": "Hata: {{error}}"
+      "resultError": "Hata: {{error}}",
+      "resultImportedWithErrors_one": "{{count}} öğe içe aktarıldı{{vaultNote}}, {{errors}} öğe başarısız oldu.",
+      "resultImportedWithErrors_other": "{{count}} öğe içe aktarıldı{{vaultNote}}, {{errors}} öğe başarısız oldu.",
+      "groupNotImported": "İçe aktarılmadı",
+      "viaJump": "{{hosts}} üzerinden",
+      "teamKeysWarning": "Bu özel anahtarlar {{team}} ekibinin tüm üyeleriyle paylaşılacak.",
+      "notice": {
+        "pattern": "Desen: eşleşen sunuculara uygulanır, tek başına içe aktarılmaz",
+        "match": "Match bloğu: desteklenmiyor, yok sayıldı",
+        "include": "Include okunamadı",
+        "includeOutside": "~/.ssh dışındaki Include: okunmadı",
+        "key": "IdentityFile yolu çözümlenemeyen belirteçler içeriyor",
+        "proxyCommand": "ProxyCommand henüz desteklenmiyor"
+      }
     },
     "fileInput": {
       "openFileDefault": "Dosya aç…",
@@ -138,6 +164,54 @@
         "vaults_one": "{{count}} kasa",
         "vaults_other": "{{count}} kasa"
       }
+    },
+    "importers": {
+      "voltius": {
+        "sub": "JSON",
+        "placeholder": "Voltius JSON verisini buraya yapıştırın veya bir .json dosyası bırakın…\n\n{ \"version\": 1, \"connections\": [...] }"
+      },
+      "csv": {
+        "sub": "Elektronik tablo",
+        "placeholder": "CSV verisini buraya yapıştırın veya bir dosya bırakın…\n\nname,host,port,username,auth_type,tags"
+      },
+      "openssh": {
+        "sub": "~/.ssh/config",
+        "hint": "~/.ssh/config dosyasını, Include dosyalarını ve IdentityFile ile belirtilen anahtarları okur. Bir yapılandırma da yapıştırabilir veya bir dosya açabilirsiniz.",
+        "hintMobile": "~/.ssh/config içeriğini yapıştırın veya dosyayı açın. Anahtarlar dosya adına göre kasadaki mevcut anahtarlarla eşleştirilir.",
+        "placeholder": "Host my-server\n  HostName 10.0.0.5\n  User alex\n  IdentityFile ~/.ssh/id_ed25519",
+        "notFound": "Bu bilgisayarda ~/.ssh/config bulunamadı.",
+        "unreadable": "~/.ssh/config okunamadı ({{reason}})."
+      },
+      "mobaxterm": {
+        "sub": "Yerel kurulum · otomatik şifre çözme",
+        "hint": "MobaXterm'in kurulu olmasını gerektirir (yalnızca Windows).",
+        "placeholder": "MobaXterm.ini dosyasını buraya bırakın veya içeriğini yapıştırın…"
+      },
+      "termius": {
+        "sub": "Yerel kurulum · otomatik çıkarma",
+        "hint": "Termius'un kurulu ve oturumun açık olmasını gerektirir.",
+        "placeholder": "Termius için otomatik çıkarmayı kullanın. Yapıştırılan eski Termius dökümleri eksiksiz içe aktarma için desteklenmez."
+      },
+      "zoc": {
+        "sub": "Ana Bilgisayar Dizini · .zhd",
+        "hint": "Dosya Documents\\ZOC9 Files\\Options (Windows) veya ~/Library/Application Support/ZOC9 Files/Options (macOS) konumundadır. SSH ve seri bağlantı kayıtları içe aktarılır; kayıtlı parolalar aktarılmaz.",
+        "placeholder": "HostDirectory.zhd dosyasını buraya bırakın veya içeriğini yapıştırın…"
+      },
+      "putty": {
+        "sub": ".reg veya oturum",
+        "hint": "Kayıtlı oturumları Windows'ta kayıt defterinden, Linux ve macOS'ta ~/.putty/sessions konumundan okur. Bir .reg dışa aktarımını bırakabilir veya oturum dosyalarını yapıştırabilirsiniz. SSH ve seri oturumlar, proxy'ler ve tüneller içe aktarılır; anahtar dosyaları aktarılmaz.",
+        "placeholder": "PuTTY .reg dışa aktarımını buraya bırakın veya oturum dosyalarını yapıştırın…"
+      },
+      "securecrt": {
+        "sub": "Oturum .ini · XML dışa aktarımı",
+        "hint": "Otomatik ayıklama, SecureCRT'nin yerel yapılandırmasını okur. Bir oturumun .ini dosyasını (Config/Sessions) ya da File → Export Settings ile oluşturulan XML dosyasını da bırakabilirsiniz. SSH ve seri oturumlar kayıtlı parolalarıyla içe aktarılır; Telnet, RLogin, Raw ve diğer protokoller atlanır.",
+        "placeholder": "Bir SecureCRT oturum .ini dosyasını ya da .xml dışa aktarımını buraya bırakın veya içeriğini yapıştırın…"
+      }
+    },
+    "menu": {
+      "export": "Dışa aktar",
+      "importEllipsis": "İçe aktar…",
+      "exportEllipsis": "Dışa aktar…"
     }
   }
 }

@@ -1,18 +1,17 @@
 import { useMemo, useEffect, useState } from "react";
 import { useVaultStore } from "@/stores/vaultStore";
+import { vaultById } from "@/services/vaultLookup";
 import { useTeamStore } from "@/stores/teamStore";
 import { getMyUserId } from "@/services/teamService";
 import { effectivePermissions, PERM_BITS } from "@/hooks/usePermission";
+import { teamLocked } from "@/stores/subscriptionTier";
 
 /**
  * Maps a local vault UUID to the stored team ID at save time, so vault_id is
- * portable across accounts.  "personal" is left as-is.
+ * portable across accounts. A vault with no team keeps its own id.
  */
 export function resolveVaultIdForSave(vaultId: string): string {
-  if (vaultId === "personal") return "personal";
-  const vaults = useVaultStore.getState().vaults;
-  const vault = vaults.find((v) => v.id === vaultId);
-  return vault?.teamId ?? vaultId;
+  return vaultById(useVaultStore.getState().vaults, vaultId)?.teamId ?? vaultId;
 }
 
 /**
@@ -21,6 +20,7 @@ export function resolveVaultIdForSave(vaultId: string): string {
  */
 export function useDefaultVaultId(): string {
   const selectedVaultIds = useVaultStore((s) => s.selectedVaultIds);
+  const teams = useTeamStore((s) => s.teams);
   const membersByTeam = useTeamStore((s) => s.membersByTeam);
   const rolesByTeam = useTeamStore((s) => s.rolesByTeam);
   const [myUserId, setMyUserId] = useState("");
@@ -31,8 +31,8 @@ export function useDefaultVaultId(): string {
 
   return useMemo(() => {
     for (const vid of selectedVaultIds) {
-      if (vid === "personal") return vid;
-      const vault = useVaultStore.getState().vaults.find((v) => v.id === vid);
+      const vault = vaultById(useVaultStore.getState().vaults, vid);
+      if (vault && !vault.teamId) return vid;
       const teamId = vault?.teamId ?? vid;
       const resolvedId = vault?.teamId ?? vid;
       const members = membersByTeam[teamId];
@@ -53,8 +53,8 @@ export function useDefaultVaultId(): string {
       const member = members.find((m) => m.user_id === myUserId);
       if (!member) continue;
       if (roles.length === 0) return resolvedId; // optimistic while roles loading
-      if ((effectivePermissions(member, roles) & PERM_BITS.EDIT_CONNECTIONS) !== 0) return resolvedId;
+      if ((effectivePermissions(member, roles, teamLocked(teams, teamId)) & PERM_BITS.EDIT_CONNECTIONS) !== 0) return resolvedId;
     }
     return "personal";
-  }, [selectedVaultIds, membersByTeam, rolesByTeam, myUserId]);
+  }, [selectedVaultIds, teams, membersByTeam, rolesByTeam, myUserId]);
 }

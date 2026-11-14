@@ -1,53 +1,4 @@
-import type { Connection } from "@/types";
-
-/**
- * Hosts with a last_used_at, newest first. Currently-active connections are
- * excluded unless `includeActive` is set (e.g. to allow opening a second
- * terminal on a host you're already connected to).
- */
-export function selectRecentHosts(
-  connections: Connection[],
-  activeConnectionIds: Set<string>,
-  cap?: number,
-  includeActive = false,
-): Connection[] {
-  const recent = [...connections]
-    .filter((c) => c.last_used_at && (includeActive || !activeConnectionIds.has(c.id)))
-    .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""));
-  return cap === undefined ? recent : recent.slice(0, cap);
-}
-
-export interface LauncherHosts {
-  recent: Connection[];
-  hosts: Connection[];
-}
-
-/**
- * Empty query  → { recent: top-N by last_used, hosts: everything not in recent }.
- * Non-empty    → { recent: [], hosts: connections matching name/host/username }.
- */
-export function partitionLauncherHosts(
-  connections: Connection[],
-  activeConnectionIds: Set<string>,
-  query: string,
-  recentCap = 5,
-  includeActive = false,
-): LauncherHosts {
-  const q = query.trim().toLowerCase();
-  if (q) {
-    const hosts = connections.filter(
-      (c) =>
-        (c.name ?? "").toLowerCase().includes(q) ||
-        c.host.toLowerCase().includes(q) ||
-        c.username.toLowerCase().includes(q),
-    );
-    return { recent: [], hosts };
-  }
-  const recent = selectRecentHosts(connections, activeConnectionIds, recentCap, includeActive);
-  const recentIds = new Set(recent.map((c) => c.id));
-  const hosts = connections.filter((c) => !recentIds.has(c.id));
-  return { recent, hosts };
-}
+import { normalizeForSearch, searchMatcher } from "@/utils/search";
 
 export interface ShellOption {
   name: string;
@@ -69,17 +20,20 @@ export function shellIcon(name: string): string {
   return "lucide:square-terminal";
 }
 
+/** A ≥2-char prefix of the keywords "local"/"shell" (needle already folded). */
+function matchesLocalKeyword(needle: string): boolean {
+  return needle.length >= 2 && ("local".startsWith(needle) || "shell".startsWith(needle));
+}
+
 /**
  * True when the query matches a shell's name/path, or is a ≥2-char prefix of
  * the keywords "local"/"shell". Empty query always matches.
  */
 export function localShellMatches(shell: ShellOption, q: string): boolean {
-  const needle = q.trim().toLowerCase();
+  const needle = normalizeForSearch(q.trim());
   if (!needle) return true;
-  if (shell.name.toLowerCase().includes(needle)) return true;
-  if (shell.path.toLowerCase().includes(needle)) return true;
-  if (needle.length >= 2 && ("local".startsWith(needle) || "shell".startsWith(needle))) return true;
-  return false;
+  if (searchMatcher(needle)(shell.name, shell.path)) return true;
+  return matchesLocalKeyword(needle);
 }
 
 /**
@@ -87,12 +41,12 @@ export function localShellMatches(shell: ShellOption, q: string): boolean {
  * non-empty query → one entry per matching shell.
  */
 export function selectLocalShellItems(shells: ShellOption[], q: string): LocalShellItem[] {
-  const needle = q.trim().toLowerCase();
+  const needle = normalizeForSearch(q.trim());
   if (!needle) return [{ shell: null }];
   const matched = shells.filter((s) => localShellMatches(s, needle));
   // Keyword matched but no specific shells detected → fall back to the default entry
   // so the Local section still offers a launchable option.
-  if (matched.length === 0 && ("local".startsWith(needle) || "shell".startsWith(needle))) {
+  if (matched.length === 0 && matchesLocalKeyword(needle)) {
     return [{ shell: null }];
   }
   return matched.map((s) => ({ shell: s }));

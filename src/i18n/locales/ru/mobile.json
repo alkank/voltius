@@ -8,25 +8,6 @@
     "filterBar": {
       "placeholder": "Фильтр…"
     },
-    "header": {
-      "syncTooltip": "Синхронизация: {{status}}",
-      "syncStatus": {
-        "idle": "Ожидание",
-        "syncing": "Синхронизация",
-        "success": "Синхронизировано",
-        "error": "Ошибка",
-        "offline": "Не в сети"
-      }
-    },
-    "remoteSessions": {
-      "title": "Активны на других устройствах",
-      "relativeTime": {
-        "justNow": "только что",
-        "minutesAgo": "{{count}} мин назад",
-        "hoursAgo": "{{count}} ч назад",
-        "daysAgo": "{{count}} дн назад"
-      }
-    },
     "snippets": {
       "searchPlaceholder": "Поиск сниппетов",
       "noMatches": "Нет совпадений",
@@ -37,7 +18,6 @@
       "newFolderTitle": "Новая папка"
     },
     "terminalGestures": {
-      "selectAll": "Все",
       "paste": "Вставить"
     },
     "terminalTopBar": {
@@ -46,11 +26,7 @@
       "panelsAriaLabel": "Панели"
     },
     "panelItems": {
-      "sftp": "SFTP",
-      "docker": "Docker",
-      "metrics": "Метрики",
-      "processes": "Процессы",
-      "proxmox": "Proxmox"
+      "sftp": "SFTP"
     },
     "morePages": {
       "keychain": "Связка ключей",
@@ -64,15 +40,7 @@
       "email": "Email",
       "notSignedIn": "Не выполнен вход",
       "plan": "Тариф",
-      "cloudSync": "Облачная синхронизация",
       "off": "Выкл.",
-      "proTrial": "Pro пробный период — осталось {{days}} дн.",
-      "tier": {
-        "free": "Бесплатный",
-        "pro": "Pro",
-        "teams": "Teams",
-        "business": "Business"
-      },
       "cancelsOn": "Отменяется {{date}}. До этого момента доступ сохраняется.",
       "periodEnd": "конец периода",
       "renewsOn": "Продление {{date}}.",
@@ -80,16 +48,16 @@
       "seats": "Места",
       "seatsUsed": "Использовано {{used}} / {{total}}",
       "upgradeToPro": "Перейти на Pro",
-      "upgradeToTeams": "Перейти на Teams",
+      "upgradeToTeams": "Попробовать Teams бесплатно — {{days}} дн.",
+      "teamsTrialNote": "Нужна карта · во время пробного периода списаний нет",
       "manageBilling": "Управление оплатой",
       "viewAllPlans": "Посмотреть все тарифы",
-      "signInToSync": "Войти для синхронизации",
+      "signInToSync": "Войти в Voltius",
       "signOutConfirm": "Выйти из аккаунта? Зашифрованное хранилище будет удалено с этого устройства и повторно синхронизировано при следующем входе.",
       "signOut": "Выйти"
     },
     "more": {
-      "settings": "Настройки",
-      "planLabel": "Тариф {{tier}}"
+      "settings": "Настройки"
     },
     "host": {
       "newTitle": "Новый хост",
@@ -106,7 +74,10 @@
       "identitiesHeader": "ЛИЧНОСТИ",
       "addedOn": "добавлено {{date}}",
       "noSearchMatches": "Ничего не найдено по вашему запросу",
-      "empty": "Связка ключей пуста"
+      "empty": "Связка ключей пуста",
+      "generateKey": "Создать SSH-ключ",
+      "importKey": "Импортировать SSH-ключ",
+      "newIdentity": "Новая личность"
     },
     "knownHostsScreen": {
       "filterPlaceholder": "Фильтр хостов…",
@@ -124,15 +95,25 @@
       "filterPlaceholder": "Фильтр правил…",
       "summary": "Всего: {{total}} · активно: {{active}}",
       "noSearchMatches": "Нет правил, соответствующих запросу",
-      "empty": "Пока нет правил проброса портов",
-      "newRuleLabel": "Новое правило"
+      "empty": "Пока нет правил проброса портов"
     },
     "snippetEdit": {
       "editTitle": "Изменить сниппет",
       "newTitle": "Новый сниппет",
       "namePlaceholder": "Название сниппета",
       "contentPlaceholder": "echo hello",
-      "delete": "Удалить сниппет"
+      "delete": "Удалить сниппет",
+      "nameLabel": "Название",
+      "contentLabel": "Скрипт"
+    },
+    "editForm": {
+      "required": "Обязательное поле",
+      "incompleteTitle": "Выйти без сохранения?",
+      "incompleteBody": "Обязательное поле не заполнено, поэтому последние изменения пока нельзя сохранить.",
+      "unsavedTitle": "Отменить изменения?",
+      "unsavedBody": "Изменения этого сниппета не сохранены.",
+      "keepEditing": "Продолжить редактирование",
+      "discard": "Отменить"
     },
     "snippetsScreen": {
       "newSnippetLabel": "Новый сниппет"
@@ -142,6 +123,7 @@
       "pickHost": "Выберите хост"
     },
     "sftp": {
+      "transferFailed": "Передача не удалась",
       "chooseHost": "Выберите хост",
       "hidden": "Скрытые",
       "visible": "Видимые",
@@ -176,12 +158,20 @@
       "batchDeleteTitle_other": "Удалить {{count}} элементов?",
       "newFileOption": "Новый файл",
       "folderNamePlaceholder": "Название папки",
-      "fileNamePlaceholder": "Название файла"
+      "fileNamePlaceholder": "Название файла",
+      "selectAll": "Выбрать все",
+      "onePane": "Одна панель",
+      "twoPanes": "Две панели",
+      "moreActions": "Другие действия",
+      "itemActions": "Действия для {{name}}"
     },
     "folders": {
       "home": "Домой"
     },
     "sheets": {
+      "newSession": {
+        "noHosts": "Нет хостов"
+      },
       "shared": {
         "moveToVault": "Переместить в хранилище",
         "copyToVault": "Копировать в хранилище",
@@ -193,7 +183,6 @@
         "confirmDeleteBody": "Безвозвратно удалить {{name}}? Это действие нельзя отменить."
       },
       "folderActions": {
-        "renameTitle": "Переименовать папку",
         "deleteTitle": "Удалить папку?",
         "deleteBody": "Удалить {{name}} и всё её содержимое? Это действие нельзя отменить."
       },
@@ -202,8 +191,6 @@
         "openFiles": "Открыть файлы",
         "copyAddress": "Копировать адрес",
         "copiedAddress": "Скопировано: {{host}}",
-        "enableCloudSync": "Включить облачную синхронизацию",
-        "disableCloudSync": "Отключить облачную синхронизацию",
         "enableReachabilityCheck": "Включить проверку доступности",
         "disableReachabilityCheck": "Отключить проверку доступности"
       },
@@ -255,6 +242,55 @@
       "vaultSwitcher": {
         "newVault": "Новое хранилище",
         "namePlaceholder": "Название хранилища"
+      }
+    },
+    "shortcuts": {
+      "hostGone": "Этот хост больше не существует. Его ярлык удалён."
+    },
+    "share": {
+      "action": "Поделиться",
+      "publicKey": "Поделиться открытым ключом",
+      "failed": "Не удалось открыть меню «Поделиться»",
+      "downloadFailed": "Не удалось скачать файл для отправки",
+      "largeTitle": "Отправить {{size}}?",
+      "largeBody": "Файлы сначала скачиваются на этот телефон, затем передаются выбранному приложению.",
+      "tooLong": "Слишком длинный текст для отправки"
+    },
+    "vaultSettings": {
+      "title": "Настройки хранилища",
+      "gone": "Этого хранилища больше нет на устройстве.",
+      "openFor": "Настройки «{{name}}»",
+      "nameRequired": "У хранилища должно быть имя.",
+      "nameReadOnly": "Переименовать его могут только управляющие хранилищем.",
+      "kindTeam": "Командное хранилище",
+      "kindPrivate": "Личное хранилище",
+      "sections": {
+        "general": "Общие",
+        "people": "Люди",
+        "danger": "Опасная зона"
+      },
+      "rows": {
+        "name": "Название",
+        "share": "Поделиться и пригласить",
+        "members": "Участники",
+        "roles": "Роли",
+        "security": "Политика безопасности",
+        "makePrivate": "Сделать личным",
+        "delete": "Удалить хранилище",
+        "leave": "Покинуть хранилище"
+      },
+      "summaries": {
+        "share": "Приглашайте людей и управляйте ссылками",
+        "members_one": "{{count}} участник",
+        "members_few": "{{count}} участника",
+        "members_many": "{{count}} участников",
+        "members_other": "{{count}} участника",
+        "roles": "Что может каждая роль",
+        "security": "Правила блокировки и сеансов для участников",
+        "makePrivate": "Удалить всех остальных и оставить личную копию",
+        "delete": "Удаляет хранилище и всё его содержимое",
+        "deleteTeam": "Удаляет его для всех участников",
+        "leave": "Отказаться от доступа к этому хранилищу"
       }
     }
   }

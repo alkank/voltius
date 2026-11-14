@@ -4,17 +4,20 @@ import type { SnippetPendingInject } from "@/services/snippetRunCore";
 import type { SequencePrompt } from "@/services/snippetSequence";
 import { normalizeSnippetSteps } from "@/services/snippetSteps";
 import * as api from "@/services/snippets";
-import { scheduleSync } from "@/services/sync";
-import { isServerMode } from "@/services/account";
+import { syncAfterEdit } from "@/stores/syncAfterEdit";
 import { reportAuditMutation } from "@/services/auditMutations";
 import { useHistoryStore } from "@/stores/historyStore";
-import { pushCreateHistory, pushDeleteHistory } from "@/stores/recreateHistory";
+import { pushCreateHistory, pushDeleteHistory, pushTeamDeleteHistory } from "@/stores/recreateHistory";
 import { isTeamVaultId, findTeamEntry, setTeamMapEntry, clearTeamMapEntry, upsertInTeamMap, removeFromTeamMap, applyVaultTransition, saveStampedTeamObject } from "@/stores/teamVaultMap";
 import { removeTeamVaultObject, saveTeamVaultObject } from "@/services/teamObjectPersistence";
+import { rulesSourceOf } from "@/services/ruleSetIntent";
 import { useTeamObjectPrefsStore } from "@/stores/teamObjectPrefsStore";
 import { classifyVaultTransition, migrateVaultObject } from "@/services/teamVaultMigration";
 
 export type GlobalPendingInject = SnippetPendingInject;
+
+/** A new snippet's starting content, handed to the Snippets panel's editor. */
+export type SnippetDraft = Pick<SnippetFormData, "name" | "steps">;
 
 /** Queue-unique identity for a prompt: the same snippet can be queued once per
  *  host, and the modal must remount (re-seed its values) for each one. */
@@ -28,7 +31,7 @@ let _recentIds: string[] = [];
 
 /** Rebuilds a full SnippetFormData from a stored snippet: `snippet_update`
  *  replaces rather than merges, so a partial payload must spread this. */
-function snippetToFormData(s: Snippet): SnippetFormData {
+export function snippetToFormData(s: Snippet): SnippetFormData {
   return {
     name: s.name, steps: s.steps, description: s.description,
     tags: s.tags, folder_id: s.folder_id, favorite: s.favorite,
@@ -44,6 +47,8 @@ interface SnippetStore {
   globalPendingInject: GlobalPendingInject | null;
   pendingSequences: QueuedSequencePrompt[];
   teamSnippets: Record<string, Snippet[]>;
+  snippetDraft: SnippetDraft | null;
+  setSnippetDraft: (draft: SnippetDraft | null) => void;
   loadSnippets: () => Promise<void>;
   setTeamSnippets: (teamId: string, items: Snippet[]) => void;
   clearTeamSnippets: (teamId?: string) => void;
@@ -65,6 +70,8 @@ export const useSnippetStore = create<SnippetStore>((set, get) => ({
   globalPendingInject: null,
   pendingSequences: [],
   teamSnippets: {},
+  snippetDraft: null,
+  setSnippetDraft: (snippetDraft) => set({ snippetDraft }),
 
   loadSnippets: async () => {
     set({ loading: true });
@@ -97,7 +104,7 @@ export const useSnippetStore = create<SnippetStore>((set, get) => ({
         clocks: { created_at: now, updated_at: now },
       };
       const vaultId = data.vault_id!;
-      await saveTeamVaultObject(vaultId, "snippet", snippet);
+      await saveTeamVaultObject(vaultId, "snippet", snippet, { rulesFrom: rulesSourceOf(data) });
       set((s) => ({ teamSnippets: upsertInTeamMap(s.teamSnippets, vaultId, snippet) }));
       reportAuditMutation("snippet", "created", { id: snippet.id, name: snippet.name, vault_id: snippet.vault_id });
       pushCreateHistory({
@@ -113,7 +120,7 @@ export const useSnippetStore = create<SnippetStore>((set, get) => ({
     const snippet = await api.createSnippet(data);
     const snippets = await api.listSnippets();
     set({ snippets });
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
     reportAuditMutation("snippet", "created", { id: snippet.id, name: snippet.name, vault_id: snippet.vault_id });
     pushCreateHistory({
       label: `Created snippet "${snippet.name}"`,
@@ -194,7 +201,7 @@ export const useSnippetStore = create<SnippetStore>((set, get) => ({
       const transition = classifyVaultTransition(prev.vault_id, nextVaultId, isTeamVaultId);
       return { snippets, teamSnippets: applyVaultTransition(s.teamSnippets, transition, id, item) };
     });
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
     if (prev) reportAuditMutation("snippet", "updated", { id, name: data.name ?? prev.name, vault_id: data.vault_id ?? prev.vault_id });
     if (prev) {
       const prevData = snippetToFormData(prev);
@@ -213,12 +220,15 @@ export const useSnippetStore = create<SnippetStore>((set, get) => ({
       await removeTeamVaultObject(teamId, id);
       set((s) => ({ teamSnippets: removeFromTeamMap(s.teamSnippets, teamId, id) }));
       reportAuditMutation("snippet", "deleted", { id: prev.id, name: prev.name, vault_id: prev.vault_id });
-      const prevData = snippetToFormData(prev);
-      pushDeleteHistory({
+      pushTeamDeleteHistory({
         label: `Deleted snippet "${prev.name}"`,
-        id,
-        data: prevData,
-        create: (d) => useSnippetStore.getState().createSnippet(d),
+        teamId,
+        type: "snippet",
+        item: prev,
+        putBack: (sn) => {
+          set((s) => ({ teamSnippets: upsertInTeamMap(s.teamSnippets, teamId, sn) }));
+          reportAuditMutation("snippet", "created", { id: sn.id, name: sn.name, vault_id: sn.vault_id });
+        },
         remove: (sid) => useSnippetStore.getState().deleteSnippet(sid),
       });
       return;
@@ -228,7 +238,7 @@ export const useSnippetStore = create<SnippetStore>((set, get) => ({
     await api.deleteSnippet(id);
     const snippets = await api.listSnippets();
     set({ snippets });
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
     if (prev) reportAuditMutation("snippet", "deleted", { id: prev.id, name: prev.name, vault_id: prev.vault_id });
     if (prev) {
       const prevData = snippetToFormData(prev);
@@ -254,7 +264,7 @@ export const useSnippetStore = create<SnippetStore>((set, get) => ({
     const nextFavorite = pinned ?? false;
     await api.updateSnippet(id, { ...snippetToFormData(snippet), favorite: nextFavorite });
     set((s) => ({ snippets: (s.snippets as Snippet[]).map((sn) => sn.id === id ? { ...sn, favorite: nextFavorite } : sn) }));
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
   },
 
   pinSnippetForTeam: async (id, pinned) => {

@@ -4,15 +4,17 @@ import { useTranslation } from "react-i18next";
 import { useVaultStore } from "@/stores/vaultStore";
 import { useTeamStore } from "@/stores/teamStore";
 import { getMyUserId } from "@/services/teamService";
-import { effectivePermissions, PERM_BITS } from "@/hooks/usePermission";
+import { canEditConnectionsIn } from "@/services/permissions";
 import { PickerSurface } from "./PickerSurface";
 
 export function VaultPicker({
   vaultId,
   onChange,
+  disabled,
 }: {
   vaultId: string;
   onChange: (id: string) => void;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation();
   const { vaults, selectVaultOnly } = useVaultStore();
@@ -45,14 +47,7 @@ export function VaultPicker({
       .sort((a, b) => a.position - b.position)[0]?.name ?? "";
   };
 
-  const canWrite = (vId: string): boolean => {
-    if (vId === "personal") return true;
-    const member = membersByTeam[vId]?.find((m) => m.user_id === myUserId);
-    if (!member || !myUserId) return true; // optimistic while loading
-    const roles = rolesByTeam[vId] ?? [];
-    if (roles.length === 0) return true; // optimistic while loading
-    return (effectivePermissions(member, roles) & PERM_BITS.EDIT_CONNECTIONS) !== 0;
-  };
+  const canWrite = (vId: string): boolean => canEditConnectionsIn(vId, myUserId, { teams, membersByTeam, rolesByTeam });
 
   const linkedTeamIds = new Set(vaults.map((v) => v.teamId).filter(Boolean));
   // Use teamId (the portable team UUID) as the ID for team-linked vaults so the
@@ -78,12 +73,13 @@ export function VaultPicker({
       <button
         ref={triggerRef}
         type="button"
+        disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 text-xs select-none transition-opacity hover:opacity-80"
+        className="flex items-center gap-1 text-xs select-none transition-opacity enabled:hover:opacity-80"
         style={{ color: "var(--t-text-dim)" }}
       >
         <span>{label}</span>
-        <Icon icon="lucide:chevron-down" width={11} style={{ color: "var(--t-text-dim)" }} />
+        {!disabled && <Icon icon="lucide:chevron-down" width={11} style={{ color: "var(--t-text-dim)" }} />}
       </button>
 
       <PickerSurface

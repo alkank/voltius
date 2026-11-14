@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, copyFileSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -30,9 +30,9 @@ function manifestVersion(id: string): string {
 
 // Only these two are built for real (one with a stylesheet, one without) — enough
 // to prove hashes match real bundler output. The rest get a cheap stand-in index.js
-// so buildCatalogFragment can still produce a full six-entry fragment for the
-// cardinality/id-correctness assertions, without paying for six vite builds here
-// (tests/pluginBundleBuild.test.ts already exercises all six as real builds).
+// so buildCatalogFragment can still produce a full five-entry fragment for the
+// cardinality/id-correctness assertions, without paying for five vite builds here
+// (tests/pluginBundleBuild.test.ts already exercises all five as real builds).
 const REAL_BUILDS = ["docker", "monitoring"];
 
 describe("plugin catalogue publish pipeline", () => {
@@ -81,7 +81,7 @@ describe("plugin catalogue publish pipeline", () => {
     }
     expect(ids).not.toContain("docker");
     expect(ids.sort()).toEqual(
-      ["plugin-docker", "plugin-gist-sync", "plugin-monitoring", "plugin-process-manager", "plugin-proxmox", "plugin-ssh-config"].sort(),
+      ["plugin-docker", "plugin-gist-sync", "plugin-monitoring", "plugin-process-manager", "plugin-proxmox"].sort(),
     );
   });
 
@@ -124,7 +124,7 @@ describe("plugin catalogue publish pipeline", () => {
     }
   });
 
-  // All six manifests declare minAppVersion, so the app-version fallback is no
+  // All five manifests declare minAppVersion, so the app-version fallback is no
   // longer reachable through them. Asserting `minAppVersion === APP_VERSION` over
   // the real manifests (as this used to) only passed while the two happened to be
   // the same string, and silently stopped testing the fallback at all — it broke
@@ -294,15 +294,11 @@ describe("CLI entry-point guard", () => {
     expect(isCliEntryPoint("/repo/scripts/build-plugins.mjs", "/repo/node_modules/.bin/vitest")).toBe(false);
   });
 
-  test("end-to-end: the guard fires for a real CLI invocation from a spaced path, without running main()", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "voltius-guard-"));
-    const spacedDir = path.join(dir, "dir with space");
-    mkdirSync(spacedDir, { recursive: true });
-    const probePath = path.join(spacedDir, "probe.mjs");
+  // Importing build-plugins.mjs must NOT trigger main() (which would build all five real
+  // plugins into src-tauri/resources/plugins/); only the probe, as the entry point, prints true.
+  function writeProbe(dir: string): string {
+    const probePath = path.join(dir, "probe.mjs");
     const modulePath = path.join(ROOT, "scripts/build-plugins.mjs");
-    // Importing build-plugins.mjs here must NOT trigger main() (which would build
-    // all six real plugins into src-tauri/resources/plugins/) — only probe.mjs
-    // itself, as the actual CLI entry point, should evaluate as "true".
     writeFileSync(
       probePath,
       [
@@ -310,7 +306,26 @@ describe("CLI entry-point guard", () => {
         `console.log(isCliEntryPoint(import.meta.filename, process.argv[1]));`,
       ].join("\n"),
     );
-    const out = execFileSync("node", [probePath], { cwd: spacedDir }).toString().trim();
+    return probePath;
+  }
+
+  test("end-to-end: the guard fires for a real CLI invocation from a spaced path, without running main()", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "voltius-guard-"));
+    const spacedDir = path.join(dir, "dir with space");
+    mkdirSync(spacedDir, { recursive: true });
+    const out = execFileSync("node", [writeProbe(spacedDir)], { cwd: spacedDir }).toString().trim();
+    expect(out).toBe("true");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test.skipIf(process.platform === "win32")("end-to-end: the guard fires when the script is reached through a symlinked directory", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "voltius-guard-"));
+    const realDir = path.join(dir, "real");
+    mkdirSync(realDir);
+    const linkDir = path.join(dir, "link");
+    symlinkSync(realDir, linkDir, "dir");
+    writeProbe(realDir);
+    const out = execFileSync("node", [path.join(linkDir, "probe.mjs")]).toString().trim();
     expect(out).toBe("true");
     rmSync(dir, { recursive: true, force: true });
   });
@@ -330,8 +345,8 @@ describe("hash algorithm parity", () => {
 });
 
 // A partial build used to rmSync the whole resources dir before building only its
-// targets, so `node scripts/build-plugins.mjs docker` wiped the other five plugins —
-// which breaks `cargo test --lib` (the embedding tests assert the six unconditionally)
+// targets, so `node scripts/build-plugins.mjs docker` wiped the other four plugins —
+// which breaks `cargo test --lib` (the embedding tests assert the five unconditionally)
 // and fails a release build outright.
 describe("pruneTargets", () => {
   const RES = "/res";

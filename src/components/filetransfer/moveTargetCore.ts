@@ -9,13 +9,26 @@ export function pathSep(path: string): "/" | "\\" {
   return path.includes("/") ? "/" : "\\";
 }
 
+const DRIVE_SPEC = /^[A-Za-z]:$/;
+
+/** "C:" alone is drive-relative on Windows, so a drive root keeps its separator. */
+export function withDriveRootSep(path: string, sep: "/" | "\\"): string {
+  return DRIVE_SPEC.test(path) ? path + sep : path;
+}
+
+/** Parent directory, or "" when `path` has none. */
 export function parentDir(path: string): string {
   const sep = pathSep(path);
   const trimmed = path.replace(/[/\\]+$/, "");
+  if (DRIVE_SPEC.test(trimmed)) return "";
+  if (path.startsWith("\\\\") || path.startsWith("//")) {
+    const parts = trimmed.split(/[/\\]/).filter(Boolean);
+    return parts.length <= 1 ? "" : sep + sep + parts.slice(0, -1).join(sep);
+  }
   const idx = trimmed.lastIndexOf(sep);
   if (idx < 0) return "";
   if (idx === 0) return sep; // "/foo" -> "/"
-  return trimmed.slice(0, idx);
+  return withDriveRootSep(trimmed.slice(0, idx), sep);
 }
 
 export function joinPath(dir: string, name: string): string {
@@ -29,6 +42,14 @@ function norm(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
 }
 
+/** `path` is `dir` itself or anywhere beneath it, with `\` and `/` treated alike
+ *  so Windows paths (`C:\data` vs `C:\data\sub`) are caught too. */
+export function isSameOrUnder(path: string, dir: string): boolean {
+  const p = norm(path);
+  const d = norm(dir);
+  return p === d || p.startsWith(d.endsWith("/") ? d : d + "/");
+}
+
 export function isValidMoveTarget(files: FileEntry[], targetDir: string): boolean {
   if (files.length === 0) return false;
   const target = norm(targetDir);
@@ -37,9 +58,8 @@ export function isValidMoveTarget(files: FileEntry[], targetDir: string): boolea
   const srcParent = norm(parentDir(files[0].path));
   if (target === srcParent) return false; // already in this directory
   for (const file of files) {
-    const fp = norm(file.path);
-    if (target === fp) return false; // dropped onto itself
-    if (file.isDir && target.startsWith(fp + "/")) return false; // into own descendant
+    if (target === norm(file.path)) return false; // dropped onto itself
+    if (file.isDir && isSameOrUnder(target, file.path)) return false; // into own descendant
   }
   return true;
 }

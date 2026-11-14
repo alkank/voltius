@@ -10,7 +10,10 @@ import { Icon } from "@iconify/react";
 import { useTeamStore } from "@/stores/teamStore";
 import { useUIStore } from "@/stores/uiStore";
 import { fetchTeamData } from "@/services/teamVaultSync";
-import { ownerHandle } from "@/services/teamVaultFirstAccess";
+import { ownerLabel } from "@/services/teamVaultFirstAccess";
+import { checkForUpdate } from "@/services/updater";
+import { isPrimaryOwner } from "@/services/permissions";
+import { useMyUserId } from "@/hooks/useMyUserId";
 
 export default function TeamVaultStatePanel({
   status,
@@ -21,15 +24,10 @@ export default function TeamVaultStatePanel({
 }) {
   const { t } = useTranslation();
   const team = useTeamStore((s) => s.teams.find((t) => t.id === teamId));
-  const rolesByTeam = useTeamStore((s) => s.rolesByTeam);
   const members = useTeamStore((s) => s.membersByTeam[teamId]);
   const loadMembers = useTeamStore((s) => s.loadMembers);
-  const myRoleIds = team?.role_ids ?? [];
-  const teamRoles = rolesByTeam[teamId] ?? [];
-  const isOwner = myRoleIds.some((rid) => {
-    const r = teamRoles.find((role) => role.id === rid);
-    return r?.is_builtin && r.name === "owner";
-  });
+  const myUserId = useMyUserId();
+  const isOwner = isPrimaryOwner(team, myUserId);
 
   // The waiting copy names the owner the user is waiting on, so the roster has
   // to be there — this panel replaces the pages that would otherwise load it.
@@ -39,7 +37,7 @@ export default function TeamVaultStatePanel({
 
   // Generic until the handle resolves: a name flashing in from blank reads worse
   // than the sentence that never had one.
-  const owner = ownerHandle(team, members);
+  const owner = ownerLabel(team, members);
 
   const configs: Record<string, { icon: string; title: string; body: string }> = {
     offline: {
@@ -51,6 +49,11 @@ export default function TeamVaultStatePanel({
       icon: "lucide:shield-off",
       title: t("layout.mainPanel.teamVault.forbiddenTitle"),
       body: t("layout.mainPanel.teamVault.forbiddenBody"),
+    },
+    plan_lapsed: {
+      icon: "lucide:lock",
+      title: t("layout.mainPanel.teamVault.planLapsedTitle"),
+      body: t("layout.mainPanel.teamVault.planLapsedBody"),
     },
     // Member has joined the team but no vault owner has distributed a key yet
     // (issue #41). Distinct from a hard error — a key-holder self-heals this on
@@ -81,6 +84,11 @@ export default function TeamVaultStatePanel({
       title: t("layout.mainPanel.teamVault.errorTitle"),
       body: t("layout.mainPanel.teamVault.errorBody"),
     },
+    update_required: {
+      icon: "lucide:circle-arrow-up",
+      title: t("layout.mainPanel.teamVault.updateRequiredTitle"),
+      body: t("layout.mainPanel.teamVault.updateRequiredBody"),
+    },
   };
 
   const cfg = configs[status] ?? configs.error;
@@ -107,9 +115,18 @@ export default function TeamVaultStatePanel({
           <button
             onClick={openBilling}
             className="mt-2 text-sm px-3 py-1.5 rounded-lg"
-            style={{ background: "var(--t-accent)", color: "#fff" }}
+            style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
           >
             {t("layout.mainPanel.manageSubscription")}
+          </button>
+        )}
+        {status === "update_required" && (
+          <button
+            onClick={() => void checkForUpdate()}
+            className="mt-2 text-sm px-3 py-1.5 rounded-lg"
+            style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
+          >
+            {t("layout.mainPanel.checkForUpdates")}
           </button>
         )}
         {(!status || status === "error" || status === "awaiting_key") && (

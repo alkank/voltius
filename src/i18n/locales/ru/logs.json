@@ -44,6 +44,8 @@
         "portForwardDeleted": "Проброс портов удалён",
         "vaultRenamed": "Хранилище переименовано",
         "vaultKeyRotated": "Ротация ключа хранилища",
+        "teamLockPolicySet": "Политика блокировки задана",
+        "teamLockPolicyRemoved": "Политика блокировки удалена",
         "roleCreated": "Роль создана",
         "roleUpdated": "Роль обновлена",
         "roleDeleted": "Роль удалена",
@@ -52,7 +54,13 @@
         "secretViewed": "Секрет раскрыт",
         "sessionStarted": "Сессия начата",
         "sessionEnded": "Сессия завершена",
-        "sessionJoined": "Присоединение к сессии"
+        "sessionJoined": "Присоединение к сессии",
+        "memberRenamed": "Участник переименован",
+        "permissionGranted": "Разрешение выдано",
+        "permissionRevoked": "Разрешение отозвано",
+        "sessionLeft": "Выход из сеанса",
+        "vaultCreated": "Хранилище создано",
+        "vaultDeleted": "Хранилище удалено"
       }
     },
     "timeRange": {
@@ -73,18 +81,27 @@
     },
     "badges": {
       "client": "клиент",
-      "clientTooltip": "Сообщено клиентским приложением — не является авторитетным источником"
+      "clientTooltip": "Сообщено клиентским приложением — не является авторитетным источником",
+      "ownKey": "свой ключ",
+      "ownKeyTooltip": "Подключение с личностью участника; она не покидает его устройство",
+      "shared": "общая · {{name}}",
+      "sharedUnknown": "общая"
     },
     "eventLabels": {
       "memberInvited": "пригласил(а) {{name}}",
       "memberJoined": "присоединился(лась) к команде как {{role}}",
       "memberRemoved": "удалил(а) {{name}}",
+      "memberRenamed": "назвал(а) {{name}} «{{to}}»",
+      "memberNameRemoved": "убрал(а) имя {{name}}",
       "memberRoleChanged": "изменил(а) роль для {{name}}",
       "memberPermissionsChanged": "изменил(а) разрешения для {{name}}",
       "vaultCreated": "создал(а) хранилище \"{{name}}\"",
       "vaultDeleted": "удалил(а) хранилище \"{{name}}\"",
       "vaultRenamed": "переименовал(а) хранилище в \"{{name}}\"",
       "vaultKeyRotated": "выполнил(а) ротацию ключа хранилища \"{{name}}\"",
+      "lockPolicySet": "задал(а) политику блокировки (автоблокировка: {{timeout}})",
+      "lockPolicySetVault": "задал(а) политику блокировки (автоблокировка: {{timeout}}, «Заблокировать хранилище» обязательно)",
+      "lockPolicyRemoved": "удалил(а) политику блокировки",
       "roleCreated": "создал(а) роль \"{{name}}\"",
       "roleUpdated": "обновил(а) роль \"{{name}}\"",
       "roleDeleted": "удалил(а) роль \"{{name}}\"",
@@ -119,7 +136,8 @@
       "fallbackMember": "участник",
       "fallbackRole": "участник",
       "fallbackResource": "ресурс",
-      "fallbackHost": "хост"
+      "fallbackHost": "хост",
+      "you": "Вы"
     },
     "timeline": {
       "today": "Сегодня",

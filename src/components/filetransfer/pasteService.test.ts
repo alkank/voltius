@@ -1,12 +1,14 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { executePaste, buildPasteDeps, type PasteDeps } from "./pasteService";
 import type { FileEntry } from "@/components/filetransfer/SFTPTypes";
 import type { FileClipboard, FileEndpoint } from "@/stores/fileClipboardStore";
 import { transferItem } from "@/services/sftpTransferCore";
-import { tarUsableForPair } from "./tarSupport";
+import { tarModeForPair } from "./tarSupport";
+import { useNotificationStore } from "@/stores/notificationStore";
 
 vi.mock("@/services/sftpTransferCore", () => ({ transferItem: vi.fn(async () => {}) }));
-vi.mock("./tarSupport", () => ({ tarUsableForPair: vi.fn(async () => false) }));
+vi.mock("./tarSupport", async (orig) => ({ ...(await orig<typeof import("./tarSupport")>()), tarModeForPair: vi.fn(async () => "off") }));
 vi.mock("@/services/sftp", () => ({
   fsExists: vi.fn(async () => false), sftpExists: vi.fn(async () => false),
   fsRename: vi.fn(async () => {}), sftpRename: vi.fn(async () => {}),
@@ -25,6 +27,7 @@ function mkDeps(overrides: Partial<PasteDeps> = {}): PasteDeps {
     copyTarget: vi.fn(async () => {}),
     moveSameHost: vi.fn(async () => {}),
     deleteSource: vi.fn(async () => {}),
+    reportUndeleted: vi.fn(),
     setPending: vi.fn(),
     refresh: vi.fn(),
     clearClipboard: vi.fn(),
@@ -76,6 +79,27 @@ describe("executePaste", () => {
     expect(deps.clearClipboard).toHaveBeenCalled();
   });
 
+  // One undeletable original used to abort the whole move: later items were
+  // never copied, the panes never refreshed, and nothing told the user.
+  it("cross-host cut: a failed delete moves on, refreshes and reports the leftovers", async () => {
+    const clip: FileClipboard = { items: [file("/a/x.txt"), file("/a/y.txt"), file("/a/z.txt")], source: remote("s1", "/a"), mode: "cut" };
+    const deleteSource = vi.fn(async (p: string) => { if (p !== "/a/y.txt") throw "Permission denied"; });
+    const deps = mkDeps({ deleteSource });
+    await executePaste(clip!, local("/b"), deps);
+    expect(deps.copyTarget).toHaveBeenCalledTimes(3);
+    expect(deleteSource).toHaveBeenCalledTimes(3);
+    expect(deps.refresh).toHaveBeenCalled();
+    expect(deps.clearClipboard).toHaveBeenCalled();
+    expect(deps.reportUndeleted).toHaveBeenCalledWith(["x.txt", "z.txt"], "Permission denied");
+  });
+
+  it("cross-host cut: reports nothing when every original is deleted", async () => {
+    const clip: FileClipboard = { items: [file("/a/x.txt")], source: remote("s1", "/a"), mode: "cut" };
+    const deps = mkDeps();
+    await executePaste(clip!, local("/b"), deps);
+    expect(deps.reportUndeleted).not.toHaveBeenCalled();
+  });
+
   it("cross-host cut with a destination collision raises the conflict dialog", async () => {
     const clip: FileClipboard = { items: [file("/a/x.txt")], source: remote("s1", "/a"), mode: "cut" };
     const deps = mkDeps({ existsInDest: vi.fn(async () => true) });
@@ -115,22 +139,32 @@ describe("buildPasteDeps", () => {
   };
 
   it("tars a directory paste when the endpoint pair supports it", async () => {
-    vi.mocked(tarUsableForPair).mockResolvedValue(true);
+    vi.mocked(tarModeForPair).mockResolvedValue("tar");
     const w = await copyOne(remote("s1", "/a"), local("/b"), dir("/a/saves"));
     expect(transferItem).toHaveBeenCalledWith(expect.objectContaining({ useTar: true }));
-    expect(w.runTransfer).toHaveBeenCalledWith("saves", "→", expect.any(Function), expect.any(Function), true);
+    expect(w.runTransfer).toHaveBeenCalledWith("saves", "→", expect.any(Function), expect.any(Function), "tar");
   });
 
   it("falls back to plain SFTP when the pair cannot tar", async () => {
-    vi.mocked(tarUsableForPair).mockResolvedValue(false);
+    vi.mocked(tarModeForPair).mockResolvedValue("off");
     const w = await copyOne(remote("s1", "/a"), local("/b"), dir("/a/saves"));
     expect(transferItem).toHaveBeenCalledWith(expect.objectContaining({ useTar: false }));
-    expect(w.runTransfer).toHaveBeenCalledWith("saves", "→", expect.any(Function), expect.any(Function), false);
+    expect(w.runTransfer).toHaveBeenCalledWith("saves", "→", expect.any(Function), expect.any(Function), undefined);
+  });
+
+  it("reports originals left behind by a move as an error toast", () => {
+    const clip: FileClipboard = { items: [file("/a/x.txt")], source: remote("s1", "/a"), mode: "cut" };
+    buildPasteDeps(clip, local("/b"), wiring() as never).reportUndeleted(["x.txt", "y.txt"], "Permission denied");
+    const { toasts } = useNotificationStore.getState();
+    const toast = toasts[toasts.length - 1];
+    expect(toast.severity).toBe("error");
+    expect(toast.message).toContain("x.txt, y.txt");
+    expect(toast.message).toContain("Permission denied");
   });
 
   it("never flags a single file as accelerated", async () => {
-    vi.mocked(tarUsableForPair).mockResolvedValue(true);
+    vi.mocked(tarModeForPair).mockResolvedValue("tar");
     const w = await copyOne(remote("s1", "/a"), local("/b"), file("/a/x.txt"));
-    expect(w.runTransfer).toHaveBeenCalledWith("x.txt", "→", expect.any(Function), expect.any(Function), false);
+    expect(w.runTransfer).toHaveBeenCalledWith("x.txt", "→", expect.any(Function), expect.any(Function), undefined);
   });
 });

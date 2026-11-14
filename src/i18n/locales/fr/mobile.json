@@ -8,25 +8,6 @@
     "filterBar": {
       "placeholder": "Filtrer…"
     },
-    "header": {
-      "syncTooltip": "Synchro : {{status}}",
-      "syncStatus": {
-        "idle": "Inactif",
-        "syncing": "Synchronisation",
-        "success": "Synchronisé",
-        "error": "Erreur",
-        "offline": "Hors ligne"
-      }
-    },
-    "remoteSessions": {
-      "title": "En direct sur d'autres appareils",
-      "relativeTime": {
-        "justNow": "à l'instant",
-        "minutesAgo": "il y a {{count}} min",
-        "hoursAgo": "il y a {{count}} h",
-        "daysAgo": "il y a {{count}} j"
-      }
-    },
     "snippets": {
       "searchPlaceholder": "Rechercher des snippets",
       "noMatches": "Aucun résultat",
@@ -37,7 +18,6 @@
       "newFolderTitle": "Nouveau dossier"
     },
     "terminalGestures": {
-      "selectAll": "Tout",
       "paste": "Coller"
     },
     "terminalTopBar": {
@@ -46,11 +26,7 @@
       "panelsAriaLabel": "Panneaux"
     },
     "panelItems": {
-      "sftp": "SFTP",
-      "docker": "Docker",
-      "metrics": "Métriques",
-      "processes": "Processus",
-      "proxmox": "Proxmox"
+      "sftp": "SFTP"
     },
     "morePages": {
       "keychain": "Trousseau",
@@ -64,15 +40,7 @@
       "email": "E-mail",
       "notSignedIn": "Non connecté",
       "plan": "Forfait",
-      "cloudSync": "Synchronisation cloud",
       "off": "Désactivée",
-      "proTrial": "Essai Pro — {{days}} j restants",
-      "tier": {
-        "free": "Gratuit",
-        "pro": "Pro",
-        "teams": "Teams",
-        "business": "Business"
-      },
       "cancelsOn": "Résiliation le {{date}}. Vous conservez l'accès jusqu'à cette date.",
       "periodEnd": "la fin de la période",
       "renewsOn": "Renouvellement le {{date}}.",
@@ -80,16 +48,16 @@
       "seats": "Sièges",
       "seatsUsed": "{{used}} / {{total}} utilisés",
       "upgradeToPro": "Passer à Pro",
-      "upgradeToTeams": "Passer à Teams",
+      "upgradeToTeams": "Essayer Teams gratuitement {{days}} jours",
+      "teamsTrialNote": "Carte bancaire requise · aucun prélèvement pendant l'essai",
       "manageBilling": "Gérer la facturation",
       "viewAllPlans": "Voir tous les forfaits",
-      "signInToSync": "Se connecter pour synchroniser",
+      "signInToSync": "Se connecter à Voltius",
       "signOutConfirm": "Se déconnecter ? Votre coffre chiffré est supprimé de cet appareil et resynchronisé lors de votre prochaine connexion.",
       "signOut": "Se déconnecter"
     },
     "more": {
-      "settings": "Paramètres",
-      "planLabel": "Forfait {{tier}}"
+      "settings": "Paramètres"
     },
     "host": {
       "newTitle": "Nouvel hôte",
@@ -106,7 +74,10 @@
       "identitiesHeader": "IDENTITÉS",
       "addedOn": "ajouté le {{date}}",
       "noSearchMatches": "Aucun résultat pour votre recherche",
-      "empty": "Le trousseau est vide"
+      "empty": "Le trousseau est vide",
+      "generateKey": "Générer une clé SSH",
+      "importKey": "Importer une clé SSH",
+      "newIdentity": "Nouvelle identité"
     },
     "knownHostsScreen": {
       "filterPlaceholder": "Filtrer les hôtes…",
@@ -124,15 +95,25 @@
       "filterPlaceholder": "Filtrer les règles…",
       "summary": "{{total}} au total · {{active}} active(s)",
       "noSearchMatches": "Aucune règle ne correspond à votre recherche",
-      "empty": "Aucune règle de redirection de ports pour l'instant",
-      "newRuleLabel": "Nouvelle règle"
+      "empty": "Aucune règle de redirection de ports pour l'instant"
     },
     "snippetEdit": {
       "editTitle": "Modifier le snippet",
       "newTitle": "Nouveau snippet",
       "namePlaceholder": "Nom du snippet",
       "contentPlaceholder": "echo hello",
-      "delete": "Supprimer le snippet"
+      "delete": "Supprimer le snippet",
+      "nameLabel": "Nom",
+      "contentLabel": "Script"
+    },
+    "editForm": {
+      "required": "Obligatoire",
+      "incompleteTitle": "Quitter sans enregistrer ?",
+      "incompleteBody": "Un champ obligatoire est vide : vos dernières modifications ne peuvent pas encore être enregistrées.",
+      "unsavedTitle": "Abandonner les modifications ?",
+      "unsavedBody": "Les modifications de ce snippet n'ont pas été enregistrées.",
+      "keepEditing": "Continuer l'édition",
+      "discard": "Abandonner"
     },
     "snippetsScreen": {
       "newSnippetLabel": "Nouveau snippet"
@@ -142,6 +123,7 @@
       "pickHost": "Choisir un hôte"
     },
     "sftp": {
+      "transferFailed": "Échec du transfert",
       "chooseHost": "Choisir un hôte",
       "hidden": "Masqués",
       "visible": "Visibles",
@@ -171,15 +153,24 @@
       "typeSymlink": "Lien symbolique",
       "typeFile": "Fichier",
       "batchDeleteTitle_one": "Supprimer {{count}} élément ?",
+      "batchDeleteTitle_many": "Supprimer {{count}} éléments ?",
       "batchDeleteTitle_other": "Supprimer {{count}} éléments ?",
       "newFileOption": "Nouveau fichier",
       "folderNamePlaceholder": "Nom du dossier",
-      "fileNamePlaceholder": "Nom du fichier"
+      "fileNamePlaceholder": "Nom du fichier",
+      "selectAll": "Tout sélectionner",
+      "onePane": "Un seul panneau",
+      "twoPanes": "Deux panneaux",
+      "moreActions": "Plus d'actions",
+      "itemActions": "Actions pour {{name}}"
     },
     "folders": {
       "home": "Accueil"
     },
     "sheets": {
+      "newSession": {
+        "noHosts": "Aucun hôte"
+      },
       "shared": {
         "moveToVault": "Déplacer vers le coffre",
         "copyToVault": "Copier vers le coffre",
@@ -191,7 +182,6 @@
         "confirmDeleteBody": "Supprimer définitivement {{name}} ? Cette action est irréversible."
       },
       "folderActions": {
-        "renameTitle": "Renommer le dossier",
         "deleteTitle": "Supprimer le dossier ?",
         "deleteBody": "Supprimer {{name}} et tout son contenu ? Cette action est irréversible."
       },
@@ -200,8 +190,6 @@
         "openFiles": "Ouvrir les fichiers",
         "copyAddress": "Copier l'adresse",
         "copiedAddress": "Adresse copiée : {{host}}",
-        "enableCloudSync": "Activer la synchronisation cloud",
-        "disableCloudSync": "Désactiver la synchronisation cloud",
         "enableReachabilityCheck": "Activer la vérification d'accessibilité",
         "disableReachabilityCheck": "Désactiver la vérification d'accessibilité"
       },
@@ -233,8 +221,10 @@
         "executeTitle": "Exécuter « {{name}} »",
         "insertTitle": "Insérer « {{name}} »",
         "confirmExecute_one": "Exécuter dans {{count}} cible",
+        "confirmExecute_many": "Exécuter dans {{count}} cibles",
         "confirmExecute_other": "Exécuter dans {{count}} cibles",
         "confirmInsert_one": "Insérer dans {{count}} cible",
+        "confirmInsert_many": "Insérer dans {{count}} cibles",
         "confirmInsert_other": "Insérer dans {{count}} cibles",
         "activeSessions": "Sessions actives",
         "openNewConnection": "Ouvrir une nouvelle connexion",
@@ -249,6 +239,54 @@
       "vaultSwitcher": {
         "newVault": "Nouveau coffre",
         "namePlaceholder": "Nom du coffre"
+      }
+    },
+    "shortcuts": {
+      "hostGone": "Cet hôte n'existe plus. Son raccourci a été supprimé."
+    },
+    "share": {
+      "action": "Partager",
+      "publicKey": "Partager la clé publique",
+      "failed": "Impossible d’ouvrir le menu de partage",
+      "downloadFailed": "Impossible de télécharger le fichier à partager",
+      "largeTitle": "Partager {{size}} ?",
+      "largeBody": "Les fichiers sont d’abord téléchargés sur ce téléphone, puis transmis à l’application choisie.",
+      "tooLong": "Trop long pour être partagé en texte"
+    },
+    "vaultSettings": {
+      "title": "Paramètres du coffre",
+      "gone": "Ce coffre n'existe plus sur cet appareil.",
+      "openFor": "Paramètres de {{name}}",
+      "nameRequired": "Un coffre doit avoir un nom.",
+      "nameReadOnly": "Seuls les gestionnaires du coffre peuvent le renommer.",
+      "kindTeam": "Coffre d'équipe",
+      "kindPrivate": "Coffre privé",
+      "sections": {
+        "general": "Général",
+        "people": "Personnes",
+        "danger": "Zone de danger"
+      },
+      "rows": {
+        "name": "Nom",
+        "share": "Partager et inviter",
+        "members": "Membres",
+        "roles": "Rôles",
+        "security": "Politique de sécurité",
+        "makePrivate": "Rendre privé",
+        "delete": "Supprimer le coffre",
+        "leave": "Quitter le coffre"
+      },
+      "summaries": {
+        "share": "Inviter des personnes et gérer les liens d'accès",
+        "members_one": "{{count}} membre",
+        "members_many": "{{count}} membres",
+        "members_other": "{{count}} membres",
+        "roles": "Ce que chaque rôle peut faire",
+        "security": "Règles de verrouillage et de session des membres",
+        "makePrivate": "Retirer tous les autres et garder une copie privée",
+        "delete": "Supprime le coffre et tout son contenu",
+        "deleteTeam": "Le supprime pour tous les membres",
+        "leave": "Retirer votre accès à ce coffre"
       }
     }
   }

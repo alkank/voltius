@@ -25,6 +25,9 @@ const h = vi.hoisted(() => ({
   teams: [] as unknown[],
   visibleFolders: [] as unknown[],
   folderCardProps: [] as Record<string, unknown>[],
+  hostCardProps: [] as Record<string, unknown>[],
+  formProps: [] as { kind: string; placement?: unknown }[],
+  toolbarProps: {} as Record<string, unknown>,
   navFolders: [] as unknown[],
   folderPath: [] as unknown[],
   ejectTargetFolderId: null as string | null,
@@ -36,11 +39,18 @@ const h = vi.hoisted(() => ({
   updateFolder: vi.fn(async (_id: string, _data?: unknown) => {}),
   saveFolder: vi.fn(),
   updateConnection: vi.fn(async (_id: string, _data?: unknown) => {}),
+  saveConnection: vi.fn(async (_data?: unknown) => ({ id: "new-conn" })),
   updateKey: vi.fn(async (_id: string, _data?: unknown) => {}),
   updateIdentity: vi.fn(async (_id: string, _data?: unknown) => {}),
   can: vi.fn((_permission: string, _vaultId: string) => true),
   confirmModals: [] as Record<string, unknown>[],
   bulkOnDelete: null as ((ids: string[]) => void) | null,
+  moveKeyToVault: vi.fn(async (
+    key: { id: string }, _vaultId: string, data: unknown, updateKey: (id: string, data: unknown) => Promise<unknown>,
+  ) => { await updateKey(key.id, data); }),
+  moveIdentityToVault: vi.fn(async (
+    identity: { id: string }, _vaultId: string, data: unknown, updateIdentity: (id: string, data: unknown) => Promise<unknown>,
+  ) => { await updateIdentity(identity.id, data); }),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -53,7 +63,7 @@ vi.mock("@/hooks/useCrossVaultPasteConfirm", () => ({
 }));
 
 vi.mock("@/components/shared/SidePanelLayout", () => ({
-  SidePanelLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SidePanelLayout: ({ children, panel }: { children: React.ReactNode; panel?: React.ReactNode }) => <div>{children}{panel}</div>,
 }));
 vi.mock("@/components/shared/DragSelectSurface", () => ({
   DragSelectSurface: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -62,13 +72,21 @@ vi.mock("@/components/folders/FolderCard", () => ({
   FolderCard: (props: Record<string, unknown>) => { h.folderCardProps.push(props); return null; },
 }));
 vi.mock("@/components/folders/FolderEditPanel", () => ({ FolderEditPanel: () => null }));
-vi.mock("./HostCard", () => ({ default: () => null }));
-vi.mock("./HostsToolbar", () => ({ HomeToolbar: () => null }));
+vi.mock("./HostCard", () => ({
+  default: (props: Record<string, unknown>) => { h.hostCardProps.push(props); return null; },
+}));
+vi.mock("./HostsToolbar", () => ({
+  HomeToolbar: (p: Record<string, unknown>) => { h.toolbarProps = p; return null; },
+}));
 vi.mock("./TeamSessions", () => ({ TeamSessions: () => null }));
 vi.mock("./RemoteDeviceSessions", () => ({ RemoteDeviceSessions: () => null }));
 vi.mock("./SnippetPickerPanel", () => ({ SnippetPickerPanel: () => null }));
-vi.mock("@/components/connections/ConnectionForm", () => ({ default: () => null }));
-vi.mock("@/components/connections/SerialConnectionForm", () => ({ default: () => null }));
+vi.mock("@/components/connections/ConnectionForm", () => ({
+  default: (p: { placement?: unknown }) => { h.formProps.push({ kind: "ssh", placement: p.placement }); return null; },
+}));
+vi.mock("@/components/connections/SerialConnectionForm", () => ({
+  default: (p: { placement?: unknown }) => { h.formProps.push({ kind: "serial", placement: p.placement }); return null; },
+}));
 vi.mock("@/components/shared/ConfirmModal", () => ({
   ConfirmModal: (props: Record<string, unknown>) => { h.confirmModals.push(props); return null; },
 }));
@@ -158,7 +176,7 @@ function selectorStore<T extends object>(state: T) {
 vi.mock("@/stores/connectionStore", () => ({
   useConnectionStore: selectorStore({
     loadConnections: vi.fn(async () => {}),
-    saveConnection: vi.fn(async () => conn("new-conn")),
+    saveConnection: h.saveConnection,
     updateConnection: h.updateConnection,
     deleteConnection: vi.fn(async () => {}),
     renameTag: vi.fn(),
@@ -225,7 +243,13 @@ vi.mock("@/stores/syncPrefsStore", () => ({
   }),
 }));
 vi.mock("@/services/vault", () => ({ storeSecret: vi.fn(async () => {}), getSecret: vi.fn(async () => null) }));
-vi.mock("@/services/teamVaultSecrets", () => ({ saveTeamVaultSecretForVault: vi.fn(async () => {}) }));
+vi.mock("@/services/vaultObjectSecrets", () => ({
+  moveKeyToVault: h.moveKeyToVault,
+  moveIdentityToVault: h.moveIdentityToVault,
+  moveWithSecrets: vi.fn(async (_k: string, _o: unknown, _t: string, update: () => Promise<unknown>) => {
+    await update();
+  }),
+}));
 vi.mock("@/services/teamVaultPermissions", () => ({ buildTeamVaultTransferPlan: () => ({ allowed: true }) }));
 vi.mock("@/services/hostForm", () => ({ saveHostFromForm: vi.fn() }));
 
@@ -243,6 +267,8 @@ beforeEach(() => {
   h.teams = [];
   h.visibleFolders = [];
   h.folderCardProps = [];
+  h.hostCardProps = [];
+  h.formProps = [];
   h.navFolders = [];
   h.folderPath = [];
   h.ejectTargetFolderId = null;
@@ -343,6 +369,12 @@ test("moving a folder to a vault carries the whole subtree plus each connection'
   expect(h.updateKey.mock.calls.map((c) => c[0])).toEqual(["k1"]);
   expect(h.updateIdentity.mock.calls.map((c) => c[0])).toEqual(["i1"]);
   expect(h.updateConnection.mock.calls.map((c) => c[0])).toEqual(["c-root", "c-leaf"]);
+  expect(h.moveKeyToVault).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "k1" }), "team-1", expect.objectContaining({ vault_id: "team-1" }), h.updateKey,
+  );
+  expect(h.moveIdentityToVault).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "i1" }), "team-1", expect.objectContaining({ vault_id: "team-1" }), expect.any(Function),
+  );
 });
 
 test("a linked key or identity already in the target vault is left out of the cascade", () => {
@@ -423,4 +455,123 @@ test("a host selected alongside its folder is not counted twice in the delete wa
 
   act(() => { h.bulkOnDelete!(["root", "c-in"]); });
   expect(lastModal().message).toBe('hosts.page.confirmDelete.message:{"count":2}');
+});
+
+test("an empty folder stays listed when the vault has no hosts", () => {
+  h.folders = [folder("empty")];
+  h.visibleFolders = h.folders;
+  render(<HostsPage />);
+  expect(h.folderCardProps.map((p) => (p.folder as Folder).id)).toContain("empty");
+});
+
+const PER_HOST = {
+  proxy: { mode: "socks5" as const, host: "bastion.corp", port: 1080, username: "u" },
+  keepalive_preset: "aggressive" as Connection["keepalive_preset"],
+  persist_session: true,
+  notes: "rack 4",
+};
+
+function hostCard(id: string): Record<string, unknown> {
+  const cards = h.hostCardProps.filter((p) => (p.connection as Connection).id === id);
+  return cards[cards.length - 1];
+}
+
+test("moving or copying a host to another vault keeps its proxy and other per-host settings", async () => {
+  h.vaults = [{ id: "v-team", teamId: "team-1", name: "Team One" }];
+  h.connections = [conn("c1", { name: "Web", ...PER_HOST })];
+  render(<HostsPage />);
+
+  act(() => { (hostCard("c1").onMoveToVault as (c: Connection, v: string) => void)(h.connections[0] as Connection, "team-1"); });
+  await act(async () => { await h.cascades[0].execute(); });
+  expect(h.updateConnection).toHaveBeenCalledWith("c1", expect.objectContaining({ ...PER_HOST, vault_id: "team-1" }));
+
+  act(() => { (hostCard("c1").onCopyToVault as (c: Connection, v: string) => void)(h.connections[0] as Connection, "team-1"); });
+  await act(async () => { await h.cascades[1].execute(); });
+  expect(h.saveConnection).toHaveBeenCalledWith(expect.objectContaining({ ...PER_HOST, name: "Web", vault_id: "team-1" }));
+});
+
+test("moving or copying a folder to another vault keeps each host's proxy and other per-host settings", async () => {
+  h.vaults = [{ id: "v-team", teamId: "team-1", name: "Team One" }];
+  h.folders = [folder("root")];
+  h.connections = [conn("c-root", { folder_id: "root", ...PER_HOST })];
+  h.visibleFolders = [folder("root")];
+  render(<HostsPage />);
+  const card = h.folderCardProps.find((p) => (p.folder as Folder).id === "root")!;
+
+  act(() => { (card.onMoveToVault as (v: string) => void)("team-1"); });
+  await act(async () => { await h.cascades[0].execute(); });
+  expect(h.updateConnection).toHaveBeenCalledWith("c-root", expect.objectContaining({ ...PER_HOST, vault_id: "team-1" }));
+
+  act(() => { (card.onCopyToVault as (v: string) => void)("team-1"); });
+  await act(async () => { await h.cascades[1].execute(); });
+  expect(h.saveConnection).toHaveBeenCalledWith(
+    expect.objectContaining({ ...PER_HOST, folder_id: "new-root", vault_id: "team-1" }),
+  );
+});
+
+const lastForm = () => h.formProps[h.formProps.length - 1];
+
+test("a new host started inside a folder is placed in that folder and its vault (#776)", () => {
+  h.connections = [conn("c1")];
+  h.folders = [folder("child", { vault_id: "team-1" })];
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  const { getByText } = render(<HostsPage />);
+
+  act(() => { (getByText("hosts.toolbar.newHost") as HTMLButtonElement).click(); });
+  expect(lastForm()).toEqual({ kind: "ssh", placement: { folderId: "child", vaultId: "team-1" } });
+});
+
+test("a new serial host started inside a folder is placed there too", () => {
+  h.connections = [conn("c1")];
+  h.folders = [folder("child")];
+  h.folderPath = [folder("child")];
+  h.activeFolderId = "child";
+  render(<HostsPage />);
+
+  act(() => { (h.toolbarProps.onCreateSerial as () => void)(); });
+  expect(lastForm()).toEqual({ kind: "serial", placement: { folderId: "child", vaultId: "personal" } });
+});
+
+test("a new host started at the root has no placement", () => {
+  h.connections = [conn("c1")];
+  h.activeFolderId = null;
+  render(<HostsPage />);
+
+  act(() => { (h.toolbarProps.onCreateHost as () => void)(); });
+  expect(lastForm()).toEqual({ kind: "ssh", placement: undefined });
+});
+
+test("a folder in a vault the user cannot add hosts to is not used as the placement", () => {
+  h.connections = [conn("c1")];
+  h.folders = [folder("child", { vault_id: "team-1" })];
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  h.can.mockImplementation((_p: string, vaultId: string) => vaultId !== "team-1");
+  render(<HostsPage />);
+
+  act(() => { (h.toolbarProps.onCreateHost as () => void)(); });
+  expect(lastForm()).toEqual({ kind: "ssh", placement: undefined });
+});
+
+test("a new folder created inside a team folder lands in that team's vault (#816)", async () => {
+  h.connections = [conn("c1")];
+  h.folders = [folder("child", { vault_id: "team-1" })];
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  render(<HostsPage />);
+
+  await act(async () => { (h.toolbarProps.onCreateFolder as () => void)(); });
+  expect(h.saveFolder).toHaveBeenCalledWith(expect.objectContaining({ parent_folder_id: "child", vault_id: "team-1" }));
+});
+
+test("New folder is greyed out inside a folder whose vault the user cannot edit folders in", () => {
+  h.connections = [conn("c1")];
+  h.folders = [folder("child", { vault_id: "team-1" })];
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  h.can.mockImplementation((p: string, vaultId: string) => !(p === "EDIT_FOLDERS" && vaultId === "team-1"));
+  render(<HostsPage />);
+
+  expect(h.toolbarProps.newFolderBlocked).toBe("folders.noPermissionCreate");
 });

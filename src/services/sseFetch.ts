@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 interface SseOpenPayload {
@@ -8,6 +8,8 @@ interface SseOpenPayload {
 interface SseClosedPayload {
   error?: string | null;
 }
+
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 
 /**
  * A `fetch`-shaped wrapper over the native SSE-over-events plumbing
@@ -38,6 +40,7 @@ export async function sseFetch(url: string, init?: RequestInit): Promise<Respons
     let opened = false;
     let closedError: string | null = null;
     let sawData = false;
+    let nullBody = false;
 
     const body = new ReadableStream<Uint8Array>({
       start(c) { controller = c; },
@@ -46,7 +49,9 @@ export async function sseFetch(url: string, init?: RequestInit): Promise<Respons
 
     const onAbort = () => {
       cleanup();
-      try { controller?.error(new DOMException("Aborted", "AbortError")); } catch { /* noop */ }
+      const aborted = new DOMException("Aborted", "AbortError");
+      if (!opened) { reject(aborted); return; }
+      try { controller?.error(aborted); } catch { /* noop */ }
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -54,7 +59,9 @@ export async function sseFetch(url: string, init?: RequestInit): Promise<Respons
       opened = true;
       const headers = new Headers();
       for (const h of payload.headers) headers.append(h.name, h.value);
-      resolve(new Response(body, { status: payload.status, headers }));
+      // Response() throws for these statuses if given a non-null body.
+      nullBody = NULL_BODY_STATUSES.has(payload.status);
+      resolve(new Response(nullBody ? null : body, { status: payload.status, headers }));
     };
 
     Promise.all([
@@ -63,6 +70,7 @@ export async function sseFetch(url: string, init?: RequestInit): Promise<Respons
       }),
       listen<string>(`http:sse:data:${streamId}`, ({ payload }) => {
         sawData = true;
+        if (nullBody) return;
         controller?.enqueue(encoder.encode(payload));
       }),
       listen<SseClosedPayload>(`http:sse:closed:${streamId}`, ({ payload }) => {
@@ -74,7 +82,9 @@ export async function sseFetch(url: string, init?: RequestInit): Promise<Respons
           reject(new Error(closedError ?? "stream closed before response"));
           return;
         }
-        if (closedError && !sawData) {
+        if (nullBody) {
+          try { controller?.close(); } catch { /* noop */ }
+        } else if (closedError && !sawData) {
           // Non-2xx path: no data was streamed; surface the error body so the
           // caller sees res.ok === false with a readable body.
           controller?.enqueue(encoder.encode(closedError));
@@ -92,7 +102,7 @@ export async function sseFetch(url: string, init?: RequestInit): Promise<Respons
     ])
       .then(([openU, dataU, closedU]) => {
         unlistenOpen = openU; unlistenData = dataU; unlistenClosed = closedU;
-        if (signal?.aborted) { onAbort(); reject(new DOMException("Aborted", "AbortError")); return; }
+        if (signal?.aborted) { onAbort(); return; }
         started = true;
         void invoke("http_sse_start", {
           streamId,

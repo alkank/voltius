@@ -3,34 +3,34 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { Modal, ModalCard } from "@/components/shared/Modal";
 import { UpgradeStrip } from "@/components/shared/UpgradeStrip";
-import { useSubscriptionStore } from "@/stores/subscriptionStore";
+import { usePlanDisplay } from "@/services/planDisplay";
 import { openBillingCheckout } from "@/services/billingCheckout";
+import { TEAMS_TRIAL_DAYS } from "@/services/billingTrial";
+import { AvailableWithPlan } from "@/components/shared/AvailableWithPlan";
+import { PLAN_FEATURES, planFeatureLabel } from "@/services/planFeatures";
+import { FreeFeaturesLine } from "@/components/shared/FreeFeaturesLine";
 
 const STORAGE_KEY = "voltius_trial_expired_shown";
 
-const PRO_PERKS = [
-  { id: "realtimeSync", icon: "lucide:refresh-cw" },
-  { id: "unlimitedVaults", icon: "lucide:vault" },
-  { id: "terminalSharing", icon: "lucide:users-round" },
-];
+const PERK_ICONS: Record<string, string> = {
+  cloudSync: "lucide:refresh-cw",
+  unlimitedVaults: "lucide:vault",
+  terminalSharing: "lucide:users-round",
+};
+const PRO_PERKS = PLAN_FEATURES.pro.filter((f) => f.id in PERK_ICONS);
 
 export function TrialExpiredModal() {
   const { t } = useTranslation();
-  const { tier, trialEndsAt, trialUsed } = useSubscriptionStore();
+  const { showTrialEnded, showUpgrade } = usePlanDisplay();
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    // The server clears trial_ends_at once a trial lapses, so a past date is a
-    // bonus signal, never a precondition — requiring it hid this modal from
-    // every expired account.
-    if (!trialUsed) return;
-    if (tier !== "free") return;
-    if (trialEndsAt && trialEndsAt > new Date()) return;
+    if (!showTrialEnded) return;
     if (localStorage.getItem(STORAGE_KEY)) return;
 
     localStorage.setItem(STORAGE_KEY, "1");
     setVisible(true);
-  }, [tier, trialEndsAt, trialUsed]);
+  }, [showTrialEnded]);
 
   if (!visible) return null;
 
@@ -50,34 +50,34 @@ export function TrialExpiredModal() {
         </div>
 
         <ul className="flex flex-col gap-2.5">
-          {PRO_PERKS.map(({ id, icon }) => (
-            <li key={id} className="flex items-center gap-2.5">
-              <Icon icon={icon} width={14} className="shrink-0 text-(--t-text-muted)" />
-              <span className="text-sm text-(--t-text-primary)">
-                {t(`settings.account.plan.feature.${id}`)}
-              </span>
+          {PRO_PERKS.map((f) => (
+            <li key={f.id} className="flex items-center gap-2.5">
+              <Icon icon={PERK_ICONS[f.id]} width={14} className="shrink-0 text-(--t-text-muted)" />
+              <span className="text-sm text-(--t-text-primary)">{planFeatureLabel(t, f)}</span>
             </li>
           ))}
         </ul>
 
-        <p className="text-xs text-(--t-text-muted) leading-relaxed">
-          {t("shared.trialExpiredModal.freeNote")}
-        </p>
+        <FreeFeaturesLine />
 
+        {showUpgrade && (
         <UpgradeStrip
           variant="neutral"
-          label={t("shared.trialExpiredModal.teamsPrompt")}
+          label={t("shared.trialExpiredModal.teamsPrompt", { days: TEAMS_TRIAL_DAYS })}
           buttonLabel={t("settings.account.plan.teamsButton")}
           onClick={() => upgrade("teams")}
         />
+        )}
 
         <div className="flex items-center justify-between gap-3">
+          {showUpgrade ? (
           <button
             onClick={() => upgrade("pro")}
             className="btn btn-primary px-4 py-2 rounded-lg text-sm font-semibold"
           >
             {t("shared.trialExpiredModal.upgradeButton")}
           </button>
+          ) : <AvailableWithPlan plan="Pro" className="text-left" />}
           <button
             onClick={() => setVisible(false)}
             className="text-xs text-(--t-text-dim) hover:text-(--t-text-primary) transition-colors"

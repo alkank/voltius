@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { appFetch } from "@/services/http";
+import { parseJwtPayload } from "@/utils/jwtPayload";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
 
 export async function getJwt(): Promise<string | null> {
@@ -10,30 +11,132 @@ export async function getServerUrl(): Promise<string | null> {
   return invoke<string | null>("keychain_get", { key: "server_url" });
 }
 
-export function isJwtExpiredOrExpiring(jwt: string): boolean {
-  try {
-    const payload = JSON.parse(atob(jwt.split(".")[1]));
-    return Date.now() > payload.exp * 1000 - 60_000; // refresh 60s before expiry
-  } catch {
-    return true;
-  }
+export async function getAccountId(): Promise<string | null> {
+  return invoke<string | null>("keychain_get", { key: "account_id" });
 }
 
-/** Try to refresh the access token using the stored refresh_token. Returns new JWT or null. */
-export async function tryRefreshJwt(): Promise<string | null> {
+export function isJwtExpiredOrExpiring(jwt: string): boolean {
+  const exp = parseJwtPayload<{ exp?: number }>(jwt)?.exp;
+  return typeof exp !== "number" || Date.now() > exp * 1000 - 60_000;
+}
+
+let revoked = false;
+let revokedToast: string | null = null;
+
+export function clearSessionRevoked(): void {
+  revoked = false;
+  if (!revokedToast) return;
+  const id = revokedToast;
+  revokedToast = null;
+  void import("@/stores/notificationStore").then(({ useNotificationStore }) =>
+    useNotificationStore.getState().dismissToast(id));
+}
+
+async function announceSessionRevoked(): Promise<void> {
+  const [{ APP_SOURCE, useNotificationStore }, { useUIStore }, { default: i18n }] = await Promise.all([
+    import("@/stores/notificationStore"),
+    import("@/stores/uiStore"),
+    import("@/i18n"),
+  ]);
+  if (!revoked || revokedToast) return;
+  revokedToast = useNotificationStore.getState().addToast({
+    source: APP_SOURCE,
+    type: "toast",
+    message: i18n.t("common.toast.sessionRevoked"),
+    severity: "warning",
+    duration: 0,
+    action: {
+      label: i18n.t("common.toast.signInAgain"),
+      onClick: () => useUIStore.getState().openCloudAuth("signin", "reauth"),
+    },
+  });
+}
+
+export interface AuthDevice {
+  name?: string;
+  platform: string;
+  client: "app" | "cli";
+}
+
+export function authDevice(): Promise<AuthDevice | undefined> {
+  return invoke<AuthDevice>("auth_device").catch(() => undefined);
+}
+
+/** Store a token pair the server just issued; it supersedes whatever session was revoked. */
+export async function adoptSessionTokens(tokens: { jwt_token: string; refresh_token: string }): Promise<void> {
+  await invoke("keychain_set", { key: "jwt", value: tokens.jwt_token });
+  await invoke("keychain_set", { key: "refresh_token", value: tokens.refresh_token });
+  clearSessionRevoked();
+}
+
+export type RefreshOutcome = { jwt: string } | "revoked" | "failed" | "no-session";
+
+const inFlight = new Map<string, Promise<unknown>>();
+
+/** Callers arriving while `run` is pending under `key` get its result instead of starting their own. */
+function shared<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const pending = inFlight.get(key);
+  if (pending) return pending as Promise<T>;
+  const started = run().finally(() => inFlight.delete(key));
+  inFlight.set(key, started);
+  return started;
+}
+
+/**
+ * The one caller of /v1/auth/refresh. A 401 means the server ended this session;
+ * it is remembered so the sync loop stops asking, and the user is told once.
+ */
+export async function refreshAccessToken(
+  { fetchImpl = appFetch, quiet = false }: {
+    fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
+    quiet?: boolean;
+  } = {},
+): Promise<RefreshOutcome> {
   const [refreshToken, serverUrl] = await Promise.all([
     invoke<string | null>("keychain_get", { key: "refresh_token" }),
     getServerUrl(),
   ]);
-  if (!refreshToken || !serverUrl) return null;
-  const res = await appFetch(`${serverUrl}/v1/auth/refresh`, {
+  if (!refreshToken || !serverUrl) return "no-session";
+  if (revoked) return "revoked";
+  const outcome = await shared(`refresh:${refreshToken}`, () => postRefresh(refreshToken, serverUrl, fetchImpl, quiet));
+  // `quiet` for a caller that is about to sign in again by itself.
+  if (outcome === "revoked" && !quiet) void announceSessionRevoked().catch(() => undefined);
+  return outcome;
+}
+
+async function postRefresh(
+  refreshToken: string,
+  serverUrl: string,
+  fetchImpl: (url: string, init?: RequestInit) => Promise<Response>,
+  quiet: boolean,
+): Promise<RefreshOutcome> {
+  const res = await fetchImpl(`${serverUrl}/v1/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    body: JSON.stringify({ refresh_token: refreshToken, device: await authDevice() }),
   });
-  if (!res.ok) return null;
-  const { jwt_token } = await res.json();
-  await invoke("keychain_set", { key: "jwt", value: jwt_token });
-  await useSubscriptionStore.getState().load().catch(() => undefined);
-  return jwt_token;
+  // A pair adopted while this request was in flight (password change, two-factor, account switch) supersedes its answer.
+  const superseded = async () =>
+    (await invoke<string | null>("keychain_get", { key: "refresh_token" })) !== refreshToken;
+  if (res.status === 401) {
+    if (await superseded()) return refreshAccessToken({ fetchImpl, quiet });
+    revoked = true;
+    return "revoked";
+  }
+  if (!res.ok) return "failed";
+  const { jwt_token, refresh_token } = await res.json();
+  if (await superseded()) return "failed";
+  if (refresh_token) await adoptSessionTokens({ jwt_token, refresh_token });
+  else await invoke("keychain_set", { key: "jwt", value: jwt_token });
+  return { jwt: jwt_token };
+}
+
+/** Try to refresh the access token using the stored refresh_token. Returns new JWT or null. */
+export function tryRefreshJwt(fetchImpl?: typeof appFetch): Promise<string | null> {
+  return shared("jwt", async () => {
+    const outcome = await refreshAccessToken({ fetchImpl });
+    if (typeof outcome === "string") return null;
+    await useSubscriptionStore.getState().load().catch(() => undefined);
+    return outcome.jwt;
+  });
 }

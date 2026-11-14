@@ -3,6 +3,11 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n";
 import type { AuditLog } from "@/services/auditService";
 import { avatarColor } from "@/components/shared/AvatarStack";
+import { LOCAL_ACTOR_ID } from "@/services/localAuditService";
+import { useIdentityStore } from "@/stores/identityStore";
+import { findIdentityIn } from "@/services/credentialScope";
+import { formatTime, HOUR_MINUTE } from "@/utils/localeFormat";
+import { sessionTimeoutLabel, sessionTimeoutValue } from "@/utils/sessionTimeout";
 
 // ─── Action metadata ──────────────────────────────────────────────────────────
 
@@ -18,10 +23,26 @@ const fallbackRole = () => i18n.t("logs.eventLabels.fallbackRole");
 const fallbackResource = () => i18n.t("logs.eventLabels.fallbackResource");
 const fallbackHost = () => i18n.t("logs.eventLabels.fallbackHost");
 
+/** Who did it. The local log's only actor is this user, named in the app language. */
+export function actorName(log: AuditLog): string {
+  if (log.actor_id === LOCAL_ACTOR_ID) return i18n.t("logs.eventLabels.you");
+  return log.actor_member_name ?? log.actor_name;
+}
+
+export function actorTitle(log: AuditLog): string {
+  const name = actorName(log);
+  return log.actor_member_name && name === log.actor_member_name ? `${name} (@${log.actor_name})` : name;
+}
+
 export const ACTION_META: Record<string, ActionMeta> = {
   "member.invited":              { icon: "lucide:user-plus",              color: "#3b82f6", label: (l) => i18n.t("logs.eventLabels.memberInvited", { name: l.target_name ?? l.target_id ?? fallbackUser() }) },
   "member.joined":               { icon: "lucide:user-check",              color: "#3b82f6", label: (l) => i18n.t("logs.eventLabels.memberJoined", { role: l.metadata?.role ?? fallbackRole() }) },
   "member.removed":              { icon: "lucide:user-minus",              color: "#ef4444", label: (l) => i18n.t("logs.eventLabels.memberRemoved", { name: l.target_name ?? l.target_id ?? fallbackMember() }) },
+  "member.renamed":              { icon: "lucide:id-card",                 color: "#3b82f6", label: (l) => {
+    const name = l.target_name ?? l.target_id ?? fallbackMember();
+    const to = l.metadata?.new as string | null | undefined;
+    return to ? i18n.t("logs.eventLabels.memberRenamed", { name, to }) : i18n.t("logs.eventLabels.memberNameRemoved", { name });
+  } },
   "member.role_changed":         { icon: "lucide:user-cog",                color: "#3b82f6", label: (l) => i18n.t("logs.eventLabels.memberRoleChanged", { name: l.target_name ?? l.target_id ?? fallbackMember() }) },
   "member.permissions_changed":  { icon: "lucide:sliders-horizontal",      color: "#3b82f6", label: (l) => i18n.t("logs.eventLabels.memberPermissionsChanged", { name: l.target_name ?? l.target_id ?? fallbackMember() }) },
   "vault.created":       { icon: "lucide:database",    color: "#8b5cf6", label: (l) => i18n.t("logs.eventLabels.vaultCreated", { name: l.target_name ?? l.target_id ?? "" }) },
@@ -58,6 +79,11 @@ export const ACTION_META: Record<string, ActionMeta> = {
   "session.ended":       { icon: "lucide:monitor",     color: "#6b7280", label: () => i18n.t("logs.eventLabels.sessionEnded") },
   "session.joined":      { icon: "lucide:monitor",     color: "#06b6d4", label: () => i18n.t("logs.eventLabels.sessionJoined") },
   "session.left":        { icon: "lucide:monitor",     color: "#6b7280", label: () => i18n.t("logs.eventLabels.sessionLeft") },
+  "team.lock_policy_set":     { icon: "lucide:shield-check", color: "#f59e0b", label: (l) => {
+    const timeout = sessionTimeoutLabel((k) => i18n.t(k), sessionTimeoutValue((l.metadata?.max_minutes as number | undefined) ?? null));
+    return i18n.t(l.metadata?.force_vault ? "logs.eventLabels.lockPolicySetVault" : "logs.eventLabels.lockPolicySet", { timeout });
+  } },
+  "team.lock_policy_removed": { icon: "lucide:shield-off",   color: "#f59e0b", label: () => i18n.t("logs.eventLabels.lockPolicyRemoved") },
 };
 
 export const FALLBACK_META: ActionMeta = {
@@ -68,63 +94,111 @@ export const FALLBACK_META: ActionMeta = {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-interface Props {
-  log: AuditLog;
-  showDate?: boolean;
+function AuditBadge({ accent, title, children }: { accent?: boolean; title?: string; children: React.ReactNode }) {
+  return (
+    <span
+      className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+      title={title}
+      style={
+        accent
+          ? { background: "color-mix(in srgb, var(--t-accent) 14%, transparent)", color: "var(--t-accent)", border: "1px solid color-mix(in srgb, var(--t-accent) 35%, transparent)" }
+          : { background: "var(--t-bg-elevated)", color: "var(--t-text-dim)", border: "1px solid var(--t-border)" }
+      }
+    >
+      {children}
+    </span>
+  );
 }
 
-export function AuditEventRow({ log, showDate = false }: Props) {
+export function actionOptionKey(action: string): string {
+  return `logs.filters.actionOptions.${action.replace(/[._](\w)/g, (_, c: string) => c.toUpperCase())}`;
+}
+
+export function actionName(action: string): string {
+  const key = actionOptionKey(action);
+  return i18n.exists(key) ? i18n.t(key) : action;
+}
+
+export function ActorAvatar({ log, className = "" }: { log: AuditLog; className?: string }) {
+  return (
+    <div
+      className={`shrink-0 rounded-full flex items-center justify-center text-white font-bold select-none ${className}`}
+      style={{ background: avatarColor(log.actor_name) }}
+      title={actorTitle(log)}
+    >
+      {actorName(log)[0]?.toUpperCase() ?? "?"}
+    </div>
+  );
+}
+
+export function ActionDot({ log, className = "" }: { log: AuditLog; className?: string }) {
+  const { icon, color } = ACTION_META[log.action] ?? FALLBACK_META;
+  return (
+    <div className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${className}`} style={{ background: `${color}22`, color }}>
+      <Icon icon={icon} width={11} />
+    </div>
+  );
+}
+
+function connectIdentity(log: AuditLog) {
+  const meta = log.metadata ?? {};
+  const isConnect = log.action === "connection.started";
+  return {
+    source: isConnect ? (meta.identity_source as string | undefined) : undefined,
+    identityId: String(meta.identity_id),
+    fingerprint: isConnect && typeof meta.key_fingerprint === "string" ? meta.key_fingerprint : undefined,
+  };
+}
+
+export function auditDetail(log: AuditLog): string {
+  return [log.ip_address, connectIdentity(log).fingerprint].filter(Boolean).join(" · ");
+}
+
+export function AuditBadges({ log }: { log: AuditLog }) {
   const { t } = useTranslation();
-  const meta = ACTION_META[log.action] ?? FALLBACK_META;
-  const time = new Date(log.created_at);
-  const timeStr = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const dateStr = time.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  const { source, identityId } = connectIdentity(log);
+  const sharedName = useIdentityStore((s) =>
+    source === "team" ? findIdentityIn({ ownIdentities: s.identities, teamIdentities: s.teamIdentities }, identityId)?.name : undefined,
+  );
+  return (
+    <>
+      {source === "own" && <AuditBadge accent title={t("logs.badges.ownKeyTooltip")}>{t("logs.badges.ownKey")}</AuditBadge>}
+      {source === "team" && <AuditBadge>{sharedName ? t("logs.badges.shared", { name: sharedName }) : t("logs.badges.sharedUnknown")}</AuditBadge>}
+      {log.source === "client" && <AuditBadge title={t("logs.badges.clientTooltip")}>{t("logs.badges.client")}</AuditBadge>}
+    </>
+  );
+}
+
+export function AuditEventRow({ log }: { log: AuditLog }) {
+  const actionMeta = ACTION_META[log.action] ?? FALLBACK_META;
+  const { fingerprint } = connectIdentity(log);
 
   return (
     <div
       className="flex items-start gap-3 px-4 py-2.5 hover:bg-(--t-bg-elevated) rounded-lg transition-colors"
     >
-      {/* Actor avatar */}
-      <div
-        className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold select-none mt-0.5"
-        style={{ background: avatarColor(log.actor_name) }}
-        title={log.actor_name}
-      >
-        {log.actor_name[0]?.toUpperCase() ?? "?"}
-      </div>
-
-      {/* Action dot */}
-      <div
-        className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-1"
-        style={{ background: `${meta.color}22`, color: meta.color }}
-      >
-        <Icon icon={meta.icon} width={11} />
-      </div>
+      <ActorAvatar log={log} className="w-7 h-7 text-xs mt-0.5" />
+      <ActionDot log={log} className="mt-1" />
 
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-sm font-medium text-(--t-text-primary)">{log.actor_name}</span>
-          <span className="text-sm text-(--t-text-secondary)">{meta.label(log)}</span>
-          {log.source === "client" && (
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
-              style={{ background: "var(--t-bg-elevated)", color: "var(--t-text-dim)", border: "1px solid var(--t-border)" }}
-              title={t("logs.badges.clientTooltip")}
-            >
-              {t("logs.badges.client")}
-            </span>
-          )}
+          <span className="text-sm font-medium text-(--t-text-primary)">{actorName(log)}</span>
+          <span className="text-sm text-(--t-text-secondary)">{actionMeta.label(log)}</span>
+          <AuditBadges log={log} />
         </div>
-        {log.ip_address && (
-          <div className="text-xs text-(--t-text-dim) mt-0.5">{log.ip_address}</div>
+        {(log.ip_address || fingerprint) && (
+          <div className="text-xs text-(--t-text-dim) mt-0.5">
+            {log.ip_address}
+            {log.ip_address && fingerprint && " · "}
+            {fingerprint && <span className="font-mono">{fingerprint}</span>}
+          </div>
         )}
       </div>
 
       {/* Time */}
       <div className="shrink-0 text-right">
-        {showDate && <div className="text-xs text-(--t-text-dim)">{dateStr}</div>}
-        <div className="text-xs text-(--t-text-dim)">{timeStr}</div>
+        <div className="text-xs text-(--t-text-dim)">{formatTime(new Date(log.created_at), HOUR_MINUTE)}</div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, test, expect } from "vitest";
 import type { Folder } from "@/types";
-import { folderOptionsFor, folderSubtreeIds, itemsInFolderSubtree } from "./folderTree";
+import { folderItemCounter, folderOptionsFor, folderSubtreeIds, foldersOutsideSubtree, itemsInFolderSubtree, rootedParentId } from "./folderTree";
 
 function folder(id: string, parent?: string): Folder {
   return {
@@ -30,6 +30,13 @@ describe("folderSubtreeIds", () => {
   });
 });
 
+describe("foldersOutsideSubtree", () => {
+  it("drops the root and its descendants, keeps everything else", () => {
+    const folders = [folder("root"), folder("child", "root"), folder("sibling"), folder("nested", "sibling")];
+    expect(foldersOutsideSubtree(folders, "root").map((f) => f.id)).toEqual(["sibling", "nested"]);
+  });
+});
+
 describe("itemsInFolderSubtree", () => {
   it("picks up items filed in subfolders, not unfoldered or unrelated ones", () => {
     const folders = [folder("root"), folder("child", "root"), folder("other")];
@@ -52,5 +59,30 @@ describe("folderOptionsFor", () => {
     ];
     expect(folderOptionsFor(folders, "keychain").map((f) => f.id)).toEqual(["creds"]);
     expect(folderOptionsFor(folders, "connection").map((f) => f.id)).toEqual(["hosts"]);
+  });
+});
+
+test("a parent that is not visible counts as the root", () => {
+  const known = new Set(["f1"]);
+  expect(rootedParentId("f1", known)).toBe("f1");
+  expect(rootedParentId("hidden", known)).toBeNull();
+  expect(rootedParentId(undefined, known)).toBeNull();
+});
+
+describe("folderItemCounter", () => {
+  it("counts items in nested subfolders toward every ancestor", () => {
+    const folders = [folder("top"), folder("a", "top"), folder("b", "top"), folder("deep", "a")];
+    const items = [{ folder_id: "a" }, { folder_id: "a" }, { folder_id: "deep" }, { folder_id: "b" }, { folder_id: null }];
+    const count = folderItemCounter(items, folders);
+    expect([count("top"), count("a"), count("b"), count("deep")]).toEqual([4, 3, 1, 1]);
+  });
+
+  it("returns 0 for a folder with nothing beneath it", () => {
+    expect(folderItemCounter([], [folder("top")])("top")).toBe(0);
+  });
+
+  it("terminates on a parent cycle", () => {
+    const count = folderItemCounter([{ folder_id: "a" }], [folder("a", "b"), folder("b", "a")]);
+    expect([count("a"), count("b")]).toEqual([1, 1]);
   });
 });

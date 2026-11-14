@@ -39,7 +39,7 @@ vi.mock("@/services/savedAccounts", () => ({
 }));
 
 const addToast = vi.fn();
-vi.mock("@/stores/notificationStore", () => ({
+vi.mock("@/stores/notificationStore", () => ({ APP_SOURCE: { kind: "app" },
   useNotificationStore: { getState: () => ({ addToast }) },
 }));
 
@@ -52,7 +52,7 @@ beforeEach(() => {
     Promise.resolve(cmd === "keychain_get" ? (keychain[args.key] ?? null) : null);
   refreshVerificationState.mockReset().mockResolvedValue(true);
   getSavedAccounts.mockReset().mockResolvedValue([]);
-  switchToAccount.mockReset();
+  switchToAccount.mockReset().mockResolvedValue(undefined);
   addToast.mockReset();
 });
 
@@ -141,6 +141,14 @@ test("a billing link opens the account section and starts no checkout", () => {
   expect(addToast).not.toHaveBeenCalled();
 });
 
+test("a port-forwarding link opens the port forwarding page", () => {
+  useUIStore.setState({ activeNav: "hosts", homeView: true });
+  handleUnpromptedIntent({ route: "port-forwarding" });
+  const ui = useUIStore.getState();
+  expect(ui.activeNav).toBe("port-forwarding");
+  expect(ui.homeView).toBe(false);
+});
+
 test("a notification link opens the centre and carries the entry id", () => {
   useUIStore.setState({ notificationCenterOpen: false, notificationFocusId: null });
   handleUnpromptedIntent({ route: "notification", entryId: "invite:42" });
@@ -153,4 +161,22 @@ test("a notification link without an id still opens the centre", () => {
   handleUnpromptedIntent({ route: "notification", entryId: null });
   expect(useUIStore.getState().notificationCenterOpen).toBe(true);
   expect(useUIStore.getState().notificationFocusId).toBeNull();
+});
+
+const requestHostConnect = vi.fn();
+vi.mock("@/services/launcherShortcuts", () => ({
+  requestHostConnect: (id: string) => requestHostConnect(id),
+}));
+let mobileShell = false;
+vi.mock("@/utils/platform", () => ({ isMobilePlatform: (p: string | null) => p === "android" || p === "ios", isMobileShell: () => mobileShell }));
+
+test("connect opens the host on the mobile shell only", async () => {
+  const { handleUnpromptedIntent } = await import("./deepLinkHandlers");
+  requestHostConnect.mockClear();
+  mobileShell = false;
+  handleUnpromptedIntent({ route: "connect", hostId: "h1" });
+  expect(requestHostConnect).not.toHaveBeenCalled();
+  mobileShell = true;
+  handleUnpromptedIntent({ route: "connect", hostId: "h1" });
+  expect(requestHostConnect).toHaveBeenCalledWith("h1");
 });

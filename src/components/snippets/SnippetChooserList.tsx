@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { useAllSnippets } from "@/hooks/useAllSnippets";
 import { useSnippetStore } from "@/stores/snippetStore";
-import { snippetSearchText } from "@/services/snippetSteps";
+import { snippetMatcher } from "@/services/snippetSteps";
+import { SnippetPreview } from "./HighlightedScript";
 import type { Snippet } from "@/types";
 
 export interface SnippetChooserListProps {
@@ -20,17 +21,9 @@ export function SnippetChooserList({ search, onPick, renderActions, emptyAction,
   const { t } = useTranslation();
   const snippets = useAllSnippets();
   const recentSnippetIds = useSnippetStore((s) => s.recentSnippetIds);
-  const q = search.trim().toLowerCase();
+  const q = search.trim();
 
-  const filtered = useMemo(
-    () => snippets.filter((s) =>
-      !q ||
-      s.name.toLowerCase().includes(q) ||
-      snippetSearchText(s).toLowerCase().includes(q) ||
-      s.tags.some((tag) => tag.toLowerCase().includes(q)),
-    ),
-    [snippets, q],
-  );
+  const filtered = useMemo(() => snippets.filter(snippetMatcher(q)), [snippets, q]);
 
   const recents = useMemo(
     () => recentSnippetIds.flatMap((id) => {
@@ -95,7 +88,7 @@ function Row({ snippet, onPick, renderActions }: {
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium truncate text-(--t-text-bright)">{snippet.name}</p>
         <p className="text-[11px] truncate font-mono text-(--t-text-dim)">
-          {snippet.description || snippetSearchText(snippet)}
+          {snippet.description || <SnippetPreview snippet={snippet} />}
         </p>
       </div>
       {renderActions && (

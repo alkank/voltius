@@ -4,34 +4,47 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDragSelection } from "@/hooks/useDragSelection";
+import { usePointerDrag } from "@/hooks/usePointerDrag";
+import { InlineNameEditor } from "@/components/shared/InlineNameEditor";
 import { DragSelectSurface } from "@/components/shared/DragSelectSurface";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/shared/ContextMenu";
 import {
-  sftpListDir, sftpMkdir, sftpTouch, sftpRename, sftpDelete,
-  sftpCompress, sftpExtract,
-  fsListDir, fsHomeDir, fsMkdir, fsRename, fsDelete, fsTouch, pickLocalPath,
+  sftpMkdir, sftpTouch, sftpRename, sftpDelete,
+  sftpCompress, sftpExtract, sftpCanExec,
+  fsMkdir, fsRename, fsDelete, fsTouch, pickLocalPath,
   fsCompress, fsExtract,
-  type RemoteFile, type LocalFile,
 } from "@/services/sftp";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
+import { PermissionsDialog } from "./PermissionsDialog";
+import { PaneDropOverlay } from "./PaneDropOverlay";
+import { canEditPermissions } from "./permissionsModel";
 import {
   type FileEntry, type SortCol, type SortDir, type VisibleCols, type ColumnWidths, type FileColumn,
   DEFAULT_VISIBLE_COLS, COLUMN_MIN_WIDTHS, columnGrid, visibleDataColumns,
-  formatSize, formatPermissions, formatDate,
+  formatSize, formatPermissions, formatModified, formatModifiedFull,
 } from "./SFTPTypes";
-import { useSftpSettingsStore } from "@/stores/sftpSettingsStore";
-import { useEditorStore } from "@/stores/editorStore";
+import { autoRefreshIntervalSetting, useSftpSettingsStore } from "@/stores/sftpSettingsStore";
+import { looksLikeImage } from "./editor/tabIcon";
+import { openEditorFile } from "./editor/openEditorFile";
 import { useToggle } from "@/stores/toggleSettingsStore";
 import { startInternalDragGesture, useSemanticDragState } from "./internalDrag";
 import { resolveTypeAheadIndex, TYPE_AHEAD_RESET_MS } from "./typeAhead";
 import { useFileClipboardStore, sameHost, type FileEndpoint } from "@/stores/fileClipboardStore";
 import { writeClipboard } from "@/utils/clipboard";
 import { copyPathText } from "./copyPathText";
+import { parentDir, joinPath, withDriveRootSep } from "./moveTargetCore";
+import { useDirListing } from "./useDirListing";
+import { compareStrings } from "@/utils/localeFormat";
+import { searchMatcher } from "@/utils/search";
+import { describeError } from "@/services/backendErrors";
+import { refuseReadOnly, useReadOnlyTip } from "@/services/deviceReadOnly";
+import { getShortcutHint, matchShortcut } from "@/stores/shortcutStore";
 
 // ── SelectionActionsCtx ───────────────────────────────────────────────────────
 
 type SelectionActionsCtx = {
   isLocal: boolean;
+  isDevice?: boolean;
   sftpId: string | null;
   hostLabel: string;
   canTransferToTarget: boolean;
@@ -40,6 +53,9 @@ type SelectionActionsCtx = {
   onDelete: (files: FileEntry[]) => Promise<void>;
   onCompress: (file: FileEntry) => Promise<void>;
   onExtract: (file: FileEntry) => Promise<void>;
+  canArchive: boolean;
+  readOnlyTip?: string;
+  onPermissions?: (files: FileEntry[]) => void;
   onOpenInTerminal?: (path: string) => void;
   onPanelDownload?: (files: FileEntry[]) => void;
   /** Optional override for the Edit action — used by panel embedding to also open the SFTP panel. */
@@ -50,12 +66,13 @@ type SelectionActionsCtx = {
 
 // ── IconBtn ───────────────────────────────────────────────────────────────────
 
-export function IconBtn({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
+export function IconBtn({ icon, title, onClick, disabled }: { icon: string; title: string; onClick: () => void; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
       title={title}
-      className="flex items-center justify-center w-6 h-6 rounded-md shrink-0 transition-colors text-(--t-text-dim)"
+      disabled={disabled}
+      className="flex items-center justify-center w-6 h-6 rounded-md shrink-0 transition-colors text-(--t-text-dim) disabled:opacity-35"
       onMouseEnter={(e) => { e.currentTarget.style.background = "var(--t-bg-elevated)"; e.currentTarget.style.color = "var(--t-text-primary)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--t-text-dim)"; }}
     >
@@ -72,10 +89,11 @@ export function FilePane({
   onTransferToTarget, canTransferToTarget, onChangeHost,
   filter = "", onRegisterMenuOpener, onRegisterViewMenuOpener, onOpenInTerminal,
   initialVisibleCols, onPanelDownload, onPanelUpload, onEdit,
-  onPaste, onBack, onForward,
+  onPaste, onBack, onForward, readOnly, isDevice,
 }: {
   sftpId: string | null;
   isLocal: boolean;
+  isDevice?: boolean;
   cwd: string;
   homeCwd?: string;
   /** Display label for the remote host — shown in editor tab titles. */
@@ -107,15 +125,14 @@ export function FilePane({
   onForward?: () => void;
   canBack?: boolean;
   canForward?: boolean;
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const resolvedHostLabel = hostLabel ?? t("fileTransfer.common.remoteFallback");
+  const readOnlyTip = useReadOnlyTip(readOnly, resolvedHostLabel);
   const [autoRefreshEnabled] = useToggle("sftp-autorefresh");
-  const autoRefreshIntervalMs = useSftpSettingsStore((s) => s.autoRefreshIntervalMs);
+  const autoRefreshIntervalMs = autoRefreshIntervalSetting.use();
 
-  const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [sortCol, setSortCol] = useState<SortCol>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   // Widths live in the store, not local state, so a pane remount (disconnect,
@@ -137,6 +154,7 @@ export function FilePane({
   const setShowHidden = useSftpSettingsStore((s) => s.setShowHidden);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [viewMenuPos, setViewMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [permissionsFor, setPermissionsFor] = useState<FileEntry[] | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; resolve: (ok: boolean) => void } | null>(null);
 
   const appConfirm = (title: string, message: string): Promise<boolean> =>
@@ -158,14 +176,20 @@ export function FilePane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [renameVal, setRenameVal] = useState("");
-  const [creatingFolder, setCreatingFolder] = useState(false);
-  const [creatingFile, setCreatingFile] = useState(false);
-  const [newItemName, setNewItemName] = useState("");
+  const [creating, setCreating] = useState<"folder" | "file" | null>(null);
   const [autoTick, setAutoTick] = useState(0);
+  const { entries, loading, error, refreshError } = useDirListing(isLocal, sftpId, cwd, `${refreshTick}:${autoTick}`);
+  const withPermissions = !isLocal || entries.some((e) => e.permissions != null);
+  const [canArchive, setCanArchive] = useState(isLocal);
+  useEffect(() => {
+    setCanArchive(isLocal);
+    if (isLocal || !sftpId) return;
+    let live = true;
+    sftpCanExec(sftpId).then((ok) => { if (live) setCanArchive(ok); }, () => {});
+    return () => { live = false; };
+  }, [isLocal, sftpId]);
   const focusIndex = useRef<number>(-1);
   const paneRef = useRef<HTMLDivElement>(null);
-  const prevLocationRef = useRef({ isLocal, sftpId, cwd });
   // Type-ahead ("type to select") search state — refs, not state, so keystrokes
   // don't re-render. The scroll bridge is set by VirtualFileList each render.
   const typeAheadBufferRef = useRef("");
@@ -187,10 +211,10 @@ export function FilePane({
     return () => clearInterval(id);
   }, [autoRefreshEnabled, autoRefreshIntervalMs]);
 
-  const q = filter.trim().toLowerCase();
+  const matchesFilter = searchMatcher(filter);
   const filteredEntries = entries
     .filter((f) => showHidden || !f.name.startsWith("."))
-    .filter((f) => !q || f.name.toLowerCase().includes(q));
+    .filter((f) => matchesFilter(f.name));
   const visibleEntries = [...filteredEntries].sort((a, b) => {
     const dir = sortDir === "asc" ? 1 : -1;
     // dirs always float to top regardless of sort col
@@ -198,7 +222,7 @@ export function FilePane({
     if (sortCol === "size")        return dir * ((a.size ?? 0) - (b.size ?? 0));
     if (sortCol === "modified")    return dir * ((a.modified ?? 0) - (b.modified ?? 0));
     if (sortCol === "permissions") return dir * ((a.permissions ?? 0) - (b.permissions ?? 0));
-    return dir * a.name.localeCompare(b.name);
+    return dir * compareStrings(a.name, b.name);
   });
   const entryIds = visibleEntries.map((f) => f.path);
   const { selectedIdSet, selectionAreaRef, itemAreaRef, dragBox, handleItemSelect, handleSelectionAreaMouseDown, setSelection } =
@@ -211,63 +235,23 @@ export function FilePane({
     onSelectRef.current(entries.filter((f) => selectedIdSet.has(f.path)));
   }, [selectedIdSet, entries]);
 
-  useEffect(() => {
-    const prev = prevLocationRef.current;
-    const isPrimaryLoad = isLocal !== prev.isLocal || sftpId !== prev.sftpId || cwd !== prev.cwd;
-    prevLocationRef.current = { isLocal, sftpId, cwd };
+  const parentPath = parentDir(cwd) || null;
+  const goUp = () => { if (parentPath) onNavigate(parentPath); };
 
-    if (isPrimaryLoad) { setLoading(true); setError(null); }
+  const handleMkdir = () => { if (!readOnlyTip) setCreating("folder"); };
+  const handleNewFile = () => { if (!readOnlyTip) setCreating("file"); };
 
-    const load = isLocal
-      ? fsListDir(cwd).then((files) =>
-          files.map<FileEntry>((f: LocalFile) => ({ name: f.name, path: f.path, size: f.size, isDir: f.is_dir, modified: f.modified ?? undefined })))
-      : sftpListDir(sftpId!, cwd).then((files) =>
-          files.map<FileEntry>((f: RemoteFile) => ({ name: f.name, path: f.path, size: f.size, isDir: f.is_dir, modified: f.modified ?? undefined, permissions: f.permissions ?? undefined, isSymlink: f.is_symlink })));
-    load
-      .then((e) => { setEntries(e); if (isPrimaryLoad) setLoading(false); })
-      .catch((e) => { if (isPrimaryLoad) { setError(String(e)); setLoading(false); } });
-  }, [isLocal, sftpId, cwd, refreshTick, autoTick]);
-
-  // Parent directory of cwd, or null at a filesystem/UNC root. Shared by the
-  // up-button navigation and its drop-target marker.
-  const computeParentDir = (): string | null => {
-    const isUnc = cwd.startsWith("\\\\") || cwd.startsWith("//");
-    const normalized = cwd.replace(/\\/g, "/");
-    const parts = normalized.split("/").filter(Boolean);
-    if (parts.length === 0) return null;
-    if (isUnc && parts.length <= 1) return null;
-    const parentParts = parts.slice(0, -1);
-    if (isUnc) return "\\\\" + parentParts.join("\\");
-    if (normalized.startsWith("/")) return "/" + parentParts.join("/") || "/";
-    return parentParts.length > 0 ? parentParts.join("/") : parts[0] + "/";
-  };
-
-  const parentPath = computeParentDir();
-  const goUp = () => { if (parentPath) onNavigate(parentPath || "/"); };
-
-  const handleMkdir = () => { setNewItemName(""); setCreatingFolder(true); setCreatingFile(false); };
-  const handleNewFile = () => { setNewItemName(""); setCreatingFile(true); setCreatingFolder(false); };
-
-  const commitCreateFolder = async () => {
-    setCreatingFolder(false);
-    if (!newItemName.trim()) return;
-    const fullPath = `${cwd.replace(/\/$/, "")}/${newItemName.trim()}`;
+  const commitCreate = async (name: string) => {
+    const kind = creating;
+    setCreating(null);
+    if (!name.trim()) return;
+    const fullPath = joinPath(cwd, name.trim());
     try {
-      if (isLocal) { await fsMkdir(fullPath); }
-      else if (sftpId) { await sftpMkdir(sftpId, fullPath); }
+      if (kind === "folder") { if (isLocal) await fsMkdir(fullPath); else if (sftpId) await sftpMkdir(sftpId, fullPath); }
+      else if (isLocal) await fsTouch(fullPath);
+      else if (sftpId) await sftpTouch(sftpId, fullPath);
       onRefresh();
-    } catch (e) { alert(String(e)); }
-  };
-
-  const commitCreateFile = async () => {
-    setCreatingFile(false);
-    if (!newItemName.trim()) return;
-    const fullPath = `${cwd.replace(/\/$/, "")}/${newItemName.trim()}`;
-    try {
-      if (isLocal) { await fsTouch(fullPath); }
-      else if (sftpId) { await sftpTouch(sftpId, fullPath); }
-      onRefresh();
-    } catch (e) { alert(String(e)); }
+    } catch (e) { alert(describeError(e, t)); }
   };
 
   const selectedEntries = visibleEntries.filter((f) => selectedIdSet.has(f.path));
@@ -283,6 +267,7 @@ export function FilePane({
 
   const handleDelete = async (files: FileEntry[]) => {
     if (files.length === 0) return;
+    if (refuseReadOnly(readOnlyTip)) return;
     if (!isLocal && !sftpId) return;
     const title = t("fileTransfer.pane.confirmDelete.title");
     const msg = files.length === 1
@@ -297,21 +282,19 @@ export function FilePane({
       }
       setSelection([]);
       onRefresh();
-    } catch (e) { alert(String(e)); }
+    } catch (e) { alert(describeError(e, t)); }
   };
 
-  const startRename = (f: FileEntry) => { setRenaming(f.path); setRenameVal(f.name); };
-  const commitRename = async (f: FileEntry) => {
-    if (!renameVal || renameVal === f.name) { setRenaming(null); return; }
+  const startRename = (f: FileEntry) => { if (!refuseReadOnly(readOnlyTip)) setRenaming(f.path); };
+  const commitRename = async (f: FileEntry, name: string) => {
+    if (!name || name === f.name) { setRenaming(null); return; }
     if (!isLocal && !sftpId) { setRenaming(null); return; }
-    const sep = f.path.includes("/") ? "/" : "\\";
-    const dir = f.path.substring(0, f.path.lastIndexOf(sep));
-    const newPath = `${dir}${sep}${renameVal}`;
+    const newPath = joinPath(parentDir(f.path), name);
     try {
       if (isLocal) { await fsRename(f.path, newPath); }
       else { await sftpRename(sftpId!, f.path, newPath); }
       onRefresh();
-    } catch (e) { alert(String(e)); }
+    } catch (e) { alert(describeError(e, t)); }
     setRenaming(null);
   };
 
@@ -382,7 +365,7 @@ export function FilePane({
       return;
     }
     if (selectedEntries.length > 0) {
-      if (e.key === "F2" && selectedEntries.length === 1) { startRename(selectedEntries[0]); return; }
+      if (matchShortcut("rename", e.nativeEvent) && selectedEntries.length === 1) { startRename(selectedEntries[0]); return; }
       if (e.key === "Delete") { void handleDelete(selectedEntries); return; }
     }
     // Type-ahead: a single printable char (no modifiers) selects the first entry
@@ -408,26 +391,24 @@ export function FilePane({
   };
 
   const handleCompress = async (file: FileEntry) => {
-    const sep = file.path.includes("/") ? "/" : "\\";
-    const parent = file.path.substring(0, file.path.lastIndexOf(sep));
-    const archivePath = `${parent}${sep}${file.name}.tar.gz`;
+    if (refuseReadOnly(readOnlyTip)) return;
+    const archivePath = joinPath(parentDir(file.path), `${file.name}.tar.gz`);
     try {
       if (isLocal) await fsCompress(file.path, archivePath);
       else if (sftpId) await sftpCompress(sftpId, file.path, archivePath);
       onRefresh();
-    } catch (e) { alert(String(e)); }
+    } catch (e) { alert(describeError(e, t)); }
   };
 
   const handleExtract = async (file: FileEntry) => {
-    const sep = file.path.includes("/") ? "/" : "\\";
-    const parent = file.path.substring(0, file.path.lastIndexOf(sep));
+    if (refuseReadOnly(readOnlyTip)) return;
     const baseName = file.name.replace(/\.(tar\.gz|tgz)$/i, "");
-    const destDir = `${parent}${sep}${baseName}`;
+    const destDir = joinPath(parentDir(file.path), baseName);
     try {
       if (isLocal) await fsExtract(file.path, destDir);
       else if (sftpId) await sftpExtract(sftpId, file.path, destDir);
       onRefresh();
-    } catch (e) { alert(String(e)); }
+    } catch (e) { alert(describeError(e, t)); }
   };
 
   const handlePickLocal = async () => {
@@ -435,19 +416,15 @@ export function FilePane({
     if (path) onNavigate(path);
   };
 
-  const handleGoHome = async () => {
-    if (isLocal) {
-      const home = await fsHomeDir();
-      onNavigate(home);
-    } else if (homeCwd) {
-      onNavigate(homeCwd);
-    }
+  const handleGoHome = () => {
+    if (homeCwd) onNavigate(homeCwd);
   };
 
   const selectionActionsCtx: SelectionActionsCtx = {
-    isLocal, sftpId, hostLabel: resolvedHostLabel, canTransferToTarget: canTransferToTarget ?? false,
+    isLocal, isDevice, sftpId, hostLabel: resolvedHostLabel, canTransferToTarget: canTransferToTarget ?? false,
     onTransferToTarget, onStartRename: startRename, onDelete: handleDelete,
-    onCompress: handleCompress, onExtract: handleExtract,
+    onCompress: handleCompress, onExtract: handleExtract, canArchive, readOnlyTip,
+    onPermissions: isLocal || sftpId ? setPermissionsFor : undefined,
     onOpenInTerminal, onPanelDownload, onEdit, setSelection, onRefresh,
   };
 
@@ -473,17 +450,7 @@ export function FilePane({
       tabIndex={-1}
       data-drop-side={side}
     >
-      {isCrossPaneDrop && (
-        <div
-          className="absolute inset-0 z-20 flex items-center justify-center rounded-sm pointer-events-none"
-          style={{ background: "color-mix(in srgb, var(--t-accent) 12%, transparent)", border: "2px solid var(--t-accent)" }}
-        >
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-(--t-bg-card) border border-(--t-accent)">
-            <Icon icon="lucide:arrow-down-to-line" width={14} className="text-(--t-accent)" />
-            <span className="text-xs font-medium text-(--t-accent)">{t("fileTransfer.pane.dropToTransfer")}</span>
-          </div>
-        </div>
-      )}
+      {isCrossPaneDrop && <PaneDropOverlay />}
 
       {/* Path bar */}
       <div className="flex items-center gap-1.5 px-2 py-2 shrink-0 border-b border-b-(--t-border) bg-(--t-bg-elevated)">
@@ -501,13 +468,19 @@ export function FilePane({
           <PathBreadcrumb cwd={cwd} isLocal={isLocal} onNavigate={onNavigate} dropFolderPath={dropFolderPath} />
           {isLocal && <IconBtn icon="lucide:folder-open" title={t("fileTransfer.pane.toolbar.browse")} onClick={handlePickLocal} />}
         </div>
-        <IconBtn icon="lucide:folder-plus" title={t("fileTransfer.pane.toolbar.newFolder")} onClick={handleMkdir} />
-        <IconBtn icon="lucide:file-plus" title={t("fileTransfer.pane.toolbar.newFile")} onClick={handleNewFile} />
+        <IconBtn icon="lucide:folder-plus" title={readOnlyTip ?? t("fileTransfer.pane.toolbar.newFolder")} onClick={handleMkdir} disabled={!!readOnlyTip} />
+        <IconBtn icon="lucide:file-plus" title={readOnlyTip ?? t("fileTransfer.pane.toolbar.newFile")} onClick={handleNewFile} disabled={!!readOnlyTip} />
         <IconBtn icon="lucide:refresh-cw" title={t("fileTransfer.pane.toolbar.refresh")} onClick={onRefresh} />
       </div>
 
+      {refreshError && (
+        <div className="shrink-0 px-3 py-1 text-xs truncate text-(--t-status-error) border-b border-(--t-border)" title={refreshError}>
+          {t("fileTransfer.pane.refreshFailed", { reason: refreshError })}
+        </div>
+      )}
+
       <ColumnHeaders
-        sortCol={sortCol} sortDir={sortDir} isLocal={isLocal} colWidths={colWidths} visibleCols={visibleCols}
+        sortCol={sortCol} sortDir={sortDir} withPermissions={withPermissions} colWidths={colWidths} visibleCols={visibleCols}
         viewport={viewport}
         onSort={(col) => { if (col === sortCol) setSortDir((d) => d === "asc" ? "desc" : "asc"); else { setSortCol(col); setSortDir("asc"); } }}
         onResize={(col, w) => setColWidths((prev) => ({ ...prev, [col]: w }))}
@@ -517,23 +490,20 @@ export function FilePane({
         onContextMenu={(e) => { e.preventDefault(); setSelection([]); setMenuPos({ x: e.clientX, y: e.clientY }); }}>
         <VirtualFileList
           entries={visibleEntries} loading={loading} error={error}
-          renaming={renaming} renameVal={renameVal} onRenameValChange={setRenameVal}
-          creatingFolder={creatingFolder} creatingFile={creatingFile}
-          newItemName={newItemName} onNewItemNameChange={setNewItemName}
-          onCommitCreateFolder={commitCreateFolder}
-          onCommitCreateFile={commitCreateFile}
-          onCancelCreate={() => { setCreatingFolder(false); setCreatingFile(false); }}
+          renaming={renaming} creating={creating}
+          onCommitCreate={commitCreate}
+          onCancelCreate={() => setCreating(null)}
           selectedIdSet={selectedIdSet} dropFolderPath={dropFolderPath}
           focusIndex={focusIndex} itemAreaRef={itemAreaRef} scrollToIndexRef={scrollToIndexRef}
           cutPathSet={cutPathSet}
-          side={side} isLocal={isLocal} selectedEntries={selectedEntries}
+          side={side} withPermissions={withPermissions} selectedEntries={selectedEntries}
           colWidths={colWidths} visibleCols={visibleCols}
           onViewport={(v) => setViewport((prev) => prev.scrollLeft === v.scrollLeft && prev.gutter === v.gutter ? prev : v)}
           onCommitRename={commitRename} onCancelRename={() => setRenaming(null)}
           onItemSelect={handleItemSelect}
           onNavigate={onNavigate} onSetSelection={setSelection}
           onInternalDrop={handleInternalDrop}
-          onMoveWithin={onMoveWithin}
+          onMoveWithin={readOnlyTip ? undefined : onMoveWithin}
           selectionActionsCtx={selectionActionsCtx}
         />
       </DragSelectSurface>
@@ -567,7 +537,7 @@ export function FilePane({
             selectedEntries, entryIds,
             selectionActionsCtx,
             handleMkdir, handleNewFile, setSelection, onChangeHost, cwd,
-            onPanelUpload, t,
+            onPanelUpload, readOnlyTip, t,
           })}
         />
       )}
@@ -575,7 +545,7 @@ export function FilePane({
         <ContextMenu
           pos={viewMenuPos}
           onClose={() => setViewMenuPos(null)}
-          items={buildViewMenuItems({ showHidden, setShowHidden, visibleCols, setVisibleCols, isLocal, t })}
+          items={buildViewMenuItems({ showHidden, setShowHidden, visibleCols, setVisibleCols, withPermissions, t })}
         />
       )}
       {confirmDialog && (
@@ -585,6 +555,14 @@ export function FilePane({
           confirmLabel={t("common.action.delete")}
           onConfirm={() => { const r = confirmDialog.resolve; setConfirmDialog(null); r(true); }}
           onCancel={() => { const r = confirmDialog.resolve; setConfirmDialog(null); r(false); }}
+        />
+      )}
+      {permissionsFor && (isLocal || sftpId) && (
+        <PermissionsDialog
+          sftpId={isLocal ? null : sftpId}
+          files={permissionsFor}
+          onClose={() => setPermissionsFor(null)}
+          onApplied={() => { setPermissionsFor(null); onRefresh(); }}
         />
       )}
 
@@ -598,27 +576,19 @@ export function FilePane({
 // double-click. Returns whether the file was openable (directories are not).
 export function openFileForEdit(
   file: FileEntry,
-  ctx: Pick<SelectionActionsCtx, "isLocal" | "sftpId" | "hostLabel" | "onEdit">,
+  ctx: Pick<SelectionActionsCtx, "isLocal" | "sftpId" | "hostLabel" | "onEdit" | "readOnlyTip">,
 ): boolean {
   if (file.isDir) return false;
   if (!ctx.isLocal && !ctx.sftpId) return false;
-  if (ctx.onEdit) {
-    ctx.onEdit(file.path);
-  } else {
-    useEditorStore.getState().openDoc({
-      sftpId: ctx.isLocal ? null : ctx.sftpId,
-      path: file.path,
-      hostLabel: ctx.hostLabel,
-      autoSave: useSftpSettingsStore.getState().editorAutoSave,
-    });
-  }
+  if (ctx.onEdit) ctx.onEdit(file.path);
+  else openEditorFile({ sftpId: ctx.isLocal ? null : ctx.sftpId, path: file.path, hostLabel: ctx.hostLabel, readOnly: !!ctx.readOnlyTip });
   return true;
 }
 
 // Single source of truth for file-level actions. Used by both the per-item
 // right-click context menu and the pane ellipsis menu.
 
-function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: TFunction): ContextMenuItem[] {
+export function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: TFunction): ContextMenuItem[] {
   const items: ContextMenuItem[] = [];
   const single = files.length === 1 ? files[0] : null;
 
@@ -633,7 +603,7 @@ function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: 
     if (!ctx.isLocal && ctx.sftpId) {
       const sid = ctx.sftpId;
       items.push({
-        label: t("fileTransfer.pane.menu.moveToTarget", { count: files.length }), icon: "lucide:scissors",
+        label: t("fileTransfer.pane.menu.moveToTarget", { count: files.length }), icon: "lucide:scissors", disabledReason: ctx.readOnlyTip,
         onClick: async () => {
           ctx.onTransferToTarget?.(files);
           for (const f of files) await sftpDelete(sid, f.path).catch(() => {});
@@ -648,7 +618,7 @@ function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: 
   if (single && !single.isDir && (ctx.isLocal || ctx.sftpId)) {
     items.push({
       label: t("common.action.edit"),
-      icon: "lucide:file-pen",
+      icon: "lucide:pencil",
       onClick: () => { openFileForEdit(single, ctx); },
     });
   }
@@ -664,19 +634,22 @@ function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: 
   }
 
   // Rename / Delete
-  if (single) items.push({ label: t("common.action.rename"), icon: "lucide:pencil", onClick: () => ctx.onStartRename(single) });
+  if (single) items.push({ label: t("common.action.rename"), icon: "lucide:text-cursor-input", onClick: () => ctx.onStartRename(single), shortcut: getShortcutHint("rename"), disabledReason: ctx.readOnlyTip });
+  if (ctx.onPermissions && !ctx.isDevice && canEditPermissions(files)) {
+    items.push({ label: t("fileTransfer.pane.menu.permissions"), icon: "lucide:key-round", onClick: () => ctx.onPermissions!(files), disabledReason: ctx.readOnlyTip });
+  }
   if (files.length > 0) {
     items.push({
       label: t("fileTransfer.pane.menu.delete", { count: files.length }),
-      icon: "lucide:trash-2", onClick: () => void ctx.onDelete(files), danger: true,
+      icon: "lucide:trash-2", onClick: () => void ctx.onDelete(files), danger: true, disabledReason: ctx.readOnlyTip,
     });
   }
 
   // Archive (single file only)
-  if (single) {
-    items.push({ label: t("fileTransfer.pane.menu.compress"), icon: "lucide:archive", onClick: () => ctx.onCompress(single), divider: true });
+  if (single && ctx.canArchive) {
+    items.push({ label: t("fileTransfer.pane.menu.compress"), icon: "lucide:archive", onClick: () => ctx.onCompress(single), divider: true, disabledReason: ctx.readOnlyTip });
     if (!single.isDir && /\.(tar\.gz|tgz)$/i.test(single.name)) {
-      items.push({ label: t("fileTransfer.pane.menu.extractHere"), icon: "lucide:package-open", onClick: () => ctx.onExtract(single) });
+      items.push({ label: t("fileTransfer.pane.menu.extractHere"), icon: "lucide:package-open", onClick: () => ctx.onExtract(single), disabledReason: ctx.readOnlyTip });
     }
   }
 
@@ -693,15 +666,15 @@ function buildSelectionActions(files: FileEntry[], ctx: SelectionActionsCtx, t: 
 function buildViewMenuItems(ctx: {
   showHidden: boolean; setShowHidden: (v: boolean) => void;
   visibleCols: VisibleCols; setVisibleCols: React.Dispatch<React.SetStateAction<VisibleCols>>;
-  isLocal: boolean;
+  withPermissions: boolean;
   t: TFunction;
 }): ContextMenuItem[] {
-  const { showHidden, setShowHidden, visibleCols, setVisibleCols, isLocal, t } = ctx;
+  const { showHidden, setShowHidden, visibleCols, setVisibleCols, withPermissions, t } = ctx;
   const items: ContextMenuItem[] = [];
   items.push({ label: showHidden ? t("fileTransfer.pane.menu.hideHiddenFiles") : t("fileTransfer.pane.menu.showHiddenFiles"), icon: showHidden ? "lucide:eye" : "lucide:eye-off", onClick: () => setShowHidden(!showHidden) });
   items.push({ label: t("fileTransfer.pane.menu.sizeColumn"),        icon: visibleCols.size        ? "lucide:square-check-big" : "lucide:square", onClick: () => setVisibleCols((v) => ({ ...v, size:        !v.size        })) });
   items.push({ label: t("fileTransfer.pane.menu.dateColumn"),        icon: visibleCols.modified    ? "lucide:square-check-big" : "lucide:square", onClick: () => setVisibleCols((v) => ({ ...v, modified:    !v.modified    })) });
-  if (!isLocal) items.push({ label: t("fileTransfer.pane.menu.permissionsColumn"), icon: visibleCols.permissions ? "lucide:square-check-big" : "lucide:square", onClick: () => setVisibleCols((v) => ({ ...v, permissions: !v.permissions })) });
+  if (withPermissions) items.push({ label: t("fileTransfer.pane.menu.permissionsColumn"), icon: visibleCols.permissions ? "lucide:square-check-big" : "lucide:square", onClick: () => setVisibleCols((v) => ({ ...v, permissions: !v.permissions })) });
   return items;
 }
 
@@ -714,16 +687,17 @@ function buildPaneMenuItems(ctx: {
   onChangeHost?: () => void;
   cwd: string;
   onPanelUpload?: () => void;
+  readOnlyTip?: string;
   t: TFunction;
 }): ContextMenuItem[] {
   const { selectedEntries, entryIds, selectionActionsCtx,
-    handleMkdir, handleNewFile, setSelection, onChangeHost, cwd, onPanelUpload, t } = ctx;
+    handleMkdir, handleNewFile, setSelection, onChangeHost, cwd, onPanelUpload, readOnlyTip, t } = ctx;
   const sel = selectedEntries;
   const items: ContextMenuItem[] = [];
 
   // ── Upload (panel embedding only — shown when nothing is selected)
   if (onPanelUpload && sel.length === 0) {
-    items.push({ label: t("fileTransfer.pane.menu.uploadFiles"), icon: "lucide:upload", onClick: onPanelUpload });
+    items.push({ label: t("fileTransfer.pane.menu.uploadFiles"), icon: "lucide:upload", onClick: onPanelUpload, disabledReason: readOnlyTip });
   }
 
   // ── File actions (delegated to shared builder)
@@ -732,8 +706,8 @@ function buildPaneMenuItems(ctx: {
 
   // ── Directory
   const dirActions: ContextMenuItem[] = [];
-  dirActions.push({ label: t("fileTransfer.pane.toolbar.newFolder"), icon: "lucide:folder-plus", onClick: handleMkdir });
-  dirActions.push({ label: t("fileTransfer.pane.toolbar.newFile"),   icon: "lucide:file-plus",   onClick: handleNewFile });
+  dirActions.push({ label: t("fileTransfer.pane.toolbar.newFolder"), icon: "lucide:folder-plus", onClick: handleMkdir, disabledReason: readOnlyTip });
+  dirActions.push({ label: t("fileTransfer.pane.toolbar.newFile"),   icon: "lucide:file-plus",   onClick: handleNewFile, disabledReason: readOnlyTip });
   dirActions.push({ label: t("fileTransfer.pane.menu.selectAll"), icon: "lucide:list-checks", onClick: () => setSelection(entryIds) });
   if (sel.length > 0) dirActions.push({ label: t("fileTransfer.pane.menu.deselect"), icon: "lucide:square", onClick: () => setSelection([]) });
   dirActions[0].divider = true; items.push(...dirActions);
@@ -774,7 +748,7 @@ function PathBreadcrumb({ cwd, onNavigate, dropFolderPath }: { cwd: string; isLo
     label,
     path: isUnc
       ? "\\\\" + parts.slice(0, i + 1).join("\\")
-      : (isAbsolute ? "/" : "") + parts.slice(0, i + 1).join("/"),
+      : withDriveRootSep((isAbsolute ? "/" : "") + parts.slice(0, i + 1).join("/"), "/"),
   }));
   const allCrumbs = isUnc || !isAbsolute ? crumbs : [{ label: "/", path: "/" }, ...crumbs];
 
@@ -864,49 +838,20 @@ function CrumbSegment({ label, isLast, isDropTarget, dropPath, onClick }: { labe
 export type Viewport = { scrollLeft: number; gutter: number };
 
 function ResizeHandle({ column, onWidth }: { column: FileColumn; onWidth: (w: number) => void }) {
-  const startRef = useRef<{ x: number; width: number } | null>(null);
-  const [isActive, setIsActive] = useState(false);
-
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Seed from the width the column actually has on screen, not the stored one:
-    // the name column grows past its stored width to fill the pane, and starting
-    // from the stored value made the divider jump away from the cursor.
-    startRef.current = { x: e.clientX, width: e.currentTarget.parentElement!.getBoundingClientRect().width };
-    setIsActive(true);
-    e.currentTarget.setPointerCapture(e.pointerId);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  };
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!startRef.current) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const nextWidth = startRef.current.width + (e.clientX - startRef.current.x);
-    onWidth(Math.max(COLUMN_MIN_WIDTHS[column], nextWidth));
-  };
-
-  const finishResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!startRef.current) return;
-    e.preventDefault();
-    e.stopPropagation();
-    startRef.current = null;
-    setIsActive(false);
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-  };
+  const [hovered, setHovered] = useState(false);
+  const { dragging, handlers } = usePointerDrag({
+    cursor: "col-resize",
+    // Seed from the on-screen width: the name column grows past its stored width to fill the pane.
+    begin: (e) => ({ x: e.clientX, width: e.currentTarget.parentElement!.getBoundingClientRect().width }),
+    move: (e, start) => onWidth(Math.max(COLUMN_MIN_WIDTHS[column], start.width + (e.clientX - start.x))),
+  });
+  const isActive = hovered || dragging;
 
   return (
     <div
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={finishResize}
-      onPointerCancel={finishResize}
-      onPointerEnter={() => setIsActive(true)}
-      onPointerLeave={() => { if (!startRef.current) setIsActive(false); }}
+      {...handlers}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
       className="absolute inset-y-0 right-0 z-10 flex items-center justify-center"
       style={{
@@ -931,8 +876,8 @@ function ResizeHandle({ column, onWidth }: { column: FileColumn; onWidth: (w: nu
   );
 }
 
-function ColumnHeaders({ sortCol, sortDir, isLocal, colWidths, visibleCols, viewport, onSort, onResize }: {
-  sortCol: SortCol; sortDir: SortDir; isLocal: boolean;
+function ColumnHeaders({ sortCol, sortDir, withPermissions, colWidths, visibleCols, viewport, onSort, onResize }: {
+  sortCol: SortCol; sortDir: SortDir; withPermissions: boolean;
   colWidths: ColumnWidths; visibleCols: VisibleCols;
   viewport: Viewport;
   onSort: (col: SortCol) => void;
@@ -943,8 +888,8 @@ function ColumnHeaders({ sortCol, sortDir, isLocal, colWidths, visibleCols, view
     ? <Icon icon={sortDir === "asc" ? "lucide:chevron-up" : "lucide:chevron-down"} width={9} className="shrink-0" style={{ opacity: 0.7 }} />
     : null;
 
-  const dataColumns = visibleDataColumns(isLocal, visibleCols);
-  const { template, minWidth } = columnGrid(isLocal, visibleCols, colWidths);
+  const dataColumns = visibleDataColumns(withPermissions, visibleCols);
+  const { template, minWidth } = columnGrid(withPermissions, visibleCols, colWidths);
   const labelStyle: React.CSSProperties = { fontSize: "0.6875rem", fontWeight: 600, letterSpacing: "0.055em", textTransform: "uppercase" };
 
   const headerCell = (col: FileColumn, label: string) => {
@@ -964,7 +909,7 @@ function ColumnHeaders({ sortCol, sortDir, isLocal, colWidths, visibleCols, view
       >
         <span className="truncate" style={labelStyle}>{label}</span>
         {chevron(col as SortCol)}
-        <ResizeHandle column={col} onWidth={(w) => onResize(col, w)} />
+        {dataColumns.length > 0 && <ResizeHandle column={col} onWidth={(w) => onResize(col, w)} />}
       </button>
     );
   };
@@ -985,17 +930,33 @@ function ColumnHeaders({ sortCol, sortDir, isLocal, colWidths, visibleCols, view
   );
 }
 
+function InlineFileNameRow({ isDir, value, placeholder, onCommit, onCancel }: {
+  isDir: boolean; value: string; placeholder?: string; onCommit: (name: string) => void; onCancel: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 ml-3 mr-1 px-2 py-1.5 rounded-sm border border-(--t-accent) text-sm text-(--t-text-primary)">
+      <Icon icon={isDir ? "lucide:folder" : "lucide:file"} width={15} className="shrink-0" style={{ color: isDir ? "#f0c050" : "var(--t-text-dim)" }} />
+      <InlineNameEditor
+        value={value}
+        placeholder={placeholder}
+        maxLength={255}
+        onCommit={onCommit}
+        onCancel={onCancel}
+        className="flex-1 min-w-0 bg-transparent outline-hidden"
+      />
+    </div>
+  );
+}
+
 // ── VirtualFileList ───────────────────────────────────────────────────────────
 
 function VirtualFileList({
   entries, loading, error,
-  renaming, renameVal, onRenameValChange,
-  creatingFolder, creatingFile, newItemName, onNewItemNameChange,
-  onCommitCreateFolder, onCommitCreateFile, onCancelCreate,
+  renaming, creating, onCommitCreate, onCancelCreate,
   selectedIdSet, dropFolderPath,
   focusIndex, itemAreaRef, scrollToIndexRef,
   cutPathSet,
-  side, isLocal, selectedEntries, colWidths, visibleCols, onViewport,
+  side, withPermissions, selectedEntries, colWidths, visibleCols, onViewport,
   onCommitRename, onCancelRename,
   onItemSelect, onNavigate, onSetSelection,
   onInternalDrop,
@@ -1003,17 +964,15 @@ function VirtualFileList({
   selectionActionsCtx,
 }: {
   entries: FileEntry[]; loading: boolean; error: string | null;
-  renaming: string | null; renameVal: string; onRenameValChange: (v: string) => void;
-  creatingFolder: boolean; creatingFile: boolean;
-  newItemName: string; onNewItemNameChange: (v: string) => void;
-  onCommitCreateFolder: () => void; onCommitCreateFile: () => void; onCancelCreate: () => void;
+  renaming: string | null; creating: "folder" | "file" | null;
+  onCommitCreate: (name: string) => void; onCancelCreate: () => void;
   selectedIdSet: Set<string>; dropFolderPath: string | null;
   focusIndex: React.MutableRefObject<number>; itemAreaRef: React.RefObject<HTMLDivElement | null>;
   scrollToIndexRef: React.MutableRefObject<((index: number) => void) | null>;
   cutPathSet: Set<string> | null;
-  side: "left" | "right" | "panel"; isLocal: boolean; selectedEntries: FileEntry[]; colWidths: ColumnWidths; visibleCols: VisibleCols;
+  side: "left" | "right" | "panel"; withPermissions: boolean; selectedEntries: FileEntry[]; colWidths: ColumnWidths; visibleCols: VisibleCols;
   onViewport: (v: Viewport) => void;
-  onCommitRename: (f: FileEntry) => void; onCancelRename: () => void;
+  onCommitRename: (f: FileEntry, name: string) => void; onCancelRename: () => void;
   onItemSelect: (id: string, event: React.MouseEvent<HTMLDivElement>) => void;
   onNavigate: (p: string) => void; onSetSelection: (ids: string[]) => void;
   onInternalDrop: (files: FileEntry[], fromSide: "left" | "right" | "panel", targetFolder?: string) => void;
@@ -1043,23 +1002,14 @@ function VirtualFileList({
   // resize can all make the scrollbar appear or disappear.
   useEffect(reportViewport);
 
-  const commitCreate = creatingFolder ? onCommitCreateFolder : onCommitCreateFile;
-  const inlineCreateRow = (creatingFolder || creatingFile) && (
-    <div className="flex items-center gap-2 ml-3 mr-1 px-2 py-1.5 rounded-sm border border-(--t-accent)">
-      <Icon icon={creatingFolder ? "lucide:folder" : "lucide:file"} width={15} className="shrink-0" style={{ color: creatingFolder ? "#f0c050" : "var(--t-text-dim)" }} />
-      <input
-        autoFocus
-        value={newItemName}
-        onChange={(e) => onNewItemNameChange(e.target.value)}
-        onBlur={commitCreate}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commitCreate();
-          if (e.key === "Escape") onCancelCreate();
-        }}
-        placeholder={creatingFolder ? t("fileTransfer.pane.placeholder.folderName") : t("fileTransfer.pane.placeholder.fileName")}
-        className="flex-1 text-sm bg-transparent outline-hidden text-(--t-text-primary) placeholder:text-(--t-text-dim)"
-      />
-    </div>
+  const inlineCreateRow = creating && (
+    <InlineFileNameRow
+      isDir={creating === "folder"}
+      value=""
+      placeholder={creating === "folder" ? t("fileTransfer.pane.placeholder.folderName") : t("fileTransfer.pane.placeholder.fileName")}
+      onCommit={onCommitCreate}
+      onCancel={onCancelCreate}
+    />
   );
 
   if (loading) {
@@ -1080,7 +1030,7 @@ function VirtualFileList({
     return (
       <div ref={itemAreaRef} data-drag-surface="true" className="h-full overflow-y-auto">
         {inlineCreateRow}
-        {!creatingFolder && !creatingFile && (
+        {!creating && (
           <div className="flex items-center justify-center h-16 text-xs text-(--t-text-dim)">{t("fileTransfer.pane.emptyDirectory")}</div>
         )}
       </div>
@@ -1100,17 +1050,7 @@ function VirtualFileList({
           if (renaming === file.path) {
             return (
               <div key={file.path} style={itemStyle}>
-                <div className="flex items-center gap-2 ml-3 mr-1 px-2 py-1.5 rounded-sm border border-(--t-accent)">
-                  <Icon icon={file.isDir ? "lucide:folder" : "lucide:file"} width={15} className="shrink-0" style={{ color: file.isDir ? "#f0c050" : "var(--t-text-dim)" }} />
-                  <input
-                    autoFocus
-                    value={renameVal}
-                    onChange={(e) => onRenameValChange(e.target.value)}
-                    onBlur={() => onCommitRename(file)}
-                    onKeyDown={(e) => { if (e.key === "Enter") onCommitRename(file); if (e.key === "Escape") onCancelRename(); }}
-                    className="flex-1 text-sm bg-transparent outline-hidden text-(--t-text-primary)"
-                  />
-                </div>
+                <InlineFileNameRow isDir={file.isDir} value={file.name} onCommit={(name) => onCommitRename(file, name)} onCancel={onCancelRename} />
               </div>
             );
           }
@@ -1130,7 +1070,7 @@ function VirtualFileList({
                 isSelected={isSelected}
                 isCut={cutPathSet?.has(file.path) ?? false}
                 isDragHover={isDragHover}
-                isLocal={isLocal}
+                withPermissions={withPermissions}
                 colWidths={colWidths}
                 visibleCols={visibleCols}
                 selectableId={file.path}
@@ -1165,8 +1105,8 @@ function VirtualFileList({
 
 // ── FileRow ───────────────────────────────────────────────────────────────────
 
-function FileRow({ file, isSelected, isCut, isDragHover, isLocal, colWidths, visibleCols, selectableId, onClick, onDoubleClick, contextActions, onPointerDown }: {
-  file: FileEntry; isSelected: boolean; isCut?: boolean; isDragHover?: boolean; isLocal: boolean; colWidths: ColumnWidths; visibleCols: VisibleCols; selectableId?: string;
+function FileRow({ file, isSelected, isCut, isDragHover, withPermissions, colWidths, visibleCols, selectableId, onClick, onDoubleClick, contextActions, onPointerDown }: {
+  file: FileEntry; isSelected: boolean; isCut?: boolean; isDragHover?: boolean; withPermissions: boolean; colWidths: ColumnWidths; visibleCols: VisibleCols; selectableId?: string;
   onClick: (e: React.MouseEvent) => void; onDoubleClick: () => void;
   contextActions?: ContextMenuItem[];
   onPointerDown?: (e: React.PointerEvent) => void;
@@ -1174,8 +1114,8 @@ function FileRow({ file, isSelected, isCut, isDragHover, isLocal, colWidths, vis
   const { pos, open, close } = useContextMenu();
   const [hovered, setHovered] = useState(false);
   const dimColor = isSelected ? "var(--t-text-secondary)" : "var(--t-text-dim)";
-  const dataColumns = visibleDataColumns(isLocal, visibleCols);
-  const { template, minWidth } = columnGrid(isLocal, visibleCols, colWidths);
+  const dataColumns = visibleDataColumns(withPermissions, visibleCols);
+  const { template, minWidth } = columnGrid(withPermissions, visibleCols, colWidths);
 
   let bg = "transparent";
   let border = "1px solid transparent";
@@ -1198,7 +1138,7 @@ function FileRow({ file, isSelected, isCut, isDragHover, isLocal, colWidths, vis
       {/* Icon and name share the name track so the row's grid matches the header's. */}
       <span className="flex items-center gap-2 min-w-0">
         <Icon
-          icon={file.isSymlink ? "lucide:square-arrow-out-up-right" : file.isDir ? "lucide:folder" : "lucide:file"}
+          icon={file.isSymlink ? "lucide:square-arrow-out-up-right" : file.isDir ? "lucide:folder" : looksLikeImage(file.name) ? "lucide:file-image" : "lucide:file"}
           width={15} className="shrink-0"
           style={{ color: file.isDir ? "#f0c050" : file.isSymlink ? "var(--t-accent)" : "var(--t-text-dim)" }}
         />
@@ -1206,8 +1146,9 @@ function FileRow({ file, isSelected, isCut, isDragHover, isLocal, colWidths, vis
       </span>
       {/* Size reads as a number (right-aligned); date and mode read as text and sit under their header label. */}
       {dataColumns.map((col) => (
-        <span key={col} className={`text-xs truncate font-mono min-w-0 px-2 ${col === "size" ? "text-right" : "text-left"}`} style={{ color: dimColor }}>
-          {col === "size" ? (!file.isDir ? formatSize(file.size) : "") : col === "modified" ? (file.modified != null ? formatDate(file.modified) : "") : (file.permissions != null ? formatPermissions(file.permissions) : "")}
+        <span key={col} className={`text-xs truncate font-mono min-w-0 px-2 ${col === "size" ? "text-right" : "text-left"}`} style={{ color: dimColor }}
+          title={col === "modified" && file.modified != null ? formatModifiedFull(file.modified) : undefined}>
+          {col === "size" ? (!file.isDir ? formatSize(file.size) : "") : col === "modified" ? (file.modified != null ? formatModified(file.modified) : "") : (file.permissions != null ? formatPermissions(file.permissions) : "")}
         </span>
       ))}
       {pos && contextActions && <ContextMenu items={contextActions} pos={pos} onClose={close} />}

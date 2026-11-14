@@ -18,17 +18,14 @@
       "notInstalled": "«{{family}}» не установлен — терминал использует другой шрифт"
     },
     "varSearch": {
-      "usage_one": "{{count}} элемент использует",
-      "usage_few": "{{count}} элемента используют",
-      "usage_many": "{{count}} элементов используют",
-      "usage_other": "{{count}} элементов используют",
-      "suffix": "или нажмите, чтобы закрыть"
+      "hint_one": "{{count}} элемент использует <var>{{name}}</var> — <kbd>Esc</kbd> или нажмите, чтобы закрыть",
+      "hint_few": "{{count}} элемента используют <var>{{name}}</var> — <kbd>Esc</kbd> или нажмите, чтобы закрыть",
+      "hint_many": "{{count}} элементов используют <var>{{name}}</var> — <kbd>Esc</kbd> или нажмите, чтобы закрыть",
+      "hint_other": "{{count}} элемента используют <var>{{name}}</var> — <kbd>Esc</kbd> или нажмите, чтобы закрыть"
     },
     "pickOverlay": {
-      "prefix": "Нажмите на любой элемент —",
-      "suffix": "чтобы отменить"
+      "hint": "Нажмите на любой элемент — <kbd>Esc</kbd>, чтобы отменить"
     },
-    "escKey": "Esc",
     "editor": {
       "general": "Общие",
       "name": "Название",
@@ -37,7 +34,8 @@
       "sizePx": "Размер (px)",
       "lineHeight": "Межстрочный интервал",
       "terminalFont": "Шрифт терминала",
-      "highlightUsing": "Подсветить элементы, использующие {{varName}}"
+      "highlightUsing": "Подсветить элементы, использующие {{varName}}",
+      "resetColor": "Сбросить"
     },
     "groups": {
       "backgrounds": "Фоны",
@@ -87,6 +85,7 @@
       "foreground": "Передний план",
       "cursor": "Курсор",
       "selectionBackground": "Выделение",
+      "selectionForeground": "Выделенный текст",
       "black": "Чёрный",
       "red": "Красный",
       "green": "Зелёный",
@@ -103,6 +102,7 @@
       "brightMagenta": "Ярко-пурпурный",
       "brightCyan": "Ярко-голубой",
       "brightWhite": "Ярко-белый"
-    }
+    },
+    "defaultName": "Моя тема"
   }
 }

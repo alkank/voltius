@@ -22,12 +22,15 @@
       "vaultUnreadableRetry": "Başka bir parola deneyin",
       "chooseHowToUse": "Voltius'u nasıl kullanmak istediğinizi seçin",
       "getStarted": "Başlayın",
-      "getStartedSub": "İşletim sistemi anahtar zinciriyle korunur — parola gerekmez",
+      "getStartedSub": "Hesap gerekmez — ağınızdaki cihazları eşleyin",
+      "getStartedSub_ios": "İşletim sistemi anahtar zinciriyle korunur — parola gerekmez",
       "or": "veya",
       "cloudAccount": "Bulut hesabı",
-      "cloudAccountSub": "Cihazlar arasında eşitleyin — oturum açın veya hesap oluşturun",
+      "cloudAccountSub": "Ücretsiz · cihazlar otomatik eşlenir. Pro bulut eşitleme ve yedek ekler.",
+      "cloudAccountSub_ios": "Cihazlar arasında eşitleyin — oturum açın veya hesap oluşturun",
       "back": "Geri",
-      "signupPrompt": "Cihazlar arasında eşitlemek için bir hesap oluşturun",
+      "signupPrompt": "Cihazlarınızın otomatik eşlenmesi için bir hesap oluşturun",
+      "signupPrompt_ios": "Cihazlar arasında eşitlemek için bir hesap oluşturun",
       "signinPrompt": "Eşitlenmiş verilerinizi geri yüklemek için oturum açın",
       "emailPlaceholder": "E-posta",
       "masterPasswordMinPlaceholder": "Ana parola (en az 8 karakter)",
@@ -43,25 +46,59 @@
       "newHere": "Yeni misiniz? ",
       "e2eeNotice": "Verileriniz uçtan uca şifrelenir — sunucu bunları okuyamaz.",
       "openSource": "Açık kaynak.",
-      "agreeToTerms": "Hesap oluşturarak şunları kabul etmiş olursunuz: ",
-      "and": " ve ",
-      "termsOfService": "Hizmet Şartları",
-      "privacyPolicy": "Gizlilik Politikası",
-      "accountCreatedToast": "Hesap oluşturuldu! Doğrulamak için e-postanızı kontrol edin.",
+      "agreeToTerms": "Hesap oluşturarak <terms>Hizmet Şartları</terms>'nı ve <privacy>Gizlilik Politikası</privacy>'nı kabul etmiş olursunuz.",
+      "accountCreatedToast": "Hesap oluşturuldu. Doğrulamak için e-postanızı kontrol edin.",
       "vaultUnreadableBodyNoPassword": "Bu cihazdaki gizli bilgiler dosyası, bu makinede saklanan anahtarla açılamıyor. Hiçbir şey silinmedi. Boş bir kasayla başlamak için dosyayı kenara ayırın veya aşağıdaki yedeklerden birini geri yükleyin.",
       "vaultSetAsideLocal": "Kenara ayır ve sıfırdan başla",
-      "vaultSetAsideLocalSub": "Bu cihazda bir yedek kopya saklanır"
+      "vaultSetAsideLocalSub": "Bu cihazda bir yedek kopya saklanır",
+      "addAccountLater": "Daha sonra hesap oluşturabilir ve sunucularınızı koruyabilirsiniz.",
+      "errorEmailRequired": "E-posta adresinizi girin",
+      "masterPasswordNote": "Bu parola verilerinizi şifreler. Sıfırlanamaz veya kurtarılamaz, bu yüzden güvenli bir yerde saklayın.",
+      "invitation": {
+        "toggle": "Davet bağlantınız var mı?",
+        "placeholder": "Davet bağlantısı",
+        "use": "Kullan",
+        "checking": "Denetleniyor…",
+        "invalid": "Bu bir davet bağlantısı değil. E-postadaki bağlantının tamamını yapıştırın.",
+        "notFound": "{{server}} üzerinde bu bağlantıyla eşleşen bekleyen davet yok. Sunucu adresini denetleyin ya da yeni bir davet isteyin.",
+        "closedHint": "Bu sunucu yalnızca davetle hesap oluşturur. Davet e-postanızdaki bağlantıyı yapıştırın.",
+        "joining": "{{team}} ekibine katıl",
+        "invitedBy": "{{inviter}} sizi {{role}} olarak davet etti",
+        "invitedAs": "{{role}} olarak davet edildiniz",
+        "remove": "Daveti kaldır",
+        "createAndJoin": "Hesap oluştur ve katıl"
+      }
     },
     "cloudAuthModal": {
       "registerTitle": "Bulut hesabı oluştur",
       "signinTitle": "Bulut hesabında oturum aç",
-      "registerDesc": "Bu kasayı eşitlemek ve bulut özelliklerini açmak için bir hesap oluşturun. Verileriniz uçtan uca şifreli kalır.",
-      "signinDesc": "Eşitlemeyi, abonelikleri, ekip özelliklerini ve paylaşılan kasaları etkinleştirmek için oturum açın.",
+      "registerDesc": "Cihazlarınızı otomatik eşlemek ve bulut özelliklerini açmak için bir hesap oluşturun. Verileriniz uçtan uca şifreli kalır.",
+      "registerDesc_ios": "Bu kasayı eşitlemek ve bulut özelliklerini açmak için bir hesap oluşturun. Verileriniz uçtan uca şifreli kalır.",
+      "signinDesc": "Cihazlarınızı otomatik eşlemek ve bulut eşitlemeyi, abonelikleri, ekip özelliklerini ve paylaşılan kasaları kullanmak için oturum açın.",
+      "signinDesc_ios": "Eşitlemeyi, abonelikleri, ekip özelliklerini ve paylaşılan kasaları etkinleştirmek için oturum açın.",
+      "addTitle": "Başka bir hesap ekle",
+      "addDesc": "Başka bir bulut hesabında oturum açın veya yeni bir hesap oluşturun. Mevcut hesap, geri dönebilmeniz için hesap menüsünde kalır.",
       "createMasterPasswordPlaceholder": "Ana parola oluşturun",
       "confirmMasterPasswordPlaceholder": "Ana parolayı onaylayın",
       "errorPasswordRequired": "Parola gerekli",
-      "errorMinLength4": "En az 4 karakter",
-      "pleaseWait": "Lütfen bekleyin…"
+      "pleaseWait": "Lütfen bekleyin…",
+      "reauthTitle": "Yeniden oturum açın",
+      "reauthDesc": "Bu cihazdaki oturumunuz sona erdi. Yeniden bağlanmak için ana parolanızı girin."
+    },
+    "twoFactor": {
+      "prompt": "Kimlik doğrulama uygulamanızdaki 6 haneli kodu girin.",
+      "recoveryPrompt": "Kurtarma kodlarınızdan birini girin. Her biri bir kez kullanılabilir.",
+      "codePlaceholder": "6 haneli kod",
+      "recoveryPlaceholder": "Kurtarma kodu",
+      "useRecovery": "Kurtarma kodu kullan",
+      "useCode": "Kimlik doğrulama kodu kullan",
+      "verify": "Doğrula",
+      "usePasskey": "Geçiş anahtarı kullan",
+      "passkeyOrCodePrompt": "Geçiş anahtarınızı kullanın veya kimlik doğrulama uygulamanızdaki 6 haneli kodu girin.",
+      "passkeyOrRecoveryPrompt": "Geçiş anahtarınızı kullanın veya kurtarma kodlarınızdan birini girin.",
+      "passkeyWaiting": "Tarayıcınızda devam edin, sonra buraya dönün.",
+      "passkeyDoneTitle": "Tamam",
+      "passkeyDoneBody": "Voltius'a dönün. Bu sekmeyi kapatabilirsiniz."
     },
     "mainPanel": {
       "noVaultSelectedTitle": "Seçili kasa yok",
@@ -71,6 +108,8 @@
         "offlineBody": "Ekip kasaları internet bağlantısı gerektirir. Kişisel kasanızı çevrimdışıyken de kullanabilirsiniz.",
         "forbiddenTitle": "Erişim iptal edildi",
         "forbiddenBody": "Bu ekip kasasına artık erişiminiz yok. Ekip sahibiyle iletişime geçin.",
+        "planLapsedTitle": "Business planının süresi doldu",
+        "planLapsedBody": "Erişiminiz Business izinlerinden geliyordu. Ekip sahibinden Business'ı yenilemesini isteyin.",
         "waitingForAccessTitle": "Erişim bekleniyor",
         "waitingForAccessBody": "Bir ekip kasası sahibinin size erişim vermesi gerekiyor. Bu, bir sahip bir sonraki çevrimiçi olduğunda otomatik olarak gerçekleşir.",
         "waitingForAccessBodyNamed": "Erişim için {{owner}} bekleniyor — bir kez çevrimiçi olması yeterli.",
@@ -80,22 +119,21 @@
         "keyMismatchTitle": "Bu cihaz kasa anahtarını açamıyor",
         "keyMismatchBody": "Anahtarınız sunucuda, ancak bu cihazdaki hesap anahtarları onunla eşleşmiyor. Bu hesabın oturumunu kapatın, ardından ana parolanızla yeniden oturum açın.",
         "errorTitle": "Ekip kasası yüklenemedi",
-        "errorBody": "Bir sorun oluştu. Tekrar deneyin."
+        "errorBody": "Bir sorun oluştu. Tekrar deneyin.",
+        "updateRequiredTitle": "Güncelleme gerekli",
+        "updateRequiredBody": "Bu ekip kasası, bu Voltius sürümünün desteklemediği özellikler kullanıyor. Açmak için Voltius'u güncelleyin."
       },
       "manageSubscription": "Aboneliği yönet →",
-      "tryAgain": "Tekrar deneyin"
+      "tryAgain": "Tekrar deneyin",
+      "checkForUpdates": "Güncellemeleri denetle"
     },
     "newSession": {
-      "searchPlaceholder": "ssh user@host · serial · local …",
+      "searchPlaceholder": "ssh kullanıcı@sunucu · seri · yerel …",
       "sectionQuickConnect": "Hızlı bağlan",
       "sectionRecent": "Son kullanılanlar",
       "sectionLocal": "Yerel",
       "noHostsMatch": "\"{{query}}\" ile eşleşen sunucu yok",
       "noHostsYet": "Henüz sunucu yok",
-      "connectTo": "Bağlan: {{user}}@{{host}}",
-      "portSsh": "Port {{port}} · SSH",
-      "serialConnection": "Seri bağlantı",
-      "configurePortBaud": "Port ve baud hızını yapılandır",
       "localShellFallback": "Yerel kabuk"
     },
     "sidebarAccount": {
@@ -105,7 +143,7 @@
       "modeCloud": "Bulut hesabı",
       "modeLocalPassword": "Yerel · parola korumalı",
       "modeLocal": "Yerel hesap",
-      "lockVault": "Kasayı kilitle",
+      "lockVault": "Şimdi kilitle",
       "reportBug": "Hata bildir…",
       "appearance": "Görünüm",
       "toggleTheme": "Açık / koyu tema",
@@ -119,10 +157,14 @@
       "leaveLocalTitle": "Bu yerel hesap bırakılsın mı?",
       "leaveLocalMessage": "Bu hesabın sunucuları, anahtarları ve kod parçacıkları yalnızca bu makinede saklanır. {{account}} hesabına geçerseniz bunlar silinir ve kurtarılamaz.",
       "leaveLocalConfirm": "Sil ve geçiş yap",
+      "removeTitle": "Bu hesap bu cihazdan kaldırılsın mı?",
+      "removeMessage": "{{account}} hesabının bu cihazda kayıtlı sunucuları, anahtarları ve kod parçacıkları silinir. Eşitlenmemiş olanlar kurtarılamaz.",
+      "removeConfirm": "Kaldır",
       "autoLock": "Otomatik kilit ayarları…",
       "autoLockOff": "Otomatik kilit kapalı",
       "autoLockAfter": "{{duration}} sonra otomatik kilitlenir",
-      "addAccount": "Başka bir hesap ekle…"
+      "addAccount": "Başka bir hesap ekle…",
+      "autoLockImmediately": "Uygulamadan ayrılınca kilitlenir"
     },
     "splash": {
       "steps": {
@@ -137,12 +179,12 @@
       "vaultFound": "Kasa bulundu",
       "connectionsUnavailable": "Bağlantılar kullanılamıyor",
       "sshClient": "SSH istemcisi",
-      "vaultUnreadable": "Kasa okunamıyor"
+      "vaultUnreadable": "Kasa okunamıyor",
+      "keychainHint": "macOS anahtar zinciri parolanızı sorarsa Mac giriş parolanızı girip \"Her Zaman İzin Ver\"i seçin. macOS bunu her Voltius güncellemesinden sonra bir kez sorar."
     },
     "sync": {
       "title": "Eşitleme",
-      "voltiusSync": "Voltius Sync",
-      "gistE2ee": "Gist E2EE",
+      "moreProviders": "Diğer eşitleme sağlayıcıları",
       "syncNow": "Şimdi eşitle",
       "signInForSync": "Bulut eşitlemesi için oturum açın",
       "requiresPro": "Pro gerektirir",
@@ -151,26 +193,113 @@
       "enableArrow": "Etkinleştir →",
       "notConfigured": "Yapılandırılmadı",
       "configureArrow": "Yapılandır →",
+      "paused": "Duraklatıldı",
+      "resumeArrow": "Sürdür →",
+      "pause": "Eşitlemeyi duraklat",
+      "resume": "Eşitlemeyi sürdür",
       "encryptedBlob": "Şifreli veri · {{size}}",
+      "local": {
+        "intro": "Voltius, cihazlarınızın doğrudan eşitlenebilmesi için bu ağdaki cihazlarınızı bulma izni isteyecek.",
+        "introContinue": "Devam",
+        "title": "Yerel ağ",
+        "pause": "Yerel eşitlemeyi duraklat",
+        "resume": "Yerel eşitlemeyi sürdür",
+        "status": {
+          "live_one": "{{count}} cihaza bağlı",
+          "live_other": "{{count}} cihaza bağlı",
+          "syncing": "{{name}} ile eşitleniyor…",
+          "none": "Yakında cihaz yok",
+          "paused": "Yerel eşitleme duraklatıldı",
+          "blocked": "Voltius ağınıza erişemiyor. Sistem Ayarları › Gizlilik ve Güvenlik bölümünden Yerel Ağ erişimine izin verin.",
+          "blockedOther": "Voltius ağınıza erişemiyor. Güvenlik duvarınızın özel ağlarda Voltius'a izin verdiğini kontrol edin.",
+          "blockedNetwork": "Voltius yerel ağınıza erişemiyor. Wi-Fi'ye bağlı olduğunuzu kontrol edin."
+        },
+        "openSettings": "Ayarları aç",
+        "route": {
+          "lan": "Aynı Wi-Fi",
+          "tailscale": "Tailscale",
+          "vpn": "VPN"
+        },
+        "row": {
+          "syncing_one": "{{count}} değişiklik eşitleniyor",
+          "syncing_other": "{{count}} değişiklik eşitleniyor",
+          "behind_one": "Çevrimdışı · {{count}} değişiklik geride",
+          "behind_other": "Çevrimdışı · {{count}} değişiklik geride",
+          "offlineOk": "Çevrimdışı · güncel",
+          "seenBehind_one": "Son görülme {{when}} · {{count}} geride",
+          "seenBehind_other": "Son görülme {{when}} · {{count}} geride",
+          "seenOk": "Son görülme {{when}} · güncel",
+          "paused": "Duraklatıldı",
+          "keyChanged": "Bu cihaz doğrulanamıyor · Doğrulamak için yeniden eşleyin",
+          "moved": "Bir Voltius hesabına taşındı — eşitlemeye devam etmek için orada oturum açın"
+        },
+        "catchUp": "Değişiklikler, iki cihaz bir sonraki sefer çevrimiçi olup birbirine ulaşabildiğinde onlara ulaşır.",
+        "upsell": "Voltius Cloud, cihazlar aynı anda çevrimiçi olmasa bile onları eşitlenmiş tutar.",
+        "tooltip": "Yakındaki cihazlarla senkronize ediliyor",
+        "toast": {
+          "lan": "{{name}} yakında · Wi-Fi üzerinden senkronize ediliyor",
+          "tailscale": "{{name}} yakında · Tailscale üzerinden senkronize ediliyor",
+          "vpn": "{{name}} yakında · VPN üzerinden senkronize ediliyor"
+        },
+        "pair": {
+          "title": "Cihaz eşle",
+          "searching": "Diğer cihazınızda da Cihaz eşle ekranını açın. İkisini de aynı ağda tutun.",
+          "signedInHint": "Diğer cihaz bir Voltius hesabına giriş yapmış mı? O zaman burada aynı hesapla giriş yapın.",
+          "compare": "İki ekranda da bu kodun göründüğünü kontrol edin",
+          "confirm": "Kodlar eşleşiyor",
+          "cancel": "İptal",
+          "peerConfirmed": "{{name}} onayladı",
+          "combine": "İkisini birleştir",
+          "useTheirs": "{{name}} verilerini kullan",
+          "done": "{{name}} ile eşlendi",
+          "close": "Kapat",
+          "tryAgain": "Tekrar dene",
+          "joining": "Eşleniyor…",
+          "hasData": "Bu cihazda zaten veri var. Bunları {{name}} verileriyle birleştirin ya da onun yerine {{name}} verilerini kullanın.",
+          "replaces": "Bu, {{name}} cihazının yerini alır"
+        },
+        "forget": {
+          "label": "Unut",
+          "aria": "{{name}} cihazını unut",
+          "account": "Bu cihazda {{name}} ile yerel ağ üzerinden eşitlemeyi durdur. Tamamen kaldırmak için o cihazda oturumu kapatın.",
+          "group": "{{name}} cihazını cihazlarınızdan kaldır. Sahip olduğu verileri korur ve yeniden eşleyene kadar yeni bir şey almaz.",
+          "keyChanged": "Bu cihazın kimliği değişti. Yeni kimliği bir kodla doğrulamak için yeniden eşleyin; ancak yalnızca bu cihazı tanıyorsanız.",
+          "failed": "{{name}} unutulamadı. Tekrar deneyin."
+        },
+        "leave": {
+          "label": "Bu gruptan ayrıl",
+          "prompt": "Bu cihaz, diğer cihazlarınızla yerel ağ üzerinden eşitlemeyi durdurur. Sahip olduğu verileri korur ve diğerleri onu listelerinden kaldırır. Daha sonra yeniden eşleyebilirsiniz.",
+          "confirm": "Ayrıl",
+          "failed": "Gruptan ayrılınamadı. Tekrar deneyin."
+        }
+      },
       "status": {
         "syncing": "Eşitleniyor…",
         "synced": "Eşitlendi",
         "syncedAt": "Eşitlendi · {{time}}",
         "error": "Eşitleme hatası",
         "errorDetail": "Eşitleme hatası: {{error}}",
-        "offline": "Çevrimdışı",
+        "errorDetailFrom": "Eşitleme hatası · {{source}}: {{error}}",
+        "offline": "Sunucuya ulaşılamıyor",
+        "offlineDetail": "Sunucuya ulaşılamıyor: {{error}}",
         "idle": "Boşta",
         "notConfigured": "Eşitleme yapılandırılmadı",
+        "paused": "Eşitleme duraklatıldı",
         "default": "Eşitleme",
-        "unknown": "bilinmiyor"
-      }
+        "unknown": "bilinmiyor",
+        "partial": "Kısmen eşitlendi",
+        "partialAt": "Kısmen eşitlendi · {{time}}",
+        "partialTooltip": "Kısmen eşitlendi: {{error}}",
+        "partialDetail_one": "{{count}} cihaz eşitlenemedi",
+        "partialDetail_other": "{{count}} cihaz eşitlenemedi"
+      },
+      "showDevices": "Cihazları göster →"
     },
     "titleBar": {
       "sftp": "SFTP",
       "sftpTitle": "Dosya aktarımı (SFTP)",
       "unifiedSplitTab": "Birleşik bölünmüş sekme",
       "splitFallback": "Bölünmüş",
-      "splitCountSuffix": " + {{count}}",
       "ended": "Sona erdi",
       "watching": "İzleniyor",
       "sharingCurrently": "Şu anda paylaşılıyor",
@@ -187,6 +316,28 @@
       "newSession": "Yeni oturum",
       "renameTab": "Sekmeyi yeniden adlandır",
       "closeTab": "Sekmeyi kapat",
+      "stack": {
+        "sessions_one": "{{host}} · {{count}} oturum",
+        "sessions_other": "{{host}} · {{count}} oturum",
+        "heading_one": "<host>{{host}}</host> · {{count}} oturum",
+        "heading_other": "<host>{{host}}</host> · {{count}} oturum",
+        "count_one": "{{count}} oturum",
+        "count_other": "{{count}} oturum",
+        "newSessionOn": "{{host}} üzerinde yeni oturum",
+        "closeAll": "Tümünü kapat ({{count}})",
+        "openInSplit": "Bölünmüş görünümde aç",
+        "inSplit": "bölünmüş görünümde",
+        "pin": "Yan panelde göster",
+        "unpin": "Yan paneli gizle",
+        "status": {
+          "connected": "Bağlı · {{time}}",
+          "connecting": "Bağlanıyor…",
+          "disconnected": "Bağlantı kesildi",
+          "offline": "Ağ bekleniyor",
+          "reconnecting": "Yeniden bağlanıyor…",
+          "error": "Hata · {{message}}"
+        }
+      },
       "splitMenu": {
         "rename": "Sekmeyi yeniden adlandır…",
         "broadcastOn": "Girdiyi tüm bölmelere yayınla",
@@ -198,12 +349,21 @@
         "closeTab_other": "Sekmeyi kapat ({{count}} oturum)"
       },
       "plan": {
-        "proTrial": "Pro deneme — {{daysLeft}} gün kaldı",
-        "teams": "Teams",
-        "business": "Business",
-        "pro": "Pro",
         "upgradeTrial": "Yükselt · 14 gün ücretsiz deneme",
         "upgrade": "Yükselt"
+      },
+      "splitLabelMore": "{{label}} + {{count}}",
+      "lock": {
+        "keptToast_one": "{{count}} kilitli sekme korundu",
+        "keptToast_other": "{{count}} kilitli sekme korundu",
+        "closeBlocked": "Kapatmak için sekmenin kilidini açın",
+        "unlockHint": "Kilitli · kilidi açmak için tıklayın",
+        "lockTab": "Sekmeyi kilitle",
+        "unlockTab": "Sekmenin kilidini aç",
+        "lockPane": "Bölmeyi kilitle",
+        "unlockPane": "Bölmenin kilidini aç",
+        "pinTab": "Sekmeyi sabitle",
+        "unpinTab": "Sekmenin sabitlemesini kaldır"
       }
     },
     "vaultHeader": {
@@ -213,21 +373,17 @@
       "noOneOnline": "kimse çevrimiçi değil",
       "onlineCount": "{{count}} çevrimiçi",
       "inviteMember": "Üye davet et",
-      "jumpTo": "Şuraya git...",
-      "relativeTime": {
-        "justNow": "az önce",
-        "minutesAgo": "{{count}} dk önce",
-        "hoursAgo": "{{count}} sa önce",
-        "daysAgo": "{{count}} gün önce"
-      }
+      "jumpTo": "Şuraya git..."
     },
     "vaultMenu": {
       "share": "Paylaş…",
       "members": "Üyeler",
       "roles": "Roller",
+      "security": "Güvenlik politikası…",
       "rename": "Yeniden adlandır…",
       "makePrivate": "Özel yap…",
       "delete": "Kasayı sil…",
+      "leave": "Kasadan ayrıl…",
       "openMenu": "Kasa menüsü"
     },
     "vaultSidebar": {
@@ -252,8 +408,100 @@
       "checkingForUpdates": "Güncellemeler denetleniyor…",
       "downloadingUpdate": "v{{version}} güncellemesi indiriliyor…",
       "updateReady": "v{{version}} güncellemesi hazır — görüntülemek ve yeniden başlatmak için tıklayın",
+      "updateAvailable": "v{{version}} güncellemesi mevcut — görüntülemek ve indirmek için tıklayın",
       "settings": "Ayarlar",
       "addVault": "Kasa ekle"
+    },
+    "appLock": {
+      "title": "Voltius kilitli",
+      "subtitle": "Oturumlarınız çalışmaya devam ediyor.",
+      "unlockWith": "{{method}} ile kilidi aç",
+      "tryAgain": "Tekrar dene",
+      "systemAuthFailed": "Kimlik doğrulama başarısız.",
+      "wrongPassword": "Ana parola yanlış.",
+      "keychainEmpty": "Kasa anahtarınız artık sistem anahtarlığında değil. Ana parolanızı girin.",
+      "promptReason": "Voltius'un kilidini aç",
+      "sealReason": "Kasa anahtarını bu cihazda tutmak için onaylayın",
+      "bindingLost": "Cihaz girişiniz değişti. Ana parolanızı girin."
+    },
+    "deviceFiles": {
+      "title": "{{name}} dosyalarınızı açmak istiyor",
+      "subtitle": "Cihazınız · {{route}}",
+      "newDevice": "Yeni cihaz",
+      "folders": "Ayarlar › Cihazlar bölümünde paylaştığınız klasörleri görecek: {{folders}}.",
+      "readWrite": "Orada dosyaları kopyalayabilir, yeniden adlandırabilir ve silebilir.",
+      "readOnly": "Oradan dosyaları kopyalayabilir.",
+      "deny": "Reddet",
+      "once": "Bir kez izin ver",
+      "always": "Her zaman izin ver",
+      "sessionToast": "{{name}} dosyalarınızı açtı"
+    },
+    "enroll": {
+      "title": "{{team}} için oturum aç",
+      "subtitle": "{{team}} ekibine katılmak için Voltius hesabı oluşturun veya oturum açın.",
+      "orgServer": "Kuruluşunuzun sunucusu",
+      "domainNote": "{{domains}} e-postanızı kullanın",
+      "approvalNote": "Her isteği bir yönetici onaylar",
+      "domainError": "{{team}} yalnızca {{domains}} e-postalarını kabul ediyor.",
+      "createAndJoin": "Hesap oluştur ve katıl",
+      "signInAndJoin": "Oturum aç ve katıl",
+      "skip": "Şimdilik atla",
+      "continue": "Devam",
+      "currentPasswordPlaceholder": "Mevcut ana parola",
+      "resolving": "Kayıt belirteci denetleniyor…",
+      "confirm": {
+        "title": "{{host}} üzerinde {{team}}",
+        "body": "Yalnızca bu bağlantıyı şirketiniz gönderdiyse devam edin. Voltius oturum açma bilgilerinizi {{host}} adresine gönderecek."
+      },
+      "error": {
+        "title": "Bu kayıt belirteci kullanılamıyor",
+        "gone": "Bu kayıt belirteci iptal edildi veya süresi doldu. Yöneticinizden yenisini isteyin.",
+        "lapsed": "{{team}} planının süresi doldu, bu yüzden kayıt belirteci şu anda çalışmıyor.",
+        "lapsedNoTeam": "Bu ekibin planının süresi doldu, bu yüzden kayıt belirteci şu anda çalışmıyor.",
+        "serverTooOld": "Bu sunucu henüz kayıt belirteçlerini desteklemiyor.",
+        "rateLimited": "Bu ağdan çok fazla deneme yapıldı. Bir dakika sonra tekrar deneyin.",
+        "unreachable": "{{host}} adresine ulaşılamıyor."
+      },
+      "outcome": {
+        "member": {
+          "title": "{{team}} ekibindesiniz",
+          "body": "Ekip kasaları, bir yöneticinin Voltius'u çevrimiçi olduğunda görünür."
+        },
+        "approval": {
+          "title": "İstek gönderildi",
+          "body": "{{team}} yöneticilerinden biri onaylayacak. Bildirim alacaksınız."
+        },
+        "email": {
+          "title": "{{team}} ekibine katılmak için e-postanızı doğrulayın",
+          "body": "{{email}} adresine bir bağlantı gönderdik. Doğrulandığında otomatik olarak katılırsınız.",
+          "resend": "E-postayı yeniden gönder"
+        },
+        "seat": {
+          "title": "{{team}} ekibinde boş koltuk yok",
+          "body": "Bir yöneticiye bildirildi. Bir koltuk boşaldığında katılacaksınız."
+        }
+      },
+      "tokenEntry": {
+        "toggle": "Kayıt belirteciniz mi var?",
+        "placeholder": "vte1.…",
+        "invalid": "Bu bir kayıt belirteci değil."
+      },
+      "localNote": "Bu cihazdaki sunucular yeni hesabın özel kasasına taşınır. {{team}} bunları okuyamaz.",
+      "already": {
+        "title": "Zaten {{team}} içindesiniz",
+        "body": "{{email}} zaten üye."
+      },
+      "join": {
+        "title": "{{team}} ekibine {{email}} olarak katıl",
+        "body": "{{host}} üzerinde oturum açtığınız hesabı kullanır.",
+        "action": "Katıl",
+        "other": "Başka bir hesap kullan"
+      },
+      "replace": {
+        "title": "Bu cihazdaki veriler değiştirilsin mi?",
+        "body": "{{email}} olarak oturum açmak, bu cihazdaki sunucuları, anahtarları ve kod parçacıklarını o hesapta kayıtlı olanlarla değiştirir.",
+        "confirm": "Oturum aç ve değiştir"
+      }
     }
   }
 }

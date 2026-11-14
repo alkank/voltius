@@ -3,7 +3,7 @@ import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useIsAndroid } from "@/utils/platform";
+import { useIsMobile } from "@/utils/platform";
 import { useUIStore } from "@/stores/uiStore";
 
 const LINKS = [
@@ -14,41 +14,56 @@ const LINKS = [
   { icon: "lucide:mail",         key: "contact",       sub: "contact@voltius.app",  href: "mailto:contact@voltius.app" },
 ];
 import {
-  getUpdaterState,
-  onUpdaterStateChange,
+  useUpdaterStatus,
   checkForUpdate,
+  downloadUpdate,
   installUpdate,
+  openDownloadPage,
 } from "@/services/updater";
 import { Toggle } from "@/components/shared/Toggle";
+import { Managed } from "@/components/shared/ManagedNote";
+import { SETTINGS_SURFACE } from "./shared";
 import { useUpdaterPrefStore } from "@/stores/updaterPrefStore";
 import { useToggle } from "@/stores/toggleSettingsStore";
 import LogoBadge from "@/components/layout/LogoBadge";
+import { SettingMark } from "@/components/settings/Setting";
 
 export default function AboutSection() {
   const { t } = useTranslation();
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [updater, setUpdater] = useState(getUpdaterState);
+  const updater = useUpdaterStatus();
   const autoUpdate = useUpdaterPrefStore((s) => s.autoUpdate);
   const setAutoUpdate = useUpdaterPrefStore((s) => s.setAutoUpdate);
   const [changelogPopup, setChangelogPopup] = useToggle("changelog-popup");
-  const isAndroid = useIsAndroid();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
-    return onUpdaterStateChange(() => setUpdater(getUpdaterState()));
   }, []);
 
   const busy = updater.status === "checking" || updater.status === "downloading";
+  const offered = updater.status === "available" || updater.status === "externalUpdate" ? updater : null;
+  const action =
+    updater.status === "ready"
+      ? { icon: "lucide:refresh-cw", label: t("settings.about.restartToUpdate", { version: updater.version }), run: installUpdate }
+      : offered
+        ? {
+            icon: "lucide:download",
+            label: t("settings.about.downloadUpdate", { version: offered.version }),
+            run: offered.status === "available" ? downloadUpdate : openDownloadPage,
+          }
+        : null;
 
   return (
-    <div className="p-6 max-w-lg space-y-6">
+    <div className="p-6 space-y-6">
       {/* App version */}
       <div>
         <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
           {t("settings.about.versionTitle")}
         </h3>
         <div
-          className="rounded-lg px-4 py-3 flex items-center gap-3 bg-(--t-bg-elevated) border border-(--t-border)"
+          data-settings-card
+          className={`${SETTINGS_SURFACE} px-4 py-3 flex items-center gap-3`}
         >
           <LogoBadge size={10} />
           <div>
@@ -60,13 +75,13 @@ export default function AboutSection() {
         </div>
       </div>
 
-      {!isAndroid && (
+      {!isMobile && (
         <div>
           <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
             {t("settings.about.updatesTitle")}
           </h3>
           <div
-            className="rounded-lg px-4 py-3 space-y-3 bg-(--t-bg-elevated) border border-(--t-border)"
+            className={`${SETTINGS_SURFACE} px-4 py-3 space-y-3`}
           >
             {/* Status line */}
             <div className="flex items-center justify-between gap-3">
@@ -79,6 +94,9 @@ export default function AboutSection() {
                 )}
                 {updater.status === "ready" && (
                   <Icon icon="lucide:circle-check" width={14} className="shrink-0 text-(--t-status-connected)" />
+                )}
+                {offered && (
+                  <Icon icon="lucide:sparkles" width={14} className="shrink-0 text-(--t-accent)" />
                 )}
                 {updater.status === "upToDate" && (
                   <Icon icon="lucide:circle-check" width={14} className="shrink-0 text-(--t-status-connected)" />
@@ -101,6 +119,11 @@ export default function AboutSection() {
                 {updater.status === "ready" && (
                   <span className="text-sm text-(--t-text-primary)">
                     {t("settings.about.status.ready", { version: updater.version })}
+                  </span>
+                )}
+                {offered && (
+                  <span className="text-sm text-(--t-text-primary)">
+                    {t("settings.about.status.available", { version: offered.version })}
                   </span>
                 )}
                 {updater.status === "error" && (
@@ -137,21 +160,20 @@ export default function AboutSection() {
               </div>
             )}
 
-            {/* Restart button */}
-            {updater.status === "ready" && (
+            {action && (
               <button
-                onClick={() => installUpdate()}
+                onClick={() => action.run().catch(() => {})}
                 className="btn btn-primary w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium"
               >
-                <Icon icon="lucide:refresh-cw" width={14} />
-                {t("settings.about.restartToUpdate", { version: updater.version })}
+                <Icon icon={action.icon} width={14} />
+                {action.label}
               </button>
             )}
 
             {/* Automatic updates toggle */}
             <div className="flex items-center justify-between gap-3 pt-3 border-t border-(--t-border)">
               <div className="min-w-0">
-                <p className="text-sm text-(--t-text-primary)">{t("settings.about.autoDownload.title")}</p>
+                <p className="text-sm text-(--t-text-primary)"><SettingMark id="updater.autoUpdate">{t("settings.about.autoDownload.title")}</SettingMark></p>
                 <p className="text-xs mt-0.5 text-(--t-text-dim)">
                   {t("settings.about.autoDownload.desc")}
                 </p>
@@ -162,12 +184,12 @@ export default function AboutSection() {
             {/* What's new popup toggle */}
             <div className="flex items-center justify-between gap-3 pt-3 border-t border-(--t-border)">
               <div className="min-w-0">
-                <p className="text-sm text-(--t-text-primary)">{t("settings.about.whatsNew.title")}</p>
+                <p className="text-sm text-(--t-text-primary)"><SettingMark id="toggles.changelog-popup">{t("settings.about.whatsNew.title")}</SettingMark></p>
                 <p className="text-xs mt-0.5 text-(--t-text-dim)">
                   {t("settings.about.whatsNew.desc")}
                 </p>
               </div>
-              <Toggle checked={changelogPopup} onChange={setChangelogPopup} />
+              <Managed policyKey="appSettings.toggles.changelog-popup"><Toggle checked={changelogPopup} onChange={setChangelogPopup} /></Managed>
             </div>
           </div>
         </div>
@@ -177,13 +199,15 @@ export default function AboutSection() {
         <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
           {t("settings.about.linksTitle")}
         </h3>
-        <div className="space-y-2">
+        <div className={isMobile ? undefined : "space-y-2"}>
           {LINKS.map(({ icon, key, sub, href }) => (
             <button
               key={href}
               type="button"
               onClick={() => void openUrl(href)}
-              className="w-full text-left rounded-lg px-4 py-3 flex items-center gap-3 bg-(--t-bg-elevated) border border-(--t-border) transition-colors hover:border-(--t-border-hover)"
+              data-settings-card
+              data-about-link={key}
+              className={`w-full text-left ${SETTINGS_SURFACE} px-4 py-3 flex items-center gap-3 transition-colors hover:border-(--t-border-hover)`}
             >
               <Icon icon={icon} width={20} className="text-(--t-text-primary) shrink-0" />
               <div>
@@ -196,7 +220,8 @@ export default function AboutSection() {
           <button
             type="button"
             onClick={() => useUIStore.getState().openSettings("diagnostics")}
-            className="w-full text-left rounded-lg px-4 py-3 flex items-center gap-3 bg-(--t-bg-elevated) border border-(--t-border) transition-colors hover:border-(--t-border-hover)"
+            data-settings-card
+            className={`w-full text-left ${SETTINGS_SURFACE} px-4 py-3 flex items-center gap-3 transition-colors hover:border-(--t-border-hover)`}
           >
             <Icon icon="lucide:bug" width={20} className="text-(--t-text-primary) shrink-0" />
             <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.about.reportBug")}</p>

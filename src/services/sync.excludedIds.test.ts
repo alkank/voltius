@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, test, expect, beforeEach, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
@@ -7,6 +8,7 @@ import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { useFolderStore } from "@/stores/folderStore";
+import { useFavoriteCommandStore, type FavoriteCommand } from "@/stores/favoriteCommandStore";
 import type { Snippet, Folder } from "@/types";
 
 const snippet = (id: string): Snippet => ({
@@ -33,10 +35,11 @@ const folder = (id: string, objectType: string): Folder => ({
 
 describe("getExcludedObjectIds: snippets", () => {
   beforeEach(() => {
-    useSyncPrefsStore.setState({ syncTypes: {}, excludedIds: [] });
+    useSyncPrefsStore.setState({ syncTypes: {}, excludedIds: [], settingSyncOverrides: { "appSettings.proxy": true } });
     useSnippetStore.setState({ snippets: [snippet("s1"), snippet("s2")] });
     useSnippetFolderStore.setState({ folders: [folder("sf1", "snippet_folder")] });
     useFolderStore.setState({ folders: [folder("f1", "connection_folder")] });
+    useFavoriteCommandStore.setState({ favorites: [] });
   });
 
   test("excludes nothing while every type is synced", () => {
@@ -59,5 +62,36 @@ describe("getExcludedObjectIds: snippets", () => {
   test("switching the folder type off excludes snippet folders as well as host folders", () => {
     useSyncPrefsStore.getState().setSyncType("folder", false);
     expect(getExcludedObjectIds().sort()).toEqual(["f1", "sf1"]);
+  });
+
+  test("favorite commands follow the snippet type", () => {
+    useFavoriteCommandStore.setState({ favorites: [{ id: "fav1" } as FavoriteCommand] });
+    expect(getExcludedObjectIds()).toEqual([]);
+    useSyncPrefsStore.getState().setSyncType("snippet", false);
+    expect(getExcludedObjectIds().sort()).toEqual(["fav1", "s1", "s2"]);
+  });
+});
+
+describe("getExcludedObjectIds: global proxy password", () => {
+  beforeEach(() => {
+    useSyncPrefsStore.setState({ syncTypes: {}, excludedIds: [], syncSettingDomains: {}, settingSyncOverrides: {} });
+    useSnippetStore.setState({ snippets: [] });
+    useSnippetFolderStore.setState({ folders: [] });
+    useFolderStore.setState({ folders: [] });
+  });
+
+  test("withholds the global proxy secret while the proxy setting stays on this device (the default)", () => {
+    expect(getExcludedObjectIds()).toEqual(["__global__"]);
+  });
+
+  test("lets the global proxy secret sync once the proxy setting is synced", () => {
+    useSyncPrefsStore.getState().setSettingSync("appSettings.proxy", true);
+    expect(getExcludedObjectIds()).toEqual([]);
+  });
+
+  test("withholds it again when the whole app-settings domain is off", () => {
+    useSyncPrefsStore.getState().setSettingSync("appSettings.proxy", true);
+    useSyncPrefsStore.getState().setSyncSettingDomain("appSettings", false);
+    expect(getExcludedObjectIds()).toEqual(["__global__"]);
   });
 });

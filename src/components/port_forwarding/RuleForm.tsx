@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAutosave } from "@/hooks/useAutosave";
+import { FieldError, useReportBlocked, useRequiredField, type MobileEditFormProps } from "@/components/shared/fieldValidation";
 import {
   PanelShell, PanelHeader, FormSection,
   formInputClass, formInputStyle, formLabelClass, formLabelStyle,
@@ -10,90 +11,34 @@ import { VaultPicker } from "@/components/shared/VaultPicker";
 import { useDefaultVaultId, resolveVaultIdForSave } from "@/hooks/useWritableVaultIds";
 import { useConnectionStore } from "@/stores/connectionStore";
 import type { PortForwardingRule, PortForwardingRuleFormData, TunnelType } from "@/types";
+import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
+import { describeRoute } from "@/utils/tunnelRoute";
+import { EndpointFields, HopArrow, HopCard, ListenerFields, RouteSummary } from "./RuleRoute";
+import { RuleHosts } from "./RuleHosts";
+import { PORT_FORWARDING_ICON } from "@/lib/conceptIcons";
 
-interface Props {
+interface Props extends MobileEditFormProps {
   rule?: PortForwardingRule | null;
+  initialTunnelType?: TunnelType;
   onSave: (data: PortForwardingRuleFormData) => void | Promise<void>;
   onClose: () => void;
   isDirtyRef?: React.MutableRefObject<boolean>;
+  /** Mobile edit screen: it owns the header (no PanelHeader / VaultPicker). */
+  hideChrome?: boolean;
 }
 
-interface TunnelTypeDef {
-  value: TunnelType;
-  label: string;
-  title: string;
-  summary: string;
-  example: string;
-  diagram: [string, string, string];
+function buildTunnelTypes(t: (key: string) => string): { value: TunnelType; label: string; summary: string }[] {
+  return (["local", "remote", "dynamic"] as const).map((value) => ({
+    value,
+    label: t(`portForwarding.ruleForm.tunnelTypes.${value}.label`),
+    summary: t(`portForwarding.ruleForm.tunnelTypes.${value}.summary`),
+  }));
 }
 
-function buildTunnelTypes(t: (key: string, opts?: Record<string, unknown>) => string): TunnelTypeDef[] {
-  return [
-    {
-      value: "local",
-      label: t("portForwarding.ruleForm.tunnelTypes.local.label"),
-      title: t("portForwarding.ruleForm.tunnelTypes.local.title"),
-      summary: t("portForwarding.ruleForm.tunnelTypes.local.summary"),
-      example: t("portForwarding.ruleForm.tunnelTypes.local.example"),
-      diagram: t("portForwarding.ruleForm.tunnelTypes.local.diagram", { returnObjects: true }) as unknown as [string, string, string],
-    },
-    {
-      value: "remote",
-      label: t("portForwarding.ruleForm.tunnelTypes.remote.label"),
-      title: t("portForwarding.ruleForm.tunnelTypes.remote.title"),
-      summary: t("portForwarding.ruleForm.tunnelTypes.remote.summary"),
-      example: t("portForwarding.ruleForm.tunnelTypes.remote.example"),
-      diagram: t("portForwarding.ruleForm.tunnelTypes.remote.diagram", { returnObjects: true }) as unknown as [string, string, string],
-    },
-    {
-      value: "dynamic",
-      label: t("portForwarding.ruleForm.tunnelTypes.dynamic.label"),
-      title: t("portForwarding.ruleForm.tunnelTypes.dynamic.title"),
-      summary: t("portForwarding.ruleForm.tunnelTypes.dynamic.summary"),
-      example: t("portForwarding.ruleForm.tunnelTypes.dynamic.example"),
-      diagram: t("portForwarding.ruleForm.tunnelTypes.dynamic.diagram", { returnObjects: true }) as unknown as [string, string, string],
-    },
-  ];
-}
+export const RuleForm = withEditAccess("port_forwarding_rule", (p: Props) => p.rule ?? undefined, RuleFormEditor);
 
-function TunnelTypeExplainer({ type, tunnelTypes }: { type: TunnelType; tunnelTypes: TunnelTypeDef[] }) {
-  const details = tunnelTypes.find((t) => t.value === type) ?? tunnelTypes[0];
-
-  return (
-    <div className="rounded-lg border border-(--t-border) bg-(--t-bg-base) p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-(--t-text-primary)">{details.title}</h3>
-          <p className="mt-1 text-xs leading-relaxed text-(--t-text-secondary)">{details.summary}</p>
-        </div>
-        <span className="shrink-0 rounded-full border border-(--t-border) px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--t-text-dim)">
-          {details.label}
-        </span>
-      </div>
-
-      <div className="mt-3 grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1.5 text-center">
-        {details.diagram.map((label, index) => (
-          <div key={label} className="contents">
-            <div className="rounded-md border border-(--t-bg-card-hover) bg-(--t-bg-card) px-2 py-2 text-[10px] font-medium text-(--t-text-primary)">
-              {label}
-            </div>
-            {index < details.diagram.length - 1 && (
-              <span className="text-xs text-(--t-accent)">&rarr;</span>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <p className="mt-3 text-[11px] leading-relaxed text-(--t-text-dim)">{details.example}</p>
-    </div>
-  );
-}
-
-function FieldHelp({ children }: { children: React.ReactNode }) {
-  return <p className="mt-1 text-[10px] leading-relaxed text-(--t-text-dim)">{children}</p>;
-}
-
-export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
+function RuleFormEditor({ rule, initialTunnelType, onSave, onClose, isDirtyRef, hideChrome, revealErrors, onBlockedChange, readOnly }: Props & EditAccessProps) {
   const { t } = useTranslation();
   const TUNNEL_TYPES = useMemo(() => buildTunnelTypes(t), [t]);
   const userEditedRef = useRef(false);
@@ -102,7 +47,7 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
   const { connections: personalConnections, teamConnections } = useConnectionStore();
 
   const [name, setName] = useState(rule?.name ?? "");
-  const [tunnelType, setTunnelType] = useState<TunnelType>(rule?.tunnel_type ?? "local");
+  const [tunnelType, setTunnelType] = useState<TunnelType>(rule?.tunnel_type ?? initialTunnelType ?? "local");
   const [localPort, setLocalPort] = useState(String(rule?.local_port ?? ""));
   const [remotePort, setRemotePort] = useState(String(rule?.remote_port ?? ""));
   const [remoteHost, setRemoteHost] = useState(rule?.remote_host ?? "127.0.0.1");
@@ -112,7 +57,6 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
   const [vaultId, setVaultId] = useState(rule?.vault_id ?? defaultVaultId ?? "personal");
   const [isGlobal, setIsGlobal] = useState((rule?.connection_ids ?? []).length === 0);
   const [connectionIds, setConnectionIds] = useState<string[]>(rule?.connection_ids ?? []);
-  const [showBindWarning, setShowBindWarning] = useState(false);
   const isNew = !rule;
 
   useEffect(() => {
@@ -156,7 +100,7 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
       remote_port: tunnelType === "dynamic" ? 0 : rp,
       remote_host: tunnelType === "local" ? (remoteHost.trim() || "127.0.0.1") : "127.0.0.1",
       tunnel_type: tunnelType,
-      bind_host: tunnelType === "remote" ? (bindHost.trim() || "127.0.0.1") : "127.0.0.1",
+      bind_host: bindHost.trim() || "127.0.0.1",
       target_host: tunnelType === "remote" ? (targetHost.trim() || "127.0.0.1") : "127.0.0.1",
       description: description.trim() || undefined,
       connection_ids: isGlobal ? [] : connectionIds,
@@ -171,9 +115,11 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
     return !!name.trim() && !isNaN(lp) && (tunnelType === "dynamic" || !isNaN(rp));
   }, [localPort, name, remotePort, tunnelType]);
 
-  const { schedule, markDirty: markAutosaveDirty, flushAndClose, saveState } = useAutosave({
+  const { schedule, markDirty: markAutosaveDirty, flushAndClose, saveState, blocked } = useAutosave({
     onSave: () => onSave(buildSaveData()) ?? undefined,
     canSave,
+    readOnly,
+    flushOnUnmount: hideChrome,
   });
 
   function markDirty() {
@@ -185,12 +131,18 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => schedule(), [name, tunnelType, localPort, remotePort, remoteHost, bindHost, targetHost, description, vaultId, isGlobal, connectionIds]);
 
+  useReportBlocked(blocked, onBlockedChange);
+  const nameField = useRequiredField(name, { enabled: !!hideChrome, reveal: revealErrors });
+
   const handleClose = () => flushAndClose(onClose);
 
-  function handleBindHostChange(v: string) {
+  const edit = (set: (value: string) => void) => (value: string) => { markDirty(); set(value); };
+
+  function changeTunnelType(next: TunnelType) {
     markDirty();
-    setBindHost(v);
-    setShowBindWarning(v === "0.0.0.0");
+    // The listener moves to the other machine, so its address does not carry over.
+    if ((next === "remote") !== (tunnelType === "remote")) setBindHost("127.0.0.1");
+    setTunnelType(next);
   }
 
   function toggleConnection(id: string) {
@@ -200,16 +152,26 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
     );
   }
 
+  const onlyConnection = !isGlobal && connectionIds.length === 1 ? connections.find((c) => c.id === connectionIds[0]) : undefined;
+  const sshTarget = onlyConnection
+    ? `${onlyConnection.port === 22 ? "" : `-p ${onlyConnection.port} `}${onlyConnection.username}@${onlyConnection.host}`
+    : t("portForwarding.ruleForm.summary.anyHost");
+  const routeSummary = describeRoute(
+    { tunnelType, localPort, remotePort, bindHost, remoteHost, targetHost },
+    { anyAddress: t("portForwarding.ruleForm.summary.anyAddress"), sshTarget },
+  );
+
   return (
     <PanelShell>
-      <PanelHeader
+      {!hideChrome && <PanelHeader
         title={rule ? t("portForwarding.ruleForm.editRule") : t("portForwarding.ruleForm.newRule")}
-        icon="lucide:network"
-        subtitle={<VaultPicker vaultId={vaultId} onChange={(v) => { vaultPickerTouched.current = true; markDirty(); setVaultId(v); }} />}
+        icon={PORT_FORWARDING_ICON}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={(v) => { vaultPickerTouched.current = true; markDirty(); setVaultId(v); }} disabled={readOnly} />}
         onClose={handleClose}
         saveState={saveState}
-      />
+      />}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <ReadOnlyFields readOnly={readOnly} className="space-y-4">
         <FormSection label={t("portForwarding.ruleForm.general")}>
           <div>
             <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.name")}</label>
@@ -220,7 +182,9 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
               value={name}
               onChange={(e) => { markDirty(); setName(e.target.value); }}
               required
+              {...nameField.fieldProps}
             />
+            <FieldError show={nameField.invalid} />
           </div>
           <div>
             <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.description")}</label>
@@ -235,129 +199,96 @@ export function RuleForm({ rule, onSave, onClose, isDirtyRef }: Props) {
         </FormSection>
 
         <FormSection label={t("portForwarding.ruleForm.type")}>
-          <Pills
-            options={TUNNEL_TYPES}
-            value={tunnelType}
-            onChange={(value) => { markDirty(); setTunnelType(value); }}
-          />
-          <TunnelTypeExplainer type={tunnelType} tunnelTypes={TUNNEL_TYPES} />
+          <Pills options={TUNNEL_TYPES} value={tunnelType} onChange={changeTunnelType} />
+          <p className="mt-2 text-xs leading-relaxed text-(--t-text-secondary)">
+            {TUNNEL_TYPES.find((type) => type.value === tunnelType)?.summary}
+          </p>
         </FormSection>
 
-        {tunnelType === "local" && (
-          <FormSection label={t("portForwarding.ruleForm.ports")}>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.localPortOnComputer")}</label>
-                <input type="number" min={1} max={65535} className={formInputClass} style={formInputStyle}
-                  placeholder="3000" value={localPort}
-                  onChange={(e) => { markDirty(); setLocalPort(e.target.value); }} required />
-                <FieldHelp>{t("portForwarding.ruleForm.localPortHelp", { port: localPort || "3000" })}</FieldHelp>
-              </div>
-              <div>
-                <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.remotePortOnServer")}</label>
-                <input type="number" min={1} max={65535} className={formInputClass} style={formInputStyle}
-                  placeholder="3000" value={remotePort}
-                  onChange={(e) => { markDirty(); setRemotePort(e.target.value); }} required />
-                <FieldHelp>{t("portForwarding.ruleForm.remotePortOnServerHelp")}</FieldHelp>
-              </div>
-            </div>
-            <div className="mt-3">
-              <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.hostOnServer")}</label>
-              <input className={formInputClass} style={formInputStyle} placeholder="127.0.0.1"
-                value={remoteHost} onChange={(e) => { markDirty(); setRemoteHost(e.target.value); }} />
-              <FieldHelp>{t("portForwarding.ruleForm.hostOnServerHelp")}</FieldHelp>
-            </div>
-          </FormSection>
-        )}
-
-        {tunnelType === "remote" && (
-          <FormSection label={t("portForwarding.ruleForm.ports")}>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.remotePortOpenedOnServer")}</label>
-                <input type="number" min={1} max={65535} className={formInputClass} style={formInputStyle}
-                  placeholder="3000" value={remotePort}
-                  onChange={(e) => { markDirty(); setRemotePort(e.target.value); }} required />
-                <FieldHelp>{t("portForwarding.ruleForm.remotePortOpenedOnServerHelp")}</FieldHelp>
-              </div>
-              <div>
-                <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.localPortOnComputer")}</label>
-                <input type="number" min={1} max={65535} className={formInputClass} style={formInputStyle}
-                  placeholder="3000" value={localPort}
-                  onChange={(e) => { markDirty(); setLocalPort(e.target.value); }} required />
-                <FieldHelp>{t("portForwarding.ruleForm.localPortReceivingHelp")}</FieldHelp>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              <div>
-                <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.bindAddressOnServer")}</label>
-                <input className={formInputClass} style={formInputStyle} placeholder="127.0.0.1"
-                  value={bindHost} onChange={(e) => handleBindHostChange(e.target.value)} />
-                <FieldHelp>{t("portForwarding.ruleForm.bindAddressOnServerHelp")}</FieldHelp>
-                {showBindWarning && (
-                  <p className="text-[10px] text-amber-400 mt-1">
-                    {t("portForwarding.ruleForm.bindWarning")}
-                  </p>
-                )}
-              </div>
-              <div>
-                <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.hostOnComputer")}</label>
-                <input className={formInputClass} style={formInputStyle} placeholder="127.0.0.1"
-                  value={targetHost} onChange={(e) => { markDirty(); setTargetHost(e.target.value); }} />
-                <FieldHelp>{t("portForwarding.ruleForm.hostOnComputerHelp")}</FieldHelp>
-              </div>
-            </div>
-          </FormSection>
-        )}
-
-        {tunnelType === "dynamic" && (
-          <FormSection label={t("portForwarding.ruleForm.ports")}>
-            <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.socksProxyPort")}</label>
-            <input type="number" min={1} max={65535} className={formInputClass} style={formInputStyle}
-              placeholder="1080" value={localPort}
-              onChange={(e) => { markDirty(); setLocalPort(e.target.value); }} required />
-            <FieldHelp>{t("portForwarding.ruleForm.socksProxyPortHelp", { port: localPort || "1080" })}</FieldHelp>
-          </FormSection>
-        )}
-
-        <FormSection label={t("portForwarding.ruleForm.scope")}>
-          <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.applyTo")}</label>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => { markDirty(); setIsGlobal(true); }}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                isGlobal ? "bg-(--t-accent) text-white"
-                : "bg-(--t-bg-elevated) text-(--t-text-muted) hover:text-(--t-text-primary)"
-              }`}>
-              {t("portForwarding.ruleForm.allConnections")}
-            </button>
-            <button type="button" onClick={() => { markDirty(); setIsGlobal(false); }}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                !isGlobal ? "bg-(--t-accent) text-white"
-                : "bg-(--t-bg-elevated) text-(--t-text-muted) hover:text-(--t-text-primary)"
-              }`}>
-              {t("portForwarding.ruleForm.specificConnections")}
-            </button>
-          </div>
-          {!isGlobal && (
-            <div className="mt-2 flex flex-col gap-0.5 max-h-40 overflow-y-auto">
-              {connections.length === 0 ? (
-                <p className="text-xs text-(--t-text-dim) py-1">{t("portForwarding.ruleForm.noSavedConnections")}</p>
-              ) : connections.map((conn) => {
-                const checked = connectionIds.includes(conn.id);
-                const label = conn.name?.trim() || `${conn.username}@${conn.host}:${conn.port}`;
-                return (
-                  <label key={conn.id}
-                    className="flex items-center gap-2 px-2 py-1 rounded-sm cursor-pointer hover:bg-(--t-bg-elevated)">
-                    <input type="checkbox" checked={checked} onChange={() => toggleConnection(conn.id)}
-                      className="accent-(--t-accent)" />
-                    <span className="text-xs text-(--t-text-primary) truncate">{label}</span>
-                  </label>
-                );
-              })}
-            </div>
+        <FormSection label={t("portForwarding.ruleForm.route")}>
+          {tunnelType !== "remote" && (
+            <>
+              <HopCard icon="lucide:laptop" title={t("portForwarding.ruleForm.yourComputer")}>
+                <ListenerFields
+                  key={tunnelType}
+                  side="computer"
+                  portLabel={t(`portForwarding.ruleForm.${tunnelType === "dynamic" ? "socksPort" : "listenPort"}`)}
+                  portPlaceholder={tunnelType === "dynamic" ? "1080" : "3000"}
+                  port={localPort}
+                  onPort={edit(setLocalPort)}
+                  bindHost={bindHost}
+                  onBindHost={edit(setBindHost)}
+                />
+              </HopCard>
+              <HopArrow label={t("portForwarding.ruleForm.throughTunnel")} />
+            </>
           )}
-        </FormSection>
 
+          <HopCard icon="lucide:server" title={t("portForwarding.ruleForm.sshServer")}>
+            {tunnelType === "remote" && (
+              <ListenerFields
+                side="server"
+                portLabel={t("portForwarding.ruleForm.listenPort")}
+                portPlaceholder="3000"
+                port={remotePort}
+                onPort={edit(setRemotePort)}
+                bindHost={bindHost}
+                onBindHost={edit(setBindHost)}
+              />
+            )}
+            <div>
+              <label className={formLabelClass} style={formLabelStyle}>{t("portForwarding.ruleForm.applyTo")}</label>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => { markDirty(); setIsGlobal(true); }}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    isGlobal ? "bg-(--t-accent) text-(--t-on-accent)"
+                    : "bg-(--t-bg-elevated) text-(--t-text-muted) hover:text-(--t-text-primary)"
+                  }`}>
+                  {t("portForwarding.ruleForm.allConnections")}
+                </button>
+                <button type="button" onClick={() => { markDirty(); setIsGlobal(false); }}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    !isGlobal ? "bg-(--t-accent) text-(--t-on-accent)"
+                    : "bg-(--t-bg-elevated) text-(--t-text-muted) hover:text-(--t-text-primary)"
+                  }`}>
+                  {t("portForwarding.ruleForm.specificConnections")}
+                </button>
+              </div>
+              {!isGlobal && (
+                <RuleHosts vaultId={saveVaultId} hosts={connections} selected={connectionIds} onToggle={toggleConnection} />
+              )}
+            </div>
+          </HopCard>
+
+          {tunnelType === "local" && (
+            <>
+              <HopArrow label={t("portForwarding.ruleForm.reaches")} />
+              <HopCard icon="lucide:box" title={t("portForwarding.ruleForm.service")}>
+                <EndpointFields host={remoteHost} onHost={edit(setRemoteHost)} port={remotePort} onPort={edit(setRemotePort)} />
+              </HopCard>
+            </>
+          )}
+          {tunnelType === "remote" && (
+            <>
+              <HopArrow label={t("portForwarding.ruleForm.backThroughTunnel")} />
+              <HopCard icon="lucide:laptop" title={t("portForwarding.ruleForm.yourComputer")}>
+                <EndpointFields host={targetHost} onHost={edit(setTargetHost)} port={localPort} onPort={edit(setLocalPort)} />
+              </HopCard>
+            </>
+          )}
+          {tunnelType === "dynamic" && (
+            <>
+              <HopArrow label={t("portForwarding.ruleForm.reaches")} />
+              <HopCard icon="lucide:globe" title={t("portForwarding.ruleForm.anyDestination")}>
+                <p className="text-xs leading-relaxed text-(--t-text-secondary)">{t("portForwarding.ruleForm.anyDestinationHelp")}</p>
+              </HopCard>
+            </>
+          )}
+
+          <RouteSummary summary={routeSummary} />
+        </FormSection>
+        </ReadOnlyFields>
+        {rule && <PermissionsSection objectId={rule.id} vaultId={rule.vault_id} type="port_forwarding_rule" />}
       </div>
     </PanelShell>
   );

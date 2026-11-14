@@ -1,14 +1,45 @@
 import { isMissingUsernameError, isNoAuthError, isPassphraseError } from "@/components/terminal/connection-overlay/utils";
-import type { VaultErrorCode } from "@/services/vaultErrors";
+import { createWakeableSleeps } from "@/lib/wakeableSleep";
+import type { BackendErrorCode } from "@/services/backendErrors";
+import type { IdentityPickIssue } from "@/services/credentialPlan";
 import type { TerminalSession } from "@/types";
 
+/** Failures retrying cannot fix. Wrong credentials stay wrong, and retrying them
+ * only gets the host banned by fail2ban/sshguard. */
+const FINAL_CODES: ReadonlySet<BackendErrorCode> = new Set<BackendErrorCode>([
+  "vault-unreadable",
+  "vault-locked",
+  "ssh-key-rejected",
+  "ssh-password-rejected",
+  "ssh-password-expired",
+  "ssh-prompt-unanswerable",
+  "ssh-no-usable-auth-method",
+  "device-file-access-off",
+  "device-access-denied",
+  "device-approval-timed-out",
+  "device-access-expired",
+  "device-forgotten",
+]);
+
 /**
- * A failure retrying cannot fix: the user must supply something, or the vault cannot
- * be read. Matched on the code, never the message — the message is translated.
+ * A failure retrying cannot fix: the user must supply something, the credentials
+ * were refused, or the vault cannot be read. Matched on the code where there is
+ * one — a coded failure's message is translated.
  */
-export function stopsRetrying(msg?: string, code?: VaultErrorCode): boolean {
-  if (code) return true;
-  return isPassphraseError(msg) || isNoAuthError(msg) || isMissingUsernameError(msg);
+export function stopsRetrying(msg?: string, code?: BackendErrorCode): boolean {
+  if (code && FINAL_CODES.has(code)) return true;
+  return isPassphraseError(msg) || isNoAuthError(msg) || isMissingUsernameError(msg) || isHostKeyRejected(msg) || isAuthRejected(msg);
+}
+
+// Still matched as text for failures that arrive uncoded, e.g. wrapped by a jump host.
+function isAuthRejected(msg?: string): boolean {
+  return !!msg && /authentication rejected|No usable authentication method|can't be answered automatically|requires a new password|FTP login failed/.test(msg);
+}
+
+// Retrying would re-open the host-key prompt the user just turned down, or, where
+// there is no prompt (standalone SFTP), meet the same changed key again.
+function isHostKeyRejected(msg?: string): boolean {
+  return !!msg && (msg.includes("Connection aborted by user.") || msg.includes("Host key changed for"));
 }
 
 export function isSessionEnded(msg?: string): boolean {
@@ -27,8 +58,19 @@ export const FAST_DELAYS_MS: readonly number[] = (() => {
 
 export const SLOW_RETRY_MS = 30_000;
 
+/** A tab that never connected gets these attempts when the network returns, then shows its error again. */
+export const CATCH_UP_DELAYS_MS: readonly number[] = [300, 2000, 5000];
+
 export function retryDelay(step: number): number {
   return FAST_DELAYS_MS[step] ?? SLOW_RETRY_MS;
+}
+
+/** How long a connection must hold before its next drop starts the schedule from the top. */
+export const STABLE_CONNECTION_MS = 30_000;
+
+/** Wait before auto-retry number `attempt` of a failed connect, or null when no retry can fix it. */
+export function connectRetryDelay(attempt: number, msg?: string, code?: BackendErrorCode): number | null {
+  return stopsRetrying(msg, code) ? null : retryDelay(attempt);
 }
 
 export type SessionStatus = "connected" | "connecting" | "disconnected" | "error" | undefined;
@@ -40,18 +82,26 @@ export interface StrandableSession {
   status: SessionStatus;
   everConnected?: boolean;
   errorMessage?: string;
-  errorCode?: VaultErrorCode;
+  errorCode?: BackendErrorCode;
+  identityPick?: IdentityPickIssue;
 }
 
-/** An ssh session that failed to come back for a reason the network returning can fix. */
+/** An ssh tab showing a failure the network returning can fix. */
 export function strandedByNetwork(s: StrandableSession): boolean {
   return (
     s.type === "ssh" &&
     s.status === "error" &&
-    !!s.everConnected &&
+    !s.identityPick &&
     !isSessionEnded(s.errorMessage) &&
     !stopsRetrying(s.errorMessage, s.errorCode)
   );
+}
+
+export interface ReconnectAttemptResult {
+  ok: boolean;
+  errorMessage?: string;
+  errorCode?: BackendErrorCode;
+  identityPick?: IdentityPickIssue;
 }
 
 export interface BackoffStore {
@@ -61,11 +111,11 @@ export interface BackoffStore {
    * so the overlay shows the normal connection steps (TCP step spinning). */
   markReconnecting(sessionId: string): void;
   markConnected(sessionId: string): void;
-  markError(sessionId: string, message: string, code?: VaultErrorCode): void;
+  markError(sessionId: string, message: string, code?: BackendErrorCode, identityPick?: IdentityPickIssue): void;
   setWait(sessionId: string, wait: ReconnectWait | undefined): void;
   online(sessionId: string): boolean;
   /** Silent connect attempt: mutates no visible status, returns the outcome. */
-  attempt(sessionId: string): Promise<{ ok: boolean; errorMessage?: string; errorCode?: VaultErrorCode }>;
+  attempt(sessionId: string): Promise<ReconnectAttemptResult>;
   /** The multiplexer session is gone on the host (attach-only probe failed):
    * tear the session down — retrying can never succeed. */
   sessionEnded(sessionId: string): void;
@@ -80,41 +130,28 @@ export function cancelBackoff(sessionId: string): void {
   wakeBackoff(sessionId);
 }
 
-const wakers = new Map<string, () => void>();
-
-/** Resolves true when woken early by wakeBackoff, false when the delay elapsed. */
-function sleep(sessionId: string, ms: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const wake = () => {
-      clearTimeout(timer);
-      if (wakers.get(sessionId) === wake) wakers.delete(sessionId);
-      resolve(true);
-    };
-    wakers.set(sessionId, wake);
-    timer = setTimeout(() => {
-      if (wakers.get(sessionId) === wake) wakers.delete(sessionId);
-      resolve(false);
-    }, ms);
-  });
-}
+const sleeps = createWakeableSleeps();
 
 /** Cut the current wait of sessionId's loop short and restart its schedule. */
 export function wakeBackoff(sessionId: string): boolean {
-  const wake = wakers.get(sessionId);
-  wake?.();
-  return !!wake;
+  return sleeps.wake(sessionId);
 }
 
 export function sleepingBackoffs(): string[] {
-  return [...wakers.keys()];
+  return sleeps.sleeping();
 }
 
 /** Reconnect a dropped session while holding a single steady "reconnecting"
  * state. Per-attempt failures are silent; it never gives up on a transient
  * failure, and holds off while store.online says the link is down.
- * Terminal outcomes: success → connected, interactive-auth needed → error. */
-export async function runBackoff(sessionId: string, store: BackoffStore): Promise<boolean> {
+ * Terminal outcomes: success → connected, interactive-auth needed → error.
+ * With `catchUp`, only those attempts are made and the last failure is shown. */
+export async function runBackoff(
+  sessionId: string,
+  store: BackoffStore,
+  catchUp?: readonly number[],
+): Promise<boolean> {
+  const delay = (step: number) => (catchUp ? catchUp[step] : retryDelay(step));
   const gen = (generations.get(sessionId) ?? 0) + 1;
   generations.set(sessionId, gen);
   const superseded = () => generations.get(sessionId) !== gen;
@@ -124,7 +161,7 @@ export async function runBackoff(sessionId: string, store: BackoffStore): Promis
 
   let step = 0;
   for (;;) {
-    const woken = await sleep(sessionId, retryDelay(step));
+    const woken = await sleeps.sleep(sessionId, delay(step));
     if (superseded()) return false;
     if (!store.exists(sessionId)) return false;
     // Recovered through another path (e.g. a manual retry) — nothing to do.
@@ -136,7 +173,7 @@ export async function runBackoff(sessionId: string, store: BackoffStore): Promis
       continue;
     }
 
-    const { ok, errorMessage, errorCode } = await store.attempt(sessionId);
+    const { ok, errorMessage, errorCode, identityPick } = await store.attempt(sessionId);
     if (superseded()) return false;
     if (!store.exists(sessionId)) return false;
     if (ok) {
@@ -150,13 +187,17 @@ export async function runBackoff(sessionId: string, store: BackoffStore): Promis
     }
     // Nothing a retry can fix. The code must travel with the message, or the overlay
     // falls back to the generic panel.
-    if (stopsRetrying(errorMessage, errorCode)) {
-      store.markError(sessionId, errorMessage ?? "Authentication required", errorCode);
+    if (identityPick || stopsRetrying(errorMessage, errorCode)) {
+      store.markError(sessionId, errorMessage ?? "Authentication required", errorCode, identityPick);
       return false;
     }
     // Transient failure (host unreachable, refused): stay reconnecting, retry.
     step++;
-    store.setWait(sessionId, retryDelay(step) === SLOW_RETRY_MS ? "slow" : undefined);
+    if (catchUp && step >= catchUp.length) {
+      store.markError(sessionId, errorMessage ?? "", errorCode);
+      return false;
+    }
+    store.setWait(sessionId, !catchUp && retryDelay(step) === SLOW_RETRY_MS ? "slow" : undefined);
   }
 }
 
@@ -168,11 +209,9 @@ export async function runBackoff(sessionId: string, store: BackoffStore): Promis
  * so the steady overlay never flickers and no second loop spawns. The loop owns
  * the 'reconnecting' (connecting) state, so we don't set it here.
  *
- * `remoteExit` means the far side sent an exit-status/exit-signal before the
- * close: the shell ended on purpose (the user typed `exit`), not a dropped
- * link, so the session is over and reconnecting would resurrect it (#180).
- * Persistent sessions are excluded: their wrapper also exits on a tmux/screen
- * detach, so there the attach probe (SESSION_ENDED) stays the judge.
+ * `remoteExit` means the backend saw the shell end on purpose (the user typed
+ * `exit`), not a dropped link, so reconnecting would resurrect it (#180). For a
+ * persistent session it has already checked that the multiplexer session is gone.
  *
  * Auto-reconnect turned off (serial devices that must release the port, #192):
  * the drop just marks the session disconnected, leaving the port free and the
@@ -184,7 +223,6 @@ export function handleSessionClosed(
   sessionId: string,
   deps: {
     status: (id: string) => SessionStatus;
-    persist: (id: string) => boolean;
     autoReconnect: (id: string) => boolean;
     markDisconnected: (id: string) => void;
     reconnectWithBackoff: (id: string) => void;
@@ -193,7 +231,8 @@ export function handleSessionClosed(
   remoteExit = false,
 ): void {
   if (sessionType !== "ssh" && sessionType !== "serial") {
-    deps.markDisconnected(sessionId);
+    if (sessionType === "local" && remoteExit) deps.endSession(sessionId);
+    else deps.markDisconnected(sessionId);
     return;
   }
   if (deps.status(sessionId) !== "connected") return;
@@ -201,7 +240,7 @@ export function handleSessionClosed(
     deps.markDisconnected(sessionId);
     return;
   }
-  if (remoteExit && !deps.persist(sessionId)) {
+  if (remoteExit) {
     deps.endSession(sessionId);
     return;
   }

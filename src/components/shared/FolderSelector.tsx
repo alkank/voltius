@@ -4,12 +4,13 @@ import { useTranslation } from "react-i18next";
 import type { Folder } from "@/types";
 import { PickerSurface } from "./PickerSurface";
 import { PickerDivider, PickerFooterAction, PickerOption, PickerTrigger } from "./pickerParts";
+import { folderIcon } from "@/components/folders/folderAppearance";
 
 interface Props {
   value: string | null;
   folders: Folder[];
   onChange: (id: string | null) => void;
-  onCreateFolder: (name: string) => Promise<string>;
+  onCreateFolder?: (name: string) => Promise<string>;
 }
 
 export default function FolderSelector({ value, folders, onChange, onCreateFolder }: Props) {
@@ -31,7 +32,7 @@ export default function FolderSelector({ value, folders, onChange, onCreateFolde
 
   const handleCreate = async () => {
     const name = newName.trim();
-    if (!name || saving) return;
+    if (!name || saving || !onCreateFolder) return;
     setSaving(true);
     try {
       const id = await onCreateFolder(name);
@@ -48,7 +49,7 @@ export default function FolderSelector({ value, folders, onChange, onCreateFolde
     <div>
       <PickerTrigger
         buttonRef={buttonRef}
-        icon={selected ? "lucide:folder-open" : "lucide:folder"}
+        icon={selected ? folderIcon(selected) : "lucide:folder"}
         label={selected ? selected.name : t("shared.folderSelector.noFolder")}
         filled={!!selected}
         open={open}
@@ -69,7 +70,7 @@ export default function FolderSelector({ value, folders, onChange, onCreateFolde
         {folders.map((folder) => (
           <PickerOption
             key={folder.id}
-            icon="lucide:folder"
+            icon={folderIcon(folder)}
             label={folder.name}
             labelTone="primary"
             active={value === folder.id}
@@ -77,9 +78,9 @@ export default function FolderSelector({ value, folders, onChange, onCreateFolde
           />
         ))}
 
-        <PickerDivider edge />
+        {onCreateFolder && <PickerDivider edge />}
 
-        {creating ? (
+        {onCreateFolder && (creating ? (
           <div className="flex items-center gap-1.5 px-2 py-1.5">
             <Icon icon="lucide:folder-plus" width={13} className="text-(--t-text-dim) shrink-0" />
             <input
@@ -92,7 +93,7 @@ export default function FolderSelector({ value, folders, onChange, onCreateFolde
                 if (e.key === "Escape") setCreating(false);
               }}
               placeholder={t("shared.folderSelector.namePlaceholder")}
-              className="flex-1 bg-transparent outline-hidden text-xs text-(--t-text-primary) placeholder:text-(--t-text-dim) min-w-0"
+              className="flex-1 bg-transparent outline-hidden text-xs text-(--t-text-primary) min-w-0"
             />
             <button
               type="button"
@@ -121,7 +122,7 @@ export default function FolderSelector({ value, folders, onChange, onCreateFolde
             label={t("shared.folderSelector.newFolder")}
             onClick={() => setCreating(true)}
           />
-        )}
+        ))}
       </PickerSurface>
     </div>
   );

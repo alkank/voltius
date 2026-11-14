@@ -1,15 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { buildManifest, manifestSignature, type LiveSessionManifest } from "@/stores/liveSessionManifestCore";
 import { useWorkspaceSnapshotStore, readWorkspaceSnapshot } from "@/stores/workspaceSnapshotStore";
 import { useCrossDeviceSessionsStore } from "@/stores/crossDeviceSessionsStore";
 import { getToggle } from "@/stores/toggleSettingsStore";
-import { scheduleSync, syncNow } from "@/services/sync";
+import { scheduleSync, syncInBackground } from "@/services/sync";
 
 let deviceNameCache: string | null = null;
 
 async function getDeviceName(): Promise<string> {
-  if (deviceNameCache) return deviceNameCache;
-  deviceNameCache = await invoke<string>("device_hostname").catch(() => "Unknown device");
+  if (deviceNameCache !== null) return deviceNameCache;
+  // Empty when unknown: each viewer names it in their own language.
+  deviceNameCache = await invoke<string>("device_hostname").catch(() => "");
   return deviceNameCache;
 }
 
@@ -42,7 +43,7 @@ async function writeManifest(immediate: boolean): Promise<void> {
   if (sig === lastSignature) return;
   lastSignature = sig;
   await invoke("live_sessions_save", { state: JSON.stringify(manifest) }).catch(() => {});
-  if (immediate) syncNow(true).catch(() => {});
+  if (immediate) syncInBackground(true).catch(() => {});
   else scheduleSync();
 }
 

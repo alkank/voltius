@@ -11,6 +11,7 @@
       "description": "Tek bir arşivde paketlenip karşı tarafta açılır — dosyaları tek tek aktarmaya göre çok daha az gidiş dönüş gerekir.",
       "howItWorks": "Nasıl çalışır?"
     },
+    "perFileBadge": { "reason": "Dosya dosya: bu sunucu tar akışı yapamıyor" },
     "conflict": {
       "title": "Dosya zaten var",
       "conflictOf": "Çakışma {{number}} / {{total}}",
@@ -36,6 +37,7 @@
         "fileName": "Dosya adı"
       },
       "emptyDirectory": "Dizin boş",
+      "refreshFailed": "Yenilenemedi: {{reason}}",
       "selection": {
         "selected": "{{count}} seçili",
         "clear": "Temizle"
@@ -56,6 +58,7 @@
         "delete_other": "{{count}} öğeyi sil",
         "copyPath_one": "Yolu kopyala",
         "copyPath_other": "{{count}} yolu kopyala",
+        "permissions": "İzinler…",
         "compress": ".tar.gz olarak sıkıştır",
         "extractHere": "Buraya çıkar",
         "openInTerminal": "Terminalde aç",
@@ -75,6 +78,29 @@
         "modified": "Değiştirilme",
         "permissions": "İzinler"
       }
+    },
+    "permissions": {
+      "items_one": "{{count}} öğe",
+      "items_other": "{{count}} öğe",
+      "bit": "{{who}}: {{what}}",
+      "read": "Okuma",
+      "write": "Yazma",
+      "execute": "Çalıştırma",
+      "owner": "Sahip",
+      "group": "Grup",
+      "others": "Diğerleri",
+      "octal": "Sekizlik mod",
+      "uid": "uid {{id}}",
+      "gid": "gid {{id}}",
+      "mixed": "karışık",
+      "noShell": "Sahibi veya bir klasörün içeriğini değiştirmek için ana makinede bir POSIX kabuğu gerekir.",
+      "recurse": "Alt öğeler dahil",
+      "scopeAll": "Tümü",
+      "scopeFiles": "Dosyalar",
+      "scopeDirs": "Klasörler",
+      "apply": "Uygula",
+      "applyItems_one": "{{count}} öğeye uygula",
+      "applyItems_other": "{{count}} öğeye uygula"
     },
     "side": {
       "chooseHost": "Sunucu seç…",
@@ -105,26 +131,32 @@
       "compareHint": "Karşılaştırmak için her iki taraftan birer dosya seçin",
       "selectFilesToUpload": "Yüklenecek dosyaları seçin",
       "downloadToFolder": "Klasöre indir",
-      "connectionLost": "Bağlantı koptu"
+      "connectionLost": "Bağlantı koptu",
+      "moveSourceNotDeleted": "Kopyalandı, ancak {{names}} için orijinal silinemedi: {{error}}"
     },
     "queue": {
       "title": "Aktarımlar",
       "transferCount_one": "{{count}} aktarım",
       "transferCount_other": "{{count}} aktarım",
-      "activeSuffix_one": " · {{count}} etkin",
-      "activeSuffix_other": " · {{count}} etkin",
       "combinedThroughput": "Toplam aktarım hızı",
       "cancelAll": "Tüm aktarımları iptal et",
       "clearFinished": "Tamamlanan aktarımları temizle",
       "cancelTransfer": "Aktarımı iptal et",
       "retryTransfer": "Aktarımı tekrar dene",
+      "waiting": "Bağlantı bekleniyor…",
+      "resumedAt": "{{size}} noktasından devam edildi",
+      "resumedTooltip": "Kesilen aktarım kaldığı yerden sürdürüldü",
+      "skipped_one": "Bu sistemin saklayamadığı {{count}} ad atlandı:",
+      "skipped_other": "Bu sistemin saklayamadığı {{count}} ad atlandı:",
       "mcpTooltip": "Başlatan: {{client}}",
       "mcpTooltipUnknown": "Bir MCP istemcisi tarafından başlatıldı",
       "status": {
         "done": "Tamamlandı",
         "error": "Hata",
         "cancelled": "İptal edildi"
-      }
+      },
+      "transferCountActive_one": "{{transfers}} · {{count}} etkin",
+      "transferCountActive_other": "{{transfers}} · {{count}} etkin"
     },
     "editor": {
       "common": {
@@ -139,7 +171,9 @@
         "loading": "Farklar yükleniyor…",
         "previousChange": "Önceki değişiklik",
         "nextChange": "Sonraki değişiklik",
-        "saveErrorLine": "{{label}}: {{msg}}"
+        "saveErrorLine": "{{label}}: {{msg}}",
+        "applyToRight": "Sağa uygula (→)",
+        "applyToLeft": "Sola uygula (←)"
       },
       "tab": {
         "autoSave": "Otomatik kaydet",
@@ -150,15 +184,41 @@
           "binary": "İkili dosya — düzenlenemez. Bunun yerine dosyayı indirin."
         }
       },
+      "image": {
+        "fit": "Sığdır",
+        "toggleFit": "Sekmeye sığdır veya gerçek boyutu göster (0 / 1)",
+        "zoomIn": "Yakınlaştır (+)",
+        "zoomOut": "Uzaklaştır (−)",
+        "copy": "Görseli kopyala",
+        "copied": "Görsel panoya kopyalandı",
+        "copyFailed": "Görsel kopyalanamadı: {{error}}",
+        "download": "İndir",
+        "tooLarge": "Bu görsel {{size}}, {{limit}} önizleme sınırının üzerinde.",
+        "previewAnyway": "Yine de önizle"
+      },
       "tabStrip": {
         "filesTab": "Dosyalar",
         "pendingNameFallback": "bu dosya",
         "pendingNameDiffFallback": "bu karşılaştırma",
-        "diffTitlePrefix": "fark: {{name}}",
         "discardTitle": "Kaydedilmemiş değişiklikler atılsın mı?",
         "discardMessage": "\"{{name}}\" içinde kaydedilmemiş değişiklikler var. Bu sekme kapatılırsa değişiklikler kaybolur.",
-        "discard": "Değişiklikleri at"
+        "discard": "Değişiklikleri at",
+        "diffTitle": "fark: {{name}}"
       }
+    },
+    "myDevices": {
+      "title": "Cihazlarım",
+      "fileAccessOff": "Bu cihazda dosya erişimi kapalı",
+      "needsAccount": "Cihazlarınız arasında dosya erişimi için bir Voltius hesabı gerekir.",
+      "offlineSeen": "Çevrimdışı · son görülme {{ago}}",
+      "offline": "Çevrimdışı",
+      "routeChip": "{{route}} · {{ms}} ms",
+      "readOnlyBadge": "Salt okunur",
+      "readOnlyShare": "{{name}} bu klasörleri salt okunur olarak paylaşıyor."
+    },
+    "connect": {
+      "deviceDialing": "Bağlanıyor…",
+      "deviceApproval": "{{name}} üzerinde onay bekleniyor…"
     }
   }
 }

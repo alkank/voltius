@@ -1,15 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { SLOW_RETRY_MS, type ReconnectWait } from "@/stores/reconnectBackoffCore";
-
-export function ConnectionLostPanel() {
-  const { t } = useTranslation();
-  return (
-    <div className="w-full p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-center">
-      <p className="text-yellow-400 text-sm font-medium">{t("terminal.overlay.connectionLost.title")}</p>
-      <p className="text-text-muted text-xs mt-1">{t("terminal.overlay.connectionLost.subtitle")}</p>
-    </div>
-  );
-}
+import { useDismissBlocked } from "./dismissBlocked";
 
 function PanelActions({
   retryLabel,
@@ -21,6 +12,7 @@ function PanelActions({
   onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
+  const dismissBlocked = useDismissBlocked();
   return (
     <div className="mt-2 flex items-center gap-3 justify-center">
       {onRetry && (
@@ -33,7 +25,9 @@ function PanelActions({
       )}
       <button
         onClick={onDismiss}
-        className="text-xs text-text-muted hover:text-text-primary transition-colors underline"
+        disabled={!!dismissBlocked}
+        title={dismissBlocked}
+        className="text-xs text-text-muted hover:text-text-primary transition-colors underline disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {t("terminal.overlay.connectionError.dismiss")}
       </button>
@@ -68,10 +62,12 @@ export function ReconnectWaitPanel({
 
 export function ConnectionErrorPanel({
   errorMessage,
+  retryLabel,
   onRetry,
   onDismiss,
 }: {
   errorMessage?: string;
+  retryLabel?: string;
   onRetry?: () => void;
   onDismiss?: () => void;
 }) {
@@ -83,7 +79,7 @@ export function ConnectionErrorPanel({
         <p className="text-status-error/80 text-xs mt-1 wrap-break-word">{errorMessage}</p>
       )}
       <PanelActions
-        retryLabel={t("terminal.overlay.connectionError.retry")}
+        retryLabel={retryLabel ?? t("terminal.overlay.connectionError.retry")}
         onRetry={onRetry}
         onDismiss={onDismiss}
       />

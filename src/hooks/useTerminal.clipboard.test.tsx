@@ -6,12 +6,12 @@ import { keyHandlers } from "@/hooks/__fixtures__/fakeXterm";
 vi.mock("@xterm/xterm", async () => ({ Terminal: (await import("@/hooks/__fixtures__/fakeXterm")).FakeTerminal }));
 vi.mock("@xterm/addon-fit", async () => ({ FitAddon: (await import("@/hooks/__fixtures__/fakeXterm")).FakeFitAddon }));
 vi.mock("@xterm/addon-webgl", async () => ({ WebglAddon: (await import("@/hooks/__fixtures__/fakeXterm")).FakeWebglAddon }));
-vi.mock("@xterm/addon-web-links", async () => ({ WebLinksAddon: (await import("@/hooks/__fixtures__/fakeXterm")).FakeWebLinksAddon }));
 vi.mock("@xterm/addon-search", async () => ({ SearchAddon: (await import("@/hooks/__fixtures__/fakeXterm")).FakeSearchAddon }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@/services/ssh", () => ({
   sshSendInput: vi.fn(), sshResize: vi.fn(),
   onSshOutput: vi.fn(async () => () => {}), onSshClosed: vi.fn(async () => () => {}), onSshCwd: vi.fn(async () => () => {}),
+  onSshMuxMode: vi.fn(async () => () => {}), sshSetTerminalColors: vi.fn(async () => {}), sshSetOutputPaused: vi.fn(async () => {}),
 }));
 vi.mock("@/services/local", () => ({
   localSendInput: vi.fn(), localResize: vi.fn(), localReady: vi.fn(async () => {}),

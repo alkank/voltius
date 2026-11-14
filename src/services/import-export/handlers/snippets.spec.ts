@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import type { Snippet, SnippetFormData } from "@/types";
 import type { ExportBundle, SnippetExport } from "../formats";
@@ -23,9 +24,9 @@ function fakeCtx(over: Partial<ImportCtx> = {}) {
   const ctx = {
     vault_id: "personal", tag: "", skipDupes: false,
     existingConnections: [], existingKeys: [], existingIdentities: [],
-    existingSnippets: [], existingPfRules: [],
+    existingSnippets: [], existingPfRules: [], existingFolders: [],
     folderEidMap: new Map(), snippetFolderEidMap: new Map(), keyEidMap: new Map(),
-    identityEidMap: new Map(), connectionEidMap: new Map(),
+    identityEidMap: new Map(), connectionEidMap: new Map(), snippetEidMap: new Map(),
     stores: {
       createSnippet: async (data: SnippetFormData) => {
         const s = { ...data, id: `new-${n++}`, vault_id: data.vault_id ?? "personal" } as Snippet;
@@ -109,7 +110,7 @@ function localSnippet(over: Partial<Snippet> & { id: string; name: string }): Sn
   };
 }
 
-const exportCtx = { snippetFolderEidMap: new Map() } as never;
+const exportCtx = { snippetFolderEidMap: new Map(), snippetEidMap: new Map() } as never;
 
 describe("snippetsHandler.buildExports — nested calls", () => {
   it("rewrites a nested call to the target's _eid instead of a machine-local id", async () => {

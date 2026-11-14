@@ -4,7 +4,6 @@ import { Icon } from "@iconify/react";
 import { buildDeepLink } from "@/services/deepLinkUrl";
 import { userFacingReason } from "@/services/errorReason";
 import { runTeamAction } from "@/services/teamActionFeedback";
-import { writeClipboard } from "@/utils/clipboard";
 import {
   createJoinGrant,
   isGrantableRole,
@@ -14,10 +13,13 @@ import {
   type JoinGrant,
 } from "@/services/teamJoinGrants";
 import { clampMaxUses, clampTtlSecs, expiresIn, TTL_PRESETS, USES_PRESETS, usesRemaining } from "./joinLinkModel";
-import { roleChipColors } from "@/components/members/roleChips";
+import { roleChipColors, roleLabel } from "@/components/members/roleChips";
+import { CopySecretField } from "@/components/shared/CopySecretField";
 import { ChoiceChip } from "./ChoiceChip";
+import { EnrolmentSection } from "./EnrolmentSection";
 import type { TeamRole } from "@/stores/teamStore";
 import { assignableRoles } from "./vaultShareModel";
+import { formatDateTime } from "@/utils/localeFormat";
 
 interface Props {
   teamId: string;
@@ -34,7 +36,6 @@ export function JoinLinksTab({ teamId, roles, canMint }: Props) {
 
   // In memory only: a live join secret must not outlive the tab.
   const [freshLinks, setFreshLinks] = useState<Record<string, string>>({});
-  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const options = assignableRoles(roles).filter((r) => isGrantableRole(r.name));
   const [role, setRole] = useState<GrantableRole | null>(null);
@@ -101,12 +102,6 @@ export function JoinLinksTab({ teamId, roles, canMint }: Props) {
     }
   };
 
-  const copy = async (grantId: string, url: string) => {
-    await writeClipboard(url);
-    setCopiedId(grantId);
-    setTimeout(() => setCopiedId((id) => (id === grantId ? null : id)), 2000);
-  };
-
   return (
     <div className="flex flex-col gap-4">
       {/* The single most important sentence on this tab. */}
@@ -140,7 +135,7 @@ export function JoinLinksTab({ teamId, roles, canMint }: Props) {
                 </span>
                 <span
                   className="text-[11px] text-(--t-text-secondary) flex-1 min-w-0"
-                  title={new Date(grant.expires_at).toLocaleString()}
+                  title={formatDateTime(grant.expires_at)}
                 >
                   {t("members.joinLinks.usesLeft", {
                     count: usesRemaining(grant),
@@ -164,21 +159,7 @@ export function JoinLinksTab({ teamId, roles, canMint }: Props) {
               </div>
 
               {url ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    readOnly
-                    value={url}
-                    onFocus={(e) => e.currentTarget.select()}
-                    className="flex-1 min-w-0 px-2 py-1 rounded-md bg-(--t-bg-elevated) border border-(--t-border) text-[10px] text-(--t-text-secondary) outline-none"
-                  />
-                  <button
-                    onClick={() => void copy(grant.id, url)}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-medium shrink-0"
-                    style={{ background: "var(--t-accent)", color: "var(--t-on-accent, #fff)" }}
-                  >
-                    {copiedId === grant.id ? t("members.joinLinks.copied") : t("members.joinLinks.copy")}
-                  </button>
-                </div>
+                <CopySecretField value={url} />
               ) : (
                 // Only the hash is stored, so there is nothing to copy.
                 <span className="text-[10px] text-(--t-text-dim)">{t("members.joinLinks.secretNotRecoverable")}</span>
@@ -212,7 +193,7 @@ export function JoinLinksTab({ teamId, roles, canMint }: Props) {
               {options.map((r) => (
                 <ChoiceChip
                   key={r.id}
-                  label={r.name}
+                  label={roleLabel(t, r.name)}
                   capitalize
                   selected={r.name === role}
                   onClick={() => setRole(r.name as GrantableRole)}
@@ -270,6 +251,8 @@ export function JoinLinksTab({ teamId, roles, canMint }: Props) {
           <p className="text-[10px] text-(--t-text-dim)">{t("members.joinLinks.shownOnce")}</p>
         </div>
       )}
+
+      {canMint && <EnrolmentSection teamId={teamId} roles={roles} />}
     </div>
   );
 }

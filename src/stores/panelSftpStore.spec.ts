@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const invoke = vi.fn();
@@ -51,5 +52,15 @@ describe("panelSftpStore.ensureConnected", () => {
     expect(sftpConnect).not.toHaveBeenCalled();
     const st = usePanelSftpStore.getState().sessions["sess1"];
     expect(st.tag === "connected" && st.sftpId).toBe("sftp-2");
+  });
+
+  it("keeps the initial directory as homeCwd after navigating away", async () => {
+    sftpOpen.mockResolvedValue("sftp-3");
+    sftpCanonicalize.mockResolvedValue("/home/u");
+    await usePanelSftpStore.getState().ensureConnected(sshSession());
+    usePanelSftpStore.getState().setCwd("sess1", "/etc");
+    const st = usePanelSftpStore.getState().sessions["sess1"];
+    expect(st.tag === "connected" && st.cwd).toBe("/etc");
+    expect(st.tag === "connected" && st.homeCwd).toBe("/home/u");
   });
 });

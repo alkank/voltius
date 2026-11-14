@@ -1,6 +1,9 @@
 import type { HostChoice } from "@/components/shared/HostPickerPanel";
 import type { McpOwner } from "@/stores/mcpOwnershipStore";
-import type { VaultErrorCode } from "@/services/vaultErrors";
+import type { BackendErrorCode } from "@/services/backendErrors";
+import { formatDate, formatDateTime, formatTime, HOUR_MINUTE, MONTH_DAY, SHORT_DATE } from "@/utils/localeFormat";
+import type { LanRoute } from "@/services/lanSyncDevices";
+import type { Accel } from "./tarSupport";
 export type { HostChoice };
 
 export type FileEntry = {
@@ -17,14 +20,16 @@ export const DEFAULT_VISIBLE_COLS: VisibleCols = { size: true, modified: true, p
 export type ColumnWidths = { name: number; size: number; modified: number; permissions: number };
 export type FileColumn = keyof ColumnWidths;
 
-export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = { name: 260, size: 72, modified: 128, permissions: 88 };
+export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = { name: 260, size: 88, modified: 128, permissions: 88 };
+/** The size default before it fitted "1023.9 KB"; a persisted width still equal to it was never resized. */
+export const LEGACY_DEFAULT_SIZE_WIDTH = 72;
 export const COLUMN_MIN_WIDTHS: ColumnWidths = { name: 120, size: 56, modified: 96, permissions: 72 };
 
 /** Gap between columns, in px — must match the `gap-2` on the header and row grids. */
 const COLUMN_GAP = 8;
 
-export function visibleDataColumns(isLocal: boolean, visibleCols: VisibleCols): FileColumn[] {
-  return (["size", "modified", ...(!isLocal ? ["permissions"] : [])] as FileColumn[])
+export function visibleDataColumns(withPermissions: boolean, visibleCols: VisibleCols): FileColumn[] {
+  return (["size", "modified", ...(withPermissions ? ["permissions"] : [])] as FileColumn[])
     .filter((col) => visibleCols[col as keyof VisibleCols]);
 }
 
@@ -32,8 +37,9 @@ export function visibleDataColumns(isLocal: boolean, visibleCols: VisibleCols): 
  *  file row lay themselves out from this same grid template, so they cannot
  *  drift apart. `minWidth` is what makes the pane scroll horizontally instead of
  *  clipping the right-hand columns (and their resize handles) out of reach. */
-export function columnGrid(isLocal: boolean, visibleCols: VisibleCols, colWidths: ColumnWidths): { template: string; minWidth: number } {
-  const dataColumns = visibleDataColumns(isLocal, visibleCols);
+export function columnGrid(withPermissions: boolean, visibleCols: VisibleCols, colWidths: ColumnWidths): { template: string; minWidth: number } {
+  const dataColumns = visibleDataColumns(withPermissions, visibleCols);
+  if (dataColumns.length === 0) return { template: "minmax(0, 1fr)", minWidth: 0 };
   const template = [`minmax(${colWidths.name}px, 1fr)`, ...dataColumns.map((col) => `${colWidths[col]}px`)].join(" ");
   const minWidth = dataColumns.reduce((sum, col) => sum + colWidths[col] + COLUMN_GAP, colWidths.name);
   return { template, minWidth };
@@ -42,8 +48,8 @@ export function columnGrid(isLocal: boolean, visibleCols: VisibleCols, colWidths
 export type SidePhase =
   | { tag: "picking" }
   | { tag: "connecting"; connectId: string; host: HostChoice }
-  | { tag: "connected"; sftpId: string | null; cwd: string; selected: FileEntry[] }
-  | { tag: "error"; message: string; errorCode?: VaultErrorCode; host?: HostChoice };
+  | { tag: "connected"; sftpId: string | null; cwd: string; selected: FileEntry[]; route?: LanRoute; rttMs?: number; readOnly?: boolean }
+  | { tag: "error"; message: string; errorCode?: BackendErrorCode; final?: boolean; host?: HostChoice; lostSftpId?: string };
 
 export type Transfer = {
   id: string; label: string; direction: "→" | "←";
@@ -51,7 +57,12 @@ export type Transfer = {
   speed?: number;   // bytes/sec
   eta?: number;     // seconds remaining
   status: "running" | "done" | "cancelled" | "error"; error?: string;
-  accelerated?: boolean; // ran via tar acceleration
+  skipped?: string[]; // remote paths refused as local file names
+  accel?: Accel;
+  /** Bytes already in place when the latest resume began. */
+  resumedAt?: number;
+  /** Link down; the backend is waiting for the session to reconnect. */
+  waiting?: boolean;
   /** Set when an MCP client started this transfer; absent for the user's own.
    *  Deliberately NOT mcpOwnershipStore: that store's keepOnly() reaper filters
    *  its records against live SESSION ids and would sweep every transfer, and
@@ -99,16 +110,11 @@ export function formatPermissions(mode: number): string {
   );
 }
 
-export function formatDate(ts: number): string {
+/** A file's mtime (unix seconds), `ls -l` style: time this year, year otherwise. */
+export function formatModified(ts: number, now = new Date()): string {
   const d = new Date(ts * 1000);
-  const now = new Date();
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const mon = months[d.getMonth()];
-  const day = String(d.getDate()).padStart(2, " ");
-  if (d.getFullYear() === now.getFullYear()) {
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${mon} ${day} ${hh}:${mm}`;
-  }
-  return `${mon} ${day} ${d.getFullYear()}`;
+  if (d.toDateString() === now.toDateString()) return formatTime(d, HOUR_MINUTE);
+  return formatDate(d, d.getFullYear() === now.getFullYear() ? MONTH_DAY : SHORT_DATE);
 }
+
+export const formatModifiedFull = (ts: number): string => formatDateTime(new Date(ts * 1000));

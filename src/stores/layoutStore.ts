@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { mergeTitlebarItems, placeTitlebarItem } from "@/utils/titlebarOrder";
+import { gatherGroups, mergeTitlebarItems, placeTitlebarBlock, placeTitlebarItem, replaceKey } from "@/utils/titlebarOrder";
 import { normalizeTabTitle } from "@/utils/sessionLabel";
 
 export type SplitDirection = "h" | "v";
@@ -41,16 +41,18 @@ interface LayoutStore {
   splitTabs: SplitTab[];
   activeSplitTabId: string | null;
   titlebarOrder: string[];
+  pinnedKeys: string[];
 
+  setPinned(key: string, pinned: boolean): void;
   openSplitTab(sessionId?: string): void;
   setSplitTabActive(active: boolean): void;
   activateSplitTab(tabId: string): void;
   closeSplitTab(tabId: string): void;
   /** Name a split tab. A blank name clears it, so the label derives again. */
   renameSplitTab(tabId: string, name: string | null): void;
-  syncTitlebarOrder(visibleKeys: string[]): void;
+  syncTitlebarOrder(visibleKeys: string[], groupOf?: (key: string) => string | undefined): void;
   placeTitlebarItem(itemKey: string, targetKey: string | null, placement: "before" | "after"): void;
-  reorderTitlebarItem(sourceKey: string, targetKey: string | null, placement: "before" | "after"): void;
+  reorderTitlebarItem(sourceKeys: string | string[], targetKey: string | null, placement: "before" | "after"): void;
   createSplitTab(targetSessionId: string, incomingSessionId: string, position: SplitPosition): void;
   splitPane(targetPaneId: string, sessionId: string, position: SplitPosition): void;
   movePane(sourcePaneId: string, targetPaneId: string, position: SplitPosition): void;
@@ -66,8 +68,17 @@ interface LayoutStore {
     activeSplitTabId: string | null;
     splitTabActive: boolean;
     titlebarOrder: string[];
+    pinnedKeys?: string[];
   }): void;
 }
+
+function handOverSplitKey(keys: { titlebarOrder: string[]; pinnedKeys: string[] }, splitKey: string, survivorKey: string | null) {
+  const move = (list: string[]) => (survivorKey ? replaceKey(list, splitKey, survivorKey) : list.filter((key) => key !== splitKey));
+  return { titlebarOrder: move(keys.titlebarOrder), pinnedKeys: move(keys.pinnedKeys) };
+}
+
+const withoutSessionKeys = (keys: string[], sessionIds: string[]) =>
+  keys.filter((key) => !sessionIds.some((id) => key === `session:${id}`));
 
 const clampRatio = (ratio: number) => Math.max(0.1, Math.min(0.9, ratio));
 
@@ -108,6 +119,14 @@ export function findLeafBySession(root: PaneNode | null, sessionId: string): Lea
   if (!root) return null;
   if (root.type === "leaf") return root.sessionId === sessionId ? root : null;
   return findLeafBySession(root.first, sessionId) ?? findLeafBySession(root.second, sessionId);
+}
+
+export function findSessionPane(splitTabs: SplitTab[], sessionId: string): { tabId: string; paneId: string } | null {
+  for (const tab of splitTabs) {
+    const leaf = findLeafBySession(tab.root, sessionId);
+    if (leaf) return { tabId: tab.id, paneId: leaf.id };
+  }
+  return null;
 }
 
 export function firstLeaf(root: PaneNode | null): LeafNode | null {
@@ -200,6 +219,14 @@ function removeSessionFromTree(root: PaneNode, sessionId: string): PaneNode | nu
   return { ...root, first, second };
 }
 
+function withoutSession(tab: SplitTab, sessionId: string): SplitTab | null {
+  const root = removeSessionFromTree(tab.root, sessionId);
+  if (!root || root.type === "leaf") return null;
+  const nextActive = findLeaf(root, tab.activePaneId) ?? firstLeaf(root);
+  const maximizedLeaf = findLeaf(root, tab.maximizedPaneId);
+  return { ...tab, root, activePaneId: nextActive?.id ?? null, maximizedPaneId: maximizedLeaf?.id ?? null };
+}
+
 function updateRatio(root: PaneNode, splitNodeId: string, ratio: number): PaneNode {
   if (root.type === "leaf") return root;
   if (root.id === splitNodeId) return { ...root, ratio: clampRatio(ratio) };
@@ -247,6 +274,12 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   splitTabs: [],
   activeSplitTabId: null,
   titlebarOrder: [],
+  pinnedKeys: [],
+
+  setPinned: (key, pinned) => set((state) => {
+    const without = state.pinnedKeys.filter((candidate) => candidate !== key);
+    return { pinnedKeys: pinned ? [...without, key] : without };
+  }),
 
   openSplitTab: (sessionId) => {
     set((state) => {
@@ -294,9 +327,10 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   closeSplitTab: (tabId) => {
     set((state) => {
       const splitTabs = state.splitTabs.filter((tab) => tab.id !== tabId);
-      if (state.activeSplitTabId !== tabId) return { splitTabs };
+      const pinnedKeys = state.pinnedKeys.filter((key) => key !== `split:${tabId}`);
+      if (state.activeSplitTabId !== tabId) return { splitTabs, pinnedKeys };
       const nextTab = splitTabs[splitTabs.length - 1] ?? null;
-      return { splitTabs, titlebarOrder: state.titlebarOrder.filter((key) => key !== `split:${tabId}`), ...fieldsFromTab(nextTab) };
+      return { splitTabs, pinnedKeys, titlebarOrder: state.titlebarOrder.filter((key) => key !== `split:${tabId}`), ...fieldsFromTab(nextTab) };
     });
   },
 
@@ -304,37 +338,43 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
     titlebarOrder: placeTitlebarItem(state.titlebarOrder, itemKey, targetKey, placement),
   })),
 
-  syncTitlebarOrder: (visibleKeys) => set((state) => {
-    const titlebarOrder = mergeTitlebarItems(state.titlebarOrder, visibleKeys);
+  syncTitlebarOrder: (visibleKeys, groupOf) => set((state) => {
+    const merged = mergeTitlebarItems(state.titlebarOrder, visibleKeys);
+    const titlebarOrder = groupOf ? gatherGroups(merged, groupOf) : merged;
     if (titlebarOrder.length === state.titlebarOrder.length && titlebarOrder.every((key, index) => key === state.titlebarOrder[index])) return {};
     return { titlebarOrder };
   }),
 
-  reorderTitlebarItem: (sourceKey, targetKey, placement) => set((state) => {
-    if (sourceKey === targetKey) return {};
-    return { titlebarOrder: placeTitlebarItem(state.titlebarOrder, sourceKey, targetKey, placement) };
+  reorderTitlebarItem: (sourceKeys, targetKey, placement) => set((state) => {
+    const keys = Array.isArray(sourceKeys) ? sourceKeys : [sourceKeys];
+    if (targetKey !== null && keys.includes(targetKey)) return {};
+    return { titlebarOrder: placeTitlebarBlock(state.titlebarOrder, keys, targetKey, placement) };
   }),
 
   createSplitTab: (targetSessionId, incomingSessionId, position) => {
     set((state) => {
       if (targetSessionId === incomingSessionId) return {};
+      if (findSessionPane(state.splitTabs, targetSessionId) || findSessionPane(state.splitTabs, incomingSessionId)) return {};
       const target: LeafNode = { type: "leaf", id: newPaneId(), sessionId: targetSessionId };
       const incoming: LeafNode = { type: "leaf", id: newPaneId(), sessionId: incomingSessionId };
       const root = splitLeaf(target, incoming, position);
       const tab = createSplitTabState(root, incoming.id, state.broadcastActive);
-      return { splitTabs: [...state.splitTabs, tab], ...fieldsFromTab(tab) };
+      const targetPinned = state.pinnedKeys.includes(`session:${targetSessionId}`);
+      const pinnedKeys = withoutSessionKeys(state.pinnedKeys, [targetSessionId, incomingSessionId]);
+      return { splitTabs: [...state.splitTabs, tab], pinnedKeys: targetPinned ? [...pinnedKeys, `split:${tab.id}`] : pinnedKeys, ...fieldsFromTab(tab) };
     });
   },
 
   splitPane: (targetPaneId, sessionId, position) => {
     set((state) => {
+      const existing = findLeafBySession(state.root, sessionId);
+      if (existing) return { ...updateActiveSplitTab(state, { activePaneId: existing.id }), activePaneId: existing.id, splitTabActive: true };
+      if (findSessionPane(state.splitTabs, sessionId)) return {};
       if (!state.root) {
         const leaf: LeafNode = { type: "leaf", id: newPaneId(), sessionId };
         const tab = createSplitTabState(leaf, leaf.id);
         return { splitTabs: [...state.splitTabs, tab], ...fieldsFromTab(tab) };
       }
-      const existing = findLeafBySession(state.root, sessionId);
-      if (existing) return { ...updateActiveSplitTab(state, { activePaneId: existing.id }), activePaneId: existing.id, splitTabActive: true };
       const target = findLeaf(state.root, targetPaneId);
       if (!target) return {};
       const leaf: LeafNode = { type: "leaf", id: newPaneId(), sessionId };
@@ -345,6 +385,7 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
         activePaneId: leaf.id,
         maximizedPaneId: null,
         splitTabActive: true,
+        pinnedKeys: withoutSessionKeys(state.pinnedKeys, [sessionId]),
       };
     });
   },
@@ -383,7 +424,7 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
         const nextTab = splitTabs[splitTabs.length - 1] ?? null;
         return {
           splitTabs,
-          titlebarOrder: state.titlebarOrder.filter((key) => key !== `split:${state.activeSplitTabId}`),
+          ...handOverSplitKey(state, `split:${state.activeSplitTabId}`, root ? `session:${root.sessionId}` : null),
           ...fieldsFromTab(nextTab),
         };
       }
@@ -409,20 +450,20 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
 
   removeSession: (sessionId) => {
     set((state) => {
+      let keys = {
+        titlebarOrder: state.titlebarOrder.filter((key) => key !== `session:${sessionId}`),
+        pinnedKeys: withoutSessionKeys(state.pinnedKeys, [sessionId]),
+      };
       const splitTabs = state.splitTabs.flatMap((tab): SplitTab[] => {
-        const root = removeSessionFromTree(tab.root, sessionId);
-        if (!root || root.type === "leaf") return [];
-        const nextActive = findLeaf(root, tab.activePaneId) ?? firstLeaf(root);
-        const maximizedLeaf = findLeaf(root, tab.maximizedPaneId);
-        return [{
-          ...tab,
-          root,
-          activePaneId: nextActive?.id ?? null,
-          maximizedPaneId: maximizedLeaf?.id ?? null,
-        }];
+        const next = withoutSession(tab, sessionId);
+        if (next) return [next];
+        const paneIds = getPaneSessionIds(tab.root);
+        const survivor = paneIds.find((id) => id !== sessionId);
+        if (survivor && paneIds.includes(sessionId)) keys = handOverSplitKey(keys, `split:${tab.id}`, `session:${survivor}`);
+        return [];
       });
       const activeTab = splitTabs.find((tab) => tab.id === state.activeSplitTabId) ?? splitTabs[splitTabs.length - 1] ?? null;
-      return { splitTabs, titlebarOrder: state.titlebarOrder.filter((key) => key !== `session:${sessionId}`), ...fieldsFromTab(activeTab) };
+      return { splitTabs, ...keys, ...fieldsFromTab(activeTab) };
     });
   },
 
@@ -452,13 +493,22 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   openSessions: (sessionIds) => {
     const uniqueIds = [...new Set(sessionIds)].filter(Boolean);
     set((state) => {
-      const leaves = uniqueIds.map((sessionId): LeafNode => ({ type: "leaf", id: newPaneId(), sessionId }));
+      const freshIds = uniqueIds.filter((id) => !findSessionPane(state.splitTabs, id));
+      if (freshIds.length < Math.min(2, uniqueIds.length)) {
+        const existing = uniqueIds.map((id) => findSessionPane(state.splitTabs, id)).find((pane) => pane !== null);
+        const tab = existing ? state.splitTabs.find((candidate) => candidate.id === existing.tabId) : undefined;
+        if (!existing || !tab) return {};
+        const focused = { ...tab, activePaneId: existing.paneId };
+        return { splitTabs: state.splitTabs.map((candidate) => (candidate.id === tab.id ? focused : candidate)), ...fieldsFromTab(focused) };
+      }
+      const leaves = freshIds.map((sessionId): LeafNode => ({ type: "leaf", id: newPaneId(), sessionId }));
       const root = buildBalancedTree(leaves);
       const activeLeaf = leaves[leaves.length - 1] ?? null;
       if (!root) return {};
       const tab = createSplitTabState(root, activeLeaf?.id ?? null);
       return {
         splitTabs: [...state.splitTabs, tab],
+        pinnedKeys: withoutSessionKeys(state.pinnedKeys, freshIds),
         ...fieldsFromTab(tab),
       };
     });
@@ -469,13 +519,20 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   // is only honored when the saved active tab still exists.
   hydrate: (saved) => {
     set(() => {
+      const seen = new Set<string>();
+      const splitTabs = saved.splitTabs.flatMap((tab): SplitTab[] => {
+        const next = getPaneSessionIds(tab.root).reduce<SplitTab | null>((kept, id) => (kept && seen.has(id) ? withoutSession(kept, id) : kept), tab);
+        getPaneSessionIds(next?.root ?? null).forEach((id) => seen.add(id));
+        return next ? [next] : [];
+      });
       const activeTab =
-        saved.splitTabs.find((tab) => tab.id === saved.activeSplitTabId) ??
-        saved.splitTabs[saved.splitTabs.length - 1] ??
+        splitTabs.find((tab) => tab.id === saved.activeSplitTabId) ??
+        splitTabs[splitTabs.length - 1] ??
         null;
       return {
-        splitTabs: saved.splitTabs,
+        splitTabs,
         titlebarOrder: saved.titlebarOrder,
+        pinnedKeys: saved.pinnedKeys ?? [],
         ...fieldsFromTab(activeTab),
         splitTabActive: saved.splitTabActive && activeTab !== null,
       };

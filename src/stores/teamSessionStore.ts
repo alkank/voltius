@@ -3,9 +3,10 @@ import i18n from "@/i18n";
 import * as mp from "@/services/multiplayerService";
 import type { ActiveSession, Participant, MultiplayerConnection, SessionKey } from "@/services/multiplayerService";
 import { sendSessionInput } from "@/services/sessionInput";
-import { getSessionTransportType } from "@/stores/sessionStore";
+import { encodeSessionText, getSessionTransportType } from "@/stores/sessionStore";
 import type { TeamMember } from "@/services/teamService";
 import type { InviteTarget } from "@/services/teamSharing";
+import { appendOutputBuffer, drainOutputBuffer, type OutputBuffers } from "@/utils/outputBuffer";
 export type { ActiveSession, Participant };
 
 interface TeamSessionStore {
@@ -29,7 +30,7 @@ interface TeamSessionStore {
   ) => Promise<string>; // returns multiplayerSessionId
 
   /**
-   * Host: create an invite-link session (raw key, no E2EE).
+   * Host: create an invite-link session. The key is wrapped per admitted guest.
    * Returns the sessionId and the invite token to share.
    */
   startSharingInviteLink: (
@@ -77,24 +78,48 @@ export interface MultiplayerSessionState {
   connection: MultiplayerConnection;
   ended?: boolean;
   vaultOwnerTier?: string;
+  /** Guest only: set while the host has not wrapped the key for me, or after that wait failed. */
+  keyWait?: "waiting" | "failed";
   // Raw session key bytes, retained so a live E2EE session can invite more members later (#66).
   sessionKeyBytes?: Uint8Array;
   // Invite-link sessions only. Retained because the server returns it once, at
   // creation: without it a host who reopens ShareMenu can never see the link again.
   inviteToken?: string;
-  // Runtime-only wiring between the terminal view and store; never persisted.
-  _termWrite?: (data: Uint8Array) => void;
-  _pendingOutput?: Uint8Array;
 }
 
+/** Where each guest session's output goes once its view has an xterm; output
+ *  before that (the host's initial snapshot, typically) is held and replayed on attach. */
+const guestSinks = new Map<string, (data: Uint8Array) => void>();
+const guestPending: OutputBuffers = new Map();
+
+function deliverGuestOutput(localSessionId: string, data: Uint8Array) {
+  const write = guestSinks.get(localSessionId);
+  if (write) write(data);
+  else appendOutputBuffer(guestPending, localSessionId, data);
+}
+
+/** Send a guest session's output to `write`, starting with whatever was held for it. Returns the detach. */
+export function attachGuestOutput(localSessionId: string, write: (data: Uint8Array) => void): () => void {
+  const held = drainOutputBuffer(guestPending, localSessionId);
+  if (held) write(held);
+  guestSinks.set(localSessionId, write);
+  return () => {
+    if (guestSinks.get(localSessionId) === write) guestSinks.delete(localSessionId);
+  };
+}
+
+const relayDecoder = new TextDecoder();
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function makeCallbacks(localSessionId: string, set: any, _get: any) {
+function makeCallbacks(localSessionId: string, set: any, get: any) {
   return {
     onOutput: () => {},
     // A guest with control types into whatever the host is running — a local
-    // shell and a serial port as much as an SSH channel.
-    onInput: (data: Uint8Array) => {
-      sendSessionInput(localSessionId, getSessionTransportType(localSessionId), data).catch(() => {});
+    // shell and a serial port as much as an SSH channel. The relay carries UTF-8.
+    onInput: (data: Uint8Array, from: string) => {
+      if (from !== get().connections[localSessionId]?.controlHolder) return;
+      const bytes = encodeSessionText(localSessionId, relayDecoder.decode(data));
+      sendSessionInput(localSessionId, getSessionTransportType(localSessionId), bytes).catch(() => {});
     },
     onControlUpdate: (holderId: string, requesterId: string | null) => {
       set((s: TeamSessionStore) => ({
@@ -118,6 +143,9 @@ function makeCallbacks(localSessionId: string, set: any, _get: any) {
     onParticipantList: (participants: Participant[]) => {
       set((s: TeamSessionStore) => ({ connections: { ...s.connections, [localSessionId]: { ...s.connections[localSessionId]!, participants } } }));
     },
+    onKeyRequest: (userId: string) => {
+      wrapKeyForUser(get, localSessionId, userId).catch(console.error);
+    },
     onSessionEnded: () => {
       set((s: TeamSessionStore) => {
         const existing = s.connections[localSessionId];
@@ -134,6 +162,30 @@ function makeCallbacks(localSessionId: string, set: any, _get: any) {
 
 type SetState = StoreApi<TeamSessionStore>["setState"];
 type GetState = StoreApi<TeamSessionStore>["getState"];
+
+/** Grants `userId` a live session by wrapping its retained key for them. */
+async function wrapKeyForUser(get: GetState, localSessionId: string, userId: string): Promise<void> {
+  const state = get().connections[localSessionId];
+  if (!state?.sessionKeyBytes) throw new Error(i18n.t("common.error.cannotInviteWithoutSessionKey"));
+  await mp.inviteUserToSession(state.multiplayerSessionId, userId, state.sessionKeyBytes);
+  get().fetchActiveSessions().catch(() => {});
+}
+
+function patchConnection(set: SetState, localSessionId: string, patch: Partial<MultiplayerSessionState>) {
+  set((s) => {
+    const existing = s.connections[localSessionId];
+    if (!existing) return s;
+    return { connections: { ...s.connections, [localSessionId]: { ...existing, ...patch } } };
+  });
+}
+
+async function teamConnectionIdOf(localSessionId: string, vaultIds: string[]): Promise<string | null> {
+  const { useSessionStore } = await import("@/stores/sessionStore");
+  const { useConnectionStore } = await import("@/stores/connectionStore");
+  const connectionId = useSessionStore.getState().sessions.find((s) => s.id === localSessionId)?.connectionId;
+  const teamConnections = useConnectionStore.getState().teamConnections;
+  return connectionId && vaultIds.some((v) => teamConnections[v]?.some((c) => c.id === connectionId)) ? connectionId : null;
+}
 
 /**
  * Shared tail for every host-side share-start path: resolve server/JWT/identity,
@@ -183,14 +235,14 @@ export const useTeamSessionStore = create<TeamSessionStore>((set, get) => ({
   },
 
   startSharing: async (localSessionId, vaultIds, allowedRoles, connectionName, members, vaultOwnerTier) => {
-    const { sessionId, sessionKey, sessionKeyBytes } = await mp.createVaultSession(vaultIds, allowedRoles, connectionName, members);
+    const { sessionId, sessionKey, sessionKeyBytes } = await mp.createVaultSession(vaultIds, allowedRoles, connectionName, members, await teamConnectionIdOf(localSessionId, vaultIds));
     await attachAsHost(localSessionId, sessionId, sessionKey, set, get, { vaultOwnerTier, sessionKeyBytes });
     return sessionId;
   },
 
   startSharingInviteLink: async (localSessionId, connectionName) => {
-    const { sessionId, sessionKey, inviteToken } = await mp.createInviteLinkSession(connectionName);
-    await attachAsHost(localSessionId, sessionId, sessionKey, set, get, { inviteToken });
+    const { sessionId, sessionKey, sessionKeyBytes, inviteToken } = await mp.createInviteLinkSession(connectionName);
+    await attachAsHost(localSessionId, sessionId, sessionKey, set, get, { inviteToken, sessionKeyBytes });
     return { multiplayerSessionId: sessionId, inviteToken };
   },
 
@@ -200,15 +252,15 @@ export const useTeamSessionStore = create<TeamSessionStore>((set, get) => ({
     return sessionId;
   },
 
-  inviteToActiveSession: async (localSessionId, target) => {
-    const state = get().connections[localSessionId];
-    if (!state?.sessionKeyBytes) throw new Error(i18n.t("common.error.cannotInviteWithoutSessionKey"));
-    await mp.inviteUserToSession(state.multiplayerSessionId, target, state.sessionKeyBytes);
-    get().fetchActiveSessions().catch(() => {});
-  },
+  inviteToActiveSession: (localSessionId, target) => wrapKeyForUser(get, localSessionId, target.user_id),
 
   joinSession: async (multiplayerSessionId, onControlUpdate, inviteToken) => {
-    const { sessionKey } = await mp.getMySessionKey(multiplayerSessionId, inviteToken);
+    const myKey = await mp.getMySessionKey(multiplayerSessionId, inviteToken);
+    let keyReady = () => {};
+    const sessionKey = myKey === "pending"
+      ? mp.waitForWrappedSessionKey(multiplayerSessionId, inviteToken, new Promise<void>((r) => { keyReady = r; }))
+          .then((k) => k.sessionKey)
+      : myKey.sessionKey;
 
     const serverUrl = await import("@/services/teamService").then((m) => m.getServerUrlValue());
     const jwt = await import("@/services/teamService").then((m) => m.getJwtToken());
@@ -217,53 +269,40 @@ export const useTeamSessionStore = create<TeamSessionStore>((set, get) => ({
     const localSessionId = crypto.randomUUID();
     const myUserId = await import("@/services/teamService").then((m) => m.getMyUserId()).then((id) => id ?? "");
 
+    const base = makeCallbacks(localSessionId, set, get);
     const conn = mp.openWebSocket(serverUrl, multiplayerSessionId, jwt, sessionKey, {
+      ...base,
       onOutput: (data) => {
-        const conn = get().connections[localSessionId];
-        conn?._termWrite?.(data);
+        if (get().connections[localSessionId]) deliverGuestOutput(localSessionId, data);
       },
       onInput: () => {},
       onControlUpdate: (holderId, requesterId) => {
         onControlUpdate(holderId, requesterId);
-        set((s) => ({
-          connections: {
-            ...s.connections,
-            [localSessionId]: { ...s.connections[localSessionId]!, controlHolder: holderId, controlRequester: requesterId },
-          },
-        }));
+        base.onControlUpdate(holderId, requesterId);
       },
-      onParticipantJoined: (p) => {
-        set((s) => {
-          const existing = s.connections[localSessionId];
-          if (!existing) return s;
-          return { connections: { ...s.connections, [localSessionId]: { ...existing, participants: [...existing.participants.filter((x) => x.user_id !== p.user_id), p] } } };
-        });
-      },
-      onParticipantLeft: (userId) => {
-        set((s) => {
-          const existing = s.connections[localSessionId];
-          if (!existing) return s;
-          return { connections: { ...s.connections, [localSessionId]: { ...existing, participants: existing.participants.filter((p) => p.user_id !== userId) } } };
-        });
-      },
-      onParticipantList: (participants) => {
-        set((s) => ({ connections: { ...s.connections, [localSessionId]: { ...s.connections[localSessionId]!, participants } } }));
-      },
-      onSessionEnded: () => {
-        set((s) => {
-          const existing = s.connections[localSessionId];
-          if (!existing) return s;
-          return { connections: { ...s.connections, [localSessionId]: { ...existing, ended: true } } };
-        });
-      },
+      onKeyReady: () => keyReady(),
     }, inviteToken);
 
     set((s) => ({
       connections: {
         ...s.connections,
-        [localSessionId]: { multiplayerSessionId, role: "guest", myUserId, participants: [], controlHolder: "", controlRequester: null, connection: conn },
+        [localSessionId]: {
+          multiplayerSessionId, role: "guest", myUserId, participants: [], controlHolder: "", controlRequester: null, connection: conn,
+          keyWait: myKey === "pending" ? "waiting" : undefined,
+        },
       },
     }));
+
+    if (sessionKey instanceof Promise) {
+      sessionKey.then(
+        () => patchConnection(set, localSessionId, { keyWait: undefined }),
+        (e) => {
+          console.error(e);
+          conn.close();
+          patchConnection(set, localSessionId, { keyWait: "failed", ended: true });
+        },
+      );
+    }
 
     return localSessionId;
   },
@@ -284,6 +323,8 @@ export const useTeamSessionStore = create<TeamSessionStore>((set, get) => ({
   leaveSession: (localSessionId) => {
     const state = get().connections[localSessionId];
     if (state) state.connection.close();
+    guestSinks.delete(localSessionId);
+    drainOutputBuffer(guestPending, localSessionId);
     set((s) => {
       const next = { ...s.connections };
       delete next[localSessionId];

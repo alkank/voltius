@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { test, expect, vi, beforeEach } from "vitest";
 import type { Team, TeamMember, TeamRole } from "@/services/teamService";
+import { makeTeam } from "@/test/team";
 
 const api = vi.hoisted(() => ({
   listTeams: vi.fn(), listMembers: vi.fn(), listRoles: vi.fn(),
@@ -14,8 +16,7 @@ vi.mock("@tauri-apps/api/core", () => tauri);
 
 import { useTeamStore } from "./teamStore.ts";
 
-const team = (id: string, role_ids: string[] = []): Team =>
-  ({ id, name: id, owner_id: "o", owner_tier: "team", created_at: "", role_ids });
+const team = (id: string, role_ids: string[] = []): Team => makeTeam(id, { role_ids });
 const member = (user_id: string, role_ids: string[] = []): TeamMember =>
   ({ team_id: "t1", user_id, handle: "", public_key: "", invited_by_display_name: null, joined_at: "", role_ids });
 const role = (id: string, permissions = 0): TeamRole =>
@@ -41,6 +42,13 @@ test("loadTeams populates teams and auto-selects the first as active", async () 
   expect(get().loading).toBe(false);
 });
 
+test("teamsLoaded turns on after a successful load, even of an unchanged empty list", async () => {
+  useTeamStore.setState({ teams: [], teamsLoaded: false });
+  api.listTeams.mockResolvedValueOnce([]);
+  await get().loadTeams();
+  expect(get().teamsLoaded).toBe(true);
+});
+
 test("loadTeams keeps the same array reference when data is unchanged (cache identity)", async () => {
   api.listTeams.mockResolvedValue([team("t1", ["r1"])]);
   await get().loadTeams();
@@ -56,6 +64,23 @@ test("loadTeams failure clears loading and leaves teams intact", async () => {
   await get().loadTeams();
   expect(get().loading).toBe(false);
   expect(get().teams.map((t) => t.id)).toEqual(["t1"]); // pre-existing teams preserved on error
+});
+
+test("createTeam stores the listed row, since the create reply has no role_ids or owner_tier", async () => {
+  api.createTeam.mockResolvedValue({ id: "t1", name: "Ops", owner_id: "o", created_at: "" });
+  api.listTeams.mockResolvedValue([team("t1", ["owner"])]);
+  api.listRoles.mockResolvedValue([role("owner", 5)]);
+  const created = await get().createTeam("Ops");
+  expect(created.id).toBe("t1");
+  expect(get().teams).toEqual([team("t1", ["owner"])]);
+  expect(get().activeTeamId).toBe("t1");
+});
+
+test("createTeam keeps a row with empty role_ids when the team list cannot be refetched", async () => {
+  api.createTeam.mockResolvedValue({ id: "t1", name: "Ops", owner_id: "o", created_at: "" });
+  api.listTeams.mockRejectedValue(new Error("offline"));
+  await get().createTeam("Ops");
+  expect(get().teams.map((t) => [t.id, t.role_ids])).toEqual([["t1", []]]);
 });
 
 test("loadMembers / loadRoles store by team id", async () => {
@@ -163,4 +188,14 @@ test("loadTeams omits a team whose roles cannot be resolved", async () => {
   api.listRoles.mockRejectedValue(new Error("offline"));
   await get().loadTeams();
   expect(cachedRoles()).toEqual({});
+});
+
+test("loadTeams replaces the list when only the owner's tier changed", async () => {
+  api.listTeams.mockResolvedValue([{ ...team("t1"), owner_tier: "teams" }]);
+  await get().loadTeams();
+  const before = get().teams;
+  api.listTeams.mockResolvedValue([{ ...team("t1"), owner_tier: "business" }]);
+  await get().loadTeams();
+  expect(get().teams).not.toBe(before);
+  expect(get().teams[0].owner_tier).toBe("business");
 });

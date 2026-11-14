@@ -1,24 +1,27 @@
 //! `RealSftp`: a `FileBackend` backed by a real SFTP session over SSH.
-//! Simple filesystem ops are implemented here; streaming transfers delegate to
-//! the shared `*_inner` helpers in `crate::commands::sftp`.
+//! Simple filesystem ops are implemented here; transfers go through the
+//! resumable copy engine over `SftpFs`.
 
-use crate::commands::sftp::dir::{sftp_download_dir_inner, sftp_upload_dir_inner};
-use crate::commands::sftp::transfer::{sftp_download_inner, sftp_upload_inner};
-use crate::commands::sftp::RemoteFile;
-use crate::sftp::backend::FileBackend;
-use crate::ssh::client::SshClient;
+use crate::commands::sftp::editor::read_capped;
+use crate::commands::sftp::resume::endpoint::Endpoint;
+use crate::commands::sftp::resume::sftp_fs::SftpFs;
+use crate::commands::sftp::{sort_listing, RemoteFile, SftpFile, TarProbe};
+use crate::error::AppError;
+use crate::sftp::attrs::{apply_mode, apply_via_shell, AttrChange};
+use crate::sftp::backend::{FileBackend, NO_SHELL};
+use crate::sftp::link::{is_transport_dead, SftpLink, SftpReopen};
+use crate::ssh::exec::{run_captured, sh_c, Captured};
 use crate::ssh::live_cells::read_cell;
 use crate::ssh::session::SessionHandle;
 use async_trait::async_trait;
-use russh::client::Handle;
+use futures_util::future::join_all;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::OpenFlags;
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tauri::AppHandle;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -28,14 +31,23 @@ use tokio_util::sync::CancellationToken;
 pub enum SftpOpener {
     /// `request_subsystem("sftp")` on a fresh channel.
     Subsystem,
-    /// `exec` of a command that speaks the SFTP protocol on stdio
-    /// (e.g. `docker exec -i <id> sftp-server`).
-    Exec(String),
+    /// `exec` of `server`, a command that speaks the SFTP protocol on stdio, behind
+    /// `inside`: the prefix (e.g. `docker exec -i <id>`) that runs any command where it runs.
+    Exec { inside: String, server: String },
 }
 
-/// Run an SFTP call, re-opening the channel once and retrying if the cached
-/// session turns out to be dead. The re-opened session replaces the shared one
-/// in place, so streaming transfers holding the same `Arc` heal too.
+impl SftpOpener {
+    /// Where shell commands must run to see the session's paths; None for the host itself.
+    pub fn inside(&self) -> Option<String> {
+        match self {
+            Self::Subsystem => None,
+            Self::Exec { inside, .. } => Some(inside.clone()),
+        }
+    }
+}
+
+/// Run an SFTP call, re-opening the channel once and retrying if the cached session is
+/// dead. The guard stays held so concurrent callers queue behind one reopen.
 ///
 /// A macro rather than a function taking a closure: the call borrows both the
 /// session guard and the operation's arguments, which no single closure
@@ -50,112 +62,84 @@ macro_rules! retry_sftp {
         };
         match first {
             Ok(v) => Ok(v),
-            Err(e) if !is_transport_dead(&e) => Err(format!("{} failed: {e}", $what)),
-            Err(_) => {
-                let handle = read_cell(&this.handle);
-                match open_sftp(&handle, &this.opener).await {
-                    Err(e) => Err(e),
-                    Ok(fresh) => {
-                        *guard = fresh;
-                        let $sftp = &*guard;
-                        $call.await.map_err(|e| format!("{} failed: {e}", $what))
-                    }
-                }
+            Err(e) if !is_transport_dead(&e) => {
+                Err(AppError::caused(format_args!("{} failed", $what), &e))
             }
+            Err(_) => match this.link.open_bounded().await {
+                Err(e) => Err(e.into()),
+                Ok(fresh) => {
+                    *guard = fresh;
+                    let $sftp = &*guard;
+                    $call
+                        .await
+                        .map_err(|e| AppError::caused(format_args!("{} failed", $what), &e))
+                }
+            },
         }
     }};
 }
 
-/// True when the error means the transport under the SFTP session is gone, as
-/// opposed to the server refusing a specific operation. Sleep/hibernate leaves
-/// the session's writer closed ("session closed") or its requests unanswered
-/// (`Timeout`); either way the fix is a new channel, not a different path.
-fn is_transport_dead(e: &SftpError) -> bool {
-    match e {
-        SftpError::Status(_) | SftpError::Limited(_) => false,
-        SftpError::IO(_) | SftpError::Timeout | SftpError::UnexpectedPacket => true,
-        SftpError::UnexpectedBehavior(msg) => {
-            msg.contains("session closed")
-                || msg.contains("SendError")
-                || msg.contains("RecvError")
-                || msg.contains("EOF")
-        }
-    }
-}
-
-/// Open a fresh SFTP session on `handle` the same way the original was opened.
-pub async fn open_sftp(
-    handle: &Handle<SshClient>,
-    opener: &SftpOpener,
-) -> Result<SftpSession, String> {
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| format!("Channel error: {e}"))?;
-    match opener {
-        SftpOpener::Subsystem => channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| format!("SFTP subsystem error: {e}"))?,
-        SftpOpener::Exec(cmd) => channel
-            .exec(true, cmd.as_str())
-            .await
-            .map_err(|e| format!("Exec error: {e}"))?,
-    }
-    SftpSession::new(channel.into_stream())
-        .await
-        .map_err(|e| format!("SFTP session error: {e}"))
+#[derive(Clone)]
+pub struct SshExtras {
+    pub handle: SessionHandle,
+    pub tar: Arc<TarProbe>,
 }
 
 #[derive(Clone)]
 pub struct RealSftp {
     session: Arc<Mutex<SftpSession>>,
-    /// Live SSH handle — follows the owning terminal session across reconnects.
-    handle: SessionHandle,
-    opener: SftpOpener,
+    link: Arc<dyn SftpReopen>,
+    ssh: Option<SshExtras>,
 }
 
 impl RealSftp {
     /// Open an SFTP channel on `handle` and wrap it as a backend that knows how
     /// to open the same kind of channel again after a reconnect.
-    pub async fn open(handle: SessionHandle, opener: SftpOpener) -> Result<Self, String> {
-        let current = read_cell(&handle);
-        let session = open_sftp(&current, &opener).await?;
-        Ok(Self {
-            session: Arc::new(Mutex::new(session)),
+    pub async fn open(
+        handle: SessionHandle,
+        opener: SftpOpener,
+        closed: CancellationToken,
+    ) -> Result<Self, String> {
+        let ssh = SshExtras {
+            tar: Arc::new(TarProbe::new(Arc::clone(&handle), opener.inside())),
+            handle: Arc::clone(&handle),
+        };
+        let link = Arc::new(SftpLink {
             handle,
             opener,
-        })
+            closed,
+        });
+        let mut sftp = Self::open_over(link).await?;
+        sftp.ssh = Some(ssh);
+        Ok(sftp)
+    }
+
+    pub async fn open_over(link: Arc<dyn SftpReopen>) -> Result<Self, String> {
+        let session = link.open().await?;
+        Ok(Self::over(link, session))
+    }
+
+    pub fn over(link: Arc<dyn SftpReopen>, session: SftpSession) -> Self {
+        Self {
+            session: Arc::new(Mutex::new(session)),
+            link,
+            ssh: None,
+        }
+    }
+
+    pub(crate) fn fs(&self) -> SftpFs {
+        SftpFs::new(
+            Arc::clone(&self.session),
+            Arc::clone(&self.link),
+            self.ssh.as_ref().map(|ssh| Arc::clone(&ssh.tar)),
+        )
     }
 }
 
 #[async_trait]
 impl FileBackend for RealSftp {
-    async fn list_dir(&self, path: &str) -> Result<Vec<RemoteFile>, String> {
-        let entries = retry_sftp!(self, "read_dir", |s| s.read_dir(path))?;
-        let base = path.trim_end_matches('/');
-        let mut files: Vec<RemoteFile> = entries
-            .map(|e| {
-                let meta = e.metadata();
-                let name = e.file_name();
-                let entry_path = format!("{}/{}", base, name);
-                RemoteFile {
-                    path: entry_path,
-                    name,
-                    size: meta.size.unwrap_or(0),
-                    is_dir: meta.is_dir(),
-                    is_symlink: meta.is_symlink(),
-                    modified: meta.mtime.map(|t| t as u64),
-                    permissions: meta.permissions,
-                }
-            })
-            .collect();
-        files.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-        Ok(files)
+    async fn list_dir(&self, path: &str) -> Result<Vec<RemoteFile>, AppError> {
+        retry_sftp!(self, "read_dir", |s| listing(s, path))
     }
 
     async fn stat(&self, path: &str) -> Result<Option<bool>, String> {
@@ -165,25 +149,55 @@ impl FileBackend for RealSftp {
         }
     }
 
-    async fn canonicalize(&self, path: &str) -> Result<String, String> {
+    async fn canonicalize(&self, path: &str) -> Result<String, AppError> {
         retry_sftp!(self, "canonicalize", |s| s.canonicalize(path))
     }
 
-    async fn mkdir(&self, path: &str) -> Result<(), String> {
+    async fn mkdir(&self, path: &str) -> Result<(), AppError> {
         retry_sftp!(self, "mkdir", |s| s.create_dir(path))
     }
 
-    async fn touch(&self, path: &str) -> Result<(), String> {
+    async fn touch(&self, path: &str) -> Result<(), AppError> {
         let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
-        retry_sftp!(self, "touch", |s| s.open_with_flags(path, flags)).map(|_| ())
+        let file = retry_sftp!(self, "touch", |s| s.open_with_flags(path, flags))?;
+        Ok(SftpFile::new(file, "touch failed").close().await?)
     }
 
-    async fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+    async fn rename(&self, from: &str, to: &str) -> Result<(), AppError> {
         retry_sftp!(self, "rename", |s| s.rename(from, to))
     }
 
-    async fn delete(&self, path: &str) -> Result<(), String> {
+    async fn delete(&self, path: &str) -> Result<(), AppError> {
         remove_recursive(Arc::clone(&self.session), path.to_string()).await
+    }
+
+    async fn run_sh(&self, script: &str, args: &[&str]) -> Result<Captured, String> {
+        let Some(ssh) = &self.ssh else {
+            return Err(NO_SHELL.into());
+        };
+        let handle = read_cell(&ssh.handle);
+        run_captured(&*handle, &ssh.tar.run_in(&sh_c(script, args))).await
+    }
+
+    async fn set_attrs(&self, change: &AttrChange) -> Result<(), AppError> {
+        if change.needs_shell() {
+            return apply_via_shell(self, change).await;
+        }
+        if !change.changes_mode() {
+            return Ok(());
+        }
+        for path in &change.paths {
+            let current = retry_sftp!(self, "stat", |s| s.metadata(path.as_str()))?;
+            let mut attrs = FileAttributes::empty();
+            attrs.permissions = Some(apply_mode(
+                current.permissions.unwrap_or(0),
+                change.set,
+                change.clear,
+            ));
+            retry_sftp!(self, "chmod", |s| s
+                .set_metadata(path.as_str(), attrs.clone()))?;
+        }
+        Ok(())
     }
 
     async fn file_size(&self, path: &str) -> u64 {
@@ -193,110 +207,70 @@ impl FileBackend for RealSftp {
             .unwrap_or(0)
     }
 
-    async fn read_file(&self, path: &str) -> Result<Vec<u8>, String> {
-        let mut file = retry_sftp!(self, "open", |s| s.open(path))?;
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)
+    async fn read_file(&self, path: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
+        let file = retry_sftp!(self, "open", |s| s.open(path))?;
+        let mut file = SftpFile::new(file, "Close error");
+        let buf = read_capped(&mut *file, max_bytes)
             .await
             .map_err(|e| format!("read failed: {e}"))?;
+        file.close().await?;
         Ok(buf)
     }
 
     async fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
         let flags = OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE;
-        let mut file = retry_sftp!(self, "open for write", |s| s.open_with_flags(path, flags))?;
+        let file = retry_sftp!(self, "open for write", |s| s.open_with_flags(path, flags))?;
+        let mut file = SftpFile::new(file, "close failed");
         file.write_all(content.as_bytes())
             .await
             .map_err(|e| format!("write failed: {e}"))?;
         file.flush()
             .await
             .map_err(|e| format!("flush failed: {e}"))?;
-        Ok(())
+        file.close().await
     }
 
-    async fn upload_file(
-        &self,
-        app: &AppHandle,
-        local_path: &str,
-        remote_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        sftp_upload_inner(
-            app,
-            Arc::clone(&self.session),
-            local_path,
-            remote_path,
-            transfer_id,
-            token,
-        )
-        .await
+    fn endpoint(&self) -> Arc<dyn Endpoint> {
+        Arc::new(self.fs())
     }
 
-    async fn download_file(
-        &self,
-        app: &AppHandle,
-        remote_path: &str,
-        local_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        sftp_download_inner(
-            app,
-            Arc::clone(&self.session),
-            remote_path,
-            local_path,
-            transfer_id,
-            token,
-        )
-        .await
+    async fn close(&self) {
+        self.fs().close_session().await;
     }
 
-    async fn upload_dir(
-        &self,
-        app: &AppHandle,
-        local_path: &str,
-        remote_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        sftp_upload_dir_inner(
-            app,
-            Arc::clone(&self.session),
-            local_path,
-            remote_path,
-            transfer_id,
-            token,
-        )
-        .await
+    fn tar_probe(&self) -> Option<&TarProbe> {
+        self.ssh.as_ref().map(|ssh| &*ssh.tar)
     }
+}
 
-    async fn download_dir(
-        &self,
-        app: &AppHandle,
-        remote_path: &str,
-        local_path: &str,
-        transfer_id: &str,
-        token: &CancellationToken,
-    ) -> Result<(), String> {
-        sftp_download_dir_inner(
-            app,
-            Arc::clone(&self.session),
-            remote_path,
-            local_path,
-            transfer_id,
-            token,
-        )
-        .await
-    }
-
-    // upload_batch / download_batch: the FileBackend per-item defaults, which
-    // real SFTP only reaches if the tar fast path behind `as_sftp_session`
-    // is unavailable.
-
-    fn as_sftp_session(&self) -> Option<Arc<Mutex<SftpSession>>> {
-        Some(Arc::clone(&self.session))
-    }
+/// Directory entries come back lstat'ed, so links are stat'ed again to tell folders from files.
+async fn listing(sftp: &SftpSession, path: &str) -> Result<Vec<RemoteFile>, SftpError> {
+    let base = path.trim_end_matches('/');
+    let entries = sftp.read_dir(path).await?.map(|e| {
+        let meta = e.metadata();
+        let name = e.file_name();
+        RemoteFile {
+            path: format!("{base}/{name}"),
+            name,
+            size: meta.size.unwrap_or(0),
+            is_dir: meta.is_dir(),
+            is_symlink: meta.is_symlink(),
+            modified: meta.mtime.map(|t| t as u64),
+            permissions: meta.permissions,
+        }
+    });
+    let mut files = join_all(entries.map(|mut f| async move {
+        if f.is_symlink {
+            f.is_dir = sftp
+                .metadata(f.path.as_str())
+                .await
+                .is_ok_and(|m| m.is_dir());
+        }
+        f
+    }))
+    .await;
+    sort_listing(&mut files);
+    Ok(files)
 }
 
 /// Recursively remove a file or directory tree over SFTP. `symlink_metadata`
@@ -304,7 +278,7 @@ impl FileBackend for RealSftp {
 fn remove_recursive(
     session: Arc<Mutex<SftpSession>>,
     path: String,
-) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
+) -> Pin<Box<dyn Future<Output = Result<(), AppError>> + Send>> {
     Box::pin(async move {
         let is_dir = {
             let sftp = session.lock().await;
@@ -319,7 +293,7 @@ fn remove_recursive(
                 let sftp = session.lock().await;
                 sftp.read_dir(&path)
                     .await
-                    .map_err(|e| format!("read_dir failed: {e}"))?
+                    .map_err(|e| AppError::caused("read_dir failed", &e))?
                     .map(|e| e.file_name())
                     .collect()
             };
@@ -330,48 +304,165 @@ fn remove_recursive(
             let sftp = session.lock().await;
             sftp.remove_dir(&path)
                 .await
-                .map_err(|e| format!("remove_dir failed: {e}"))?;
+                .map_err(|e| AppError::caused("remove_dir failed", &e))?;
         } else {
             let sftp = session.lock().await;
             sftp.remove_file(&path)
                 .await
-                .map_err(|e| format!("remove_file failed: {e}"))?;
+                .map_err(|e| AppError::caused("remove_file failed", &e))?;
         }
 
         Ok(())
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
-    use super::{is_transport_dead, SftpError};
-    use russh_sftp::protocol::{Status, StatusCode};
+    use super::*;
+    use crate::commands::sftp::dir::tests::TreeServer;
+    use crate::port_forward::test_ssh::TestClient;
+    use crate::sftp::backend::test_tree::ROOT;
+    use crate::ssh::live_cells::own_cell;
+    use crate::ssh::test_proc_server::{proc_server, sftp_server_path, ProcLog, ProcOptions};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::task::JoinHandle;
 
-    fn status(code: StatusCode) -> SftpError {
-        SftpError::Status(Status {
-            id: 1,
-            status_code: code,
-            error_message: String::new(),
-            language_tag: String::new(),
-        })
+    struct Shared {
+        session: Mutex<SftpSession>,
+        link: SftpLink<TestClient>,
     }
 
-    #[test]
-    fn a_refused_operation_is_not_a_dead_transport() {
-        assert!(!is_transport_dead(&status(StatusCode::NoSuchFile)));
-        assert!(!is_transport_dead(&status(StatusCode::PermissionDenied)));
-        assert!(!is_transport_dead(&SftpError::Limited("too big".into())));
+    async fn canonicalize(shared: &Shared) -> Result<String, AppError> {
+        retry_sftp!(shared, "canonicalize", |s| s.canonicalize("."))
     }
 
-    #[test]
-    fn a_closed_or_unanswered_session_is_a_dead_transport() {
-        assert!(is_transport_dead(&SftpError::UnexpectedBehavior(
-            "session closed".into()
-        )));
-        assert!(is_transport_dead(&SftpError::Timeout));
-        assert!(is_transport_dead(&SftpError::IO("broken pipe".into())));
-        assert!(is_transport_dead(&SftpError::UnexpectedBehavior(
-            "SendError: channel closed".into()
-        )));
+    async fn link() -> (SftpLink<TestClient>, Arc<std::sync::Mutex<ProcLog>>) {
+        let (handle, log) = proc_server(ProcOptions::default()).await;
+        let link = SftpLink {
+            handle: own_cell(handle),
+            opener: SftpOpener::Exec {
+                inside: String::new(),
+                server: sftp_server_path().to_string(),
+            },
+            closed: CancellationToken::new(),
+        };
+        (link, log)
+    }
+
+    #[tokio::test]
+    async fn links_list_as_what_they_point_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |name: &str| dir.path().join(name);
+        std::fs::create_dir(at("folder")).unwrap();
+        std::fs::write(at("file"), "x").unwrap();
+        for (target, name) in [
+            ("folder", "folder_link"),
+            ("file", "file_link"),
+            ("gone", "dangling"),
+        ] {
+            std::os::unix::fs::symlink(target, at(name)).unwrap();
+        }
+        let sftp = link().await.0.open().await.unwrap();
+
+        let files = listing(&sftp, &dir.path().to_string_lossy()).await.unwrap();
+
+        let kinds: Vec<_> = files
+            .iter()
+            .map(|f| (f.name.as_str(), f.is_dir, f.is_symlink))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("folder", true, false),
+                ("folder_link", true, true),
+                ("dangling", false, true),
+                ("file", false, false),
+                ("file_link", false, true),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_calls_on_a_dead_session_share_one_reopen() {
+        let (link, log) = link().await;
+        let shared = Shared {
+            session: Mutex::new(link.open().await.unwrap()),
+            link,
+        };
+        {
+            let dead = shared.session.lock().await;
+            dead.set_timeout(1);
+            dead.close().await.unwrap();
+        }
+
+        let (a, b, c, d) = tokio::join!(
+            canonicalize(&shared),
+            canonicalize(&shared),
+            canonicalize(&shared),
+            canonicalize(&shared)
+        );
+        for r in [a, b, c, d] {
+            r.unwrap();
+        }
+        assert_eq!(log.lock().unwrap().ran.len(), 2);
+    }
+
+    #[derive(Default)]
+    struct Piped {
+        opens: AtomicUsize,
+        pipe: std::sync::Mutex<Option<JoinHandle<()>>>,
+        closed: CancellationToken,
+    }
+
+    impl Piped {
+        async fn cut(&self) {
+            let pipe = self.pipe.lock().unwrap().take().unwrap();
+            pipe.abort();
+            let _ = pipe.await;
+        }
+    }
+
+    #[async_trait]
+    impl SftpReopen for Piped {
+        async fn open(&self) -> Result<SftpSession, AppError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            let (client, mut near) = tokio::io::duplex(1 << 16);
+            let (mut far, server) = tokio::io::duplex(1 << 16);
+            russh_sftp::server::run(server, TreeServer::default()).await;
+            let pipe = tokio::spawn(async move {
+                let _ = tokio::io::copy_bidirectional(&mut near, &mut far).await;
+            });
+            *self.pipe.lock().unwrap() = Some(pipe);
+            SftpSession::new(client)
+                .await
+                .map_err(|e| e.to_string().into())
+        }
+
+        fn closed_now(&self) -> bool {
+            false
+        }
+
+        fn closed(&self) -> &CancellationToken {
+            &self.closed
+        }
+    }
+
+    #[tokio::test]
+    async fn open_over_runs_without_ssh() {
+        let link = Arc::new(Piped::default());
+        let sftp = RealSftp::open_over(Arc::clone(&link) as Arc<dyn SftpReopen>)
+            .await
+            .unwrap();
+        let names = |files: Vec<RemoteFile>| files.into_iter().map(|f| f.name).collect::<Vec<_>>();
+
+        let listed = names(sftp.list_dir(ROOT).await.unwrap());
+        assert!(listed.contains(&"ok.txt".to_string()));
+        assert!(sftp.run_sh("true", &[]).await.is_err());
+        assert!(sftp.tar_probe().is_none());
+
+        sftp.session.lock().await.set_timeout(1);
+        link.cut().await;
+        assert_eq!(names(sftp.list_dir(ROOT).await.unwrap()), listed);
+        assert_eq!(link.opens.load(Ordering::SeqCst), 2);
     }
 }

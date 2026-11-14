@@ -25,8 +25,10 @@
       "manageInKeychain": "Gérer dans le trousseau",
       "hostsChaining": "Chaînage d'hôtes",
       "environmentVariables": "Variables d'environnement",
-      "preCommandPlaceholder": "Commande préalable",
-      "postCommandPlaceholder": "Commande finale",
+      "preCommandPlaceholder": "Commande de session avant",
+      "postCommandPlaceholder": "Commande de session après",
+      "sessionCommands": "Commandes de session",
+      "sessionCommandsHint": "Exécutées dans la session après son ouverture, puis à la fermeture de l'onglet.",
       "hostCommand": {
         "useSnippet": "Utiliser un snippet",
         "useInline": "Utiliser une commande en ligne",
@@ -47,10 +49,14 @@
       "sectionCredentials": "Identifiants",
       "sectionIdentity": "Identité",
       "sectionNotes": "Notes",
-      "notesPlaceholder": "Rappels, fenêtres de maintenance, contexte d'équipe… (synchronisé avec l'hôte)",
       "protocol": "Protocole",
       "protocolSsh": "SSH / SFTP",
       "protocolFtp": "FTP",
+      "protocolWebdav": "WebDAV",
+      "webdavUrl": "URL du serveur",
+      "webdavUrlPlaceholder": "https://cloud.example.com/remote.php/dav/files/me/",
+      "webdavUrlInvalid": "Saisissez une adresse http:// ou https://, sans nom d'utilisateur, mot de passe, ? ni #",
+      "webdavPlaintextWarning": "Non chiffré — votre mot de passe est envoyé en clair. Utilisez https:// si le serveur le permet.",
       "hostIp": "Hôte / IP",
       "hostPlaceholder": "192.168.1.1",
       "legacyAlgorithms": "Algorithmes hérités",
@@ -69,7 +75,34 @@
       "keychainIdentity": "Identité du trousseau",
       "passphrase": "Phrase secrète",
       "optional": "(facultatif)",
-      "keyPassphrasePlaceholder": "Phrase secrète de la clé"
+      "keyPassphrasePlaceholder": "Phrase secrète de la clé",
+      "proxy": {
+        "label": "Proxy",
+        "inherit": "Hérite ({{label}})",
+        "modes": {
+          "direct": "Direct",
+          "system": "Système",
+          "socks5": "SOCKS5",
+          "http": "HTTP",
+          "https": "HTTPS"
+        },
+        "host": "Hôte du proxy",
+        "port": "Port du proxy",
+        "hostMissing": "Le proxy est en mode {{kind}} mais n'a pas d'hôte",
+        "portInvalid": "Le port doit être compris entre 1 et 65535",
+        "username": "Utilisateur du proxy",
+        "password": "Mot de passe du proxy",
+        "passwordSaved": "••• enregistré"
+      },
+      "connectAsHost": "Identifiant de l'hôte",
+      "sharedWithTeam": "partagée avec l'équipe",
+      "youConnectAs": "Vous vous connectez en tant que",
+      "change": "Modifier",
+      "connectAsYours": "{{username}} · la vôtre, vous seul",
+      "connectAsTeam": "{{username}} · identité d'équipe",
+      "connectAsAsk": "Il vous sera demandé à la connexion",
+      "connectAsUnavailable": "Votre identité choisie n'est pas disponible",
+      "connectNeedsHost": "Saisissez un hôte pour vous connecter"
     },
     "distroIconPicker": {
       "title": "Icône",
@@ -144,7 +177,9 @@
       "title": "Identité",
       "noIdentityInline": "Aucune identité — identifiants en ligne",
       "badgeKey": "clé",
-      "badgePwd": "mdp"
+      "badgePwd": "mdp",
+      "sharedGroup": "Coffre {{vault}} · partagé",
+      "ownGroup": "Vos identités · vous seul"
     },
     "jumpHostsPanel": {
       "dragToReorderAriaLabel": "Glisser pour réorganiser",
@@ -166,6 +201,40 @@
       "sectionSerialPort": "Port série",
       "customBaudButton": "Personnalisé",
       "presetBaudButton": "Prédéfini"
+    },
+    "vaultIdentity": {
+      "title": "Votre identité pour {{vault}}",
+      "subtitle": "Vous seul. Vos coéquipiers ne la voient jamais.",
+      "useOn": "Utiliser sur les hôtes {{vault}} sans identifiant partagé",
+      "none": "Aucune par défaut",
+      "noneHint": "Les hôtes sans identifiant vous le demandent, comme aujourd'hui",
+      "footnote": "Les hôtes avec un identifiant partagé le conservent. Changez-le pour un hôte avec « Se connecter en tant que »."
+    },
+    "knock": {
+      "title": "Port knocking",
+      "enable": "Envoyer un knock avant la connexion",
+      "hint": "Envoyé depuis cet appareil, via le proxy de cet hôte, avant chaque connexion SSH, SFTP et redirection de port.",
+      "viaBastion": "Cet hôte se connecte via {{name}} : Voltius envoie donc le knock à {{name}} avec les réglages de knock de cet hôte-là.",
+      "sequence": "Séquence",
+      "reorderHint": "Maintenez et glissez pour réordonner · Envoyés dans cet ordre",
+      "port": "Port",
+      "dragToReorder": "Glisser pour réordonner",
+      "remove": "Retirer le port",
+      "addPort": "Ajouter un port",
+      "timing": "Délais",
+      "delay": "Délai entre les knocks",
+      "settle": "Attente après le dernier knock",
+      "window": "Fenêtre du pare-feu",
+      "windowHint": "Durée pendant laquelle le pare-feu laisse SSH ouvert après un knock. Le voyant d'accessibilité ne sonde que dans cette fenêtre : la carte de l'hôte n'envoie donc jamais de knock d'elle-même. Laissez vide si vous ne savez pas.",
+      "issue": {
+        "empty": "Ajoutez au moins un port.",
+        "port": "Les ports doivent être compris entre 1 et 65535.",
+        "udp-proxy": "Les knocks UDP ne passent pas par le proxy de cet hôte. Utilisez des étapes TCP ou une connexion directe.",
+        "udp-system": "Les knocks UDP échouent si le proxy système est utilisé."
+      },
+      "serverTooOld": "Ce serveur Voltius est trop ancien pour stocker les séquences de port knocking des hôtes d'un coffre d'équipe. Demandez à son administrateur de mettre le serveur à jour pour utiliser le port knocking ici.",
+      "sequenceUnavailable": "La séquence de knock de cet hôte n'est pas disponible sur cet appareil.",
+      "sequenceInvalid": "La séquence de knock de cet hôte n'est pas valide. Corrigez-la dans les réglages Port knocking de l'hôte."
     }
   }
 }

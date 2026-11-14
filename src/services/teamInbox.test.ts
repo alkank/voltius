@@ -7,7 +7,7 @@ const h = vi.hoisted(() => {
     setState: (patch: unknown) =>
       Object.assign(sessionState, typeof patch === "function" ? (patch as (s: typeof sessionState) => unknown)(sessionState) : patch),
   };
-  const uiState = { setActiveNav: vi.fn() };
+  const uiState = { setActiveNav: vi.fn(), activeNav: "hosts", sftpPanelOpen: false };
   const useUIStore = { getState: () => uiState };
   const joinSession = vi.fn(async () => "local-99");
   const grantControl = vi.fn();
@@ -43,7 +43,7 @@ vi.mock("@/services/teamService", () => ({
   declineSessionInvite: h.declineSessionInvite,
   getMyUserId: vi.fn(async () => "me"),
 }));
-vi.mock("@/utils/platform", () => ({
+vi.mock("@/utils/platform", () => ({ isMobilePlatform: (p: string | null) => p === "android" || p === "ios",
   getPlatform: async () => "linux",
   isMobileShell: () => h.isMobileShell(),
 }));
@@ -56,6 +56,7 @@ vi.mock("@/i18n", () => ({
 
 import { useNotificationStore } from "@/stores/notificationStore";
 import { useTeamStore } from "@/stores/teamStore";
+import { useLayoutStore } from "@/stores/layoutStore";
 import {
   reconcileInvites,
   reconcileSessions,
@@ -91,6 +92,9 @@ beforeEach(() => {
   h.fetchActiveSessions.mockClear().mockResolvedValue(undefined);
   h.teamSessionState.activeSessions = [];
   h.uiState.setActiveNav.mockClear();
+  h.uiState.activeNav = "hosts";
+  h.uiState.sftpPanelOpen = false;
+  useLayoutStore.setState({ splitTabActive: false, root: null, maximizedPaneId: null });
   h.sessionState.sessions = [];
   h.sessionState.activeSessionId = null;
   useTeamStore.setState({ teams: [] });
@@ -113,7 +117,7 @@ test("an invite that vanishes from the source is retracted", () => {
 test("reconciling does not touch non-invite entries", () => {
   get().upsertInbox({
     id: "session:s1",
-    source: { kind: "app", area: "team" },
+    source: { kind: "app" },
     kind: "sessionShared",
     message: "m",
     actions: [],
@@ -253,7 +257,28 @@ test("uses the inviter's display name from participants when available", () => {
     "me",
   );
   const entry = get().inbox.find((e) => e.id === "session:s1");
-  expect(entry?.message).toContain("\"inviter\":\"Alice\"");
+  expect(entry?.message).toContain("\"inviter\":\"@Alice\"");
+});
+
+const roster = (user_id: string, handle: string, member_name: string | null) =>
+  useTeamStore.setState({ membersByTeam: { t1: [{ team_id: "t1", user_id, handle, member_name, public_key: "", invited_by_display_name: null, joined_at: "", role_ids: [] }] } });
+
+test("a session invite names the inviter by their member name", () => {
+  roster("alice", "amber-lynx-1", "Alice K");
+  reconcileSessions(
+    [session({ id: "s1", invited_by: "alice", participants: [{ user_id: "alice", handle: "amber-lynx-1" }] })],
+    new Set(),
+    "me",
+  );
+  expect(get().inbox.find((e) => e.id === "session:s1")?.message).toContain('"inviter":"Alice K"');
+  useTeamStore.setState({ membersByTeam: {} });
+});
+
+test("a control request names the requester by their member name", () => {
+  roster("guest1", "brisk-otter-8823", "Gus");
+  reconcileControlRequests({ local1: conn({ controlRequester: "guest1" }) });
+  expect(get().inbox.find((x) => x.kind === "controlRequest")?.message).toContain('"requester":"Gus"');
+  useTeamStore.setState({ membersByTeam: {} });
 });
 
 test("a redacted invite renders as a knock from the inviter alone", () => {
@@ -506,6 +531,41 @@ test("a guest handed control gets one confirmation toast per grant", () => {
   reconcileControlRequests({ local1: guest() });
   reconcileControlRequests({ local1: guest({ controlHolder: "guest1" }) });
   expect(get().toasts).toHaveLength(2);
+});
+
+function showSession(localSessionId: string) {
+  h.uiState.activeNav = "terminal";
+  h.sessionState.activeSessionId = localSessionId;
+}
+
+test("a control request on the terminal in view is not toasted: its bar shows Grant/Deny", () => {
+  showSession("local1");
+  reconcileControlRequests({ local1: conn({ controlRequester: "guest1" }) });
+  expect(get().inbox.filter((x) => x.kind === "controlRequest")).toHaveLength(1);
+  expect(get().toasts).toHaveLength(0);
+});
+
+test("a control request on a terminal in an unshown pane of the split tab still toasts", () => {
+  h.uiState.activeNav = "terminal";
+  useLayoutStore.setState({ splitTabActive: true, root: { type: "leaf", id: "p1", sessionId: "local2" } as never });
+  reconcileControlRequests({ local1: conn({ controlRequester: "guest1" }) });
+  expect(get().toasts).toHaveLength(1);
+});
+
+test("a control request while the SFTP page covers the terminal still toasts", () => {
+  showSession("local1");
+  h.uiState.sftpPanelOpen = true;
+  reconcileControlRequests({ local1: conn({ controlRequester: "guest1" }) });
+  expect(get().toasts).toHaveLength(1);
+});
+
+test("a guest handed control on the terminal in view is not toasted, and not later either", () => {
+  showSession("local1");
+  const guest = conn({ role: "guest", myUserId: "guest1", controlHolder: "guest1" });
+  reconcileControlRequests({ local1: guest });
+  h.uiState.activeNav = "hosts";
+  reconcileControlRequests({ local1: guest });
+  expect(get().toasts).toHaveLength(0);
 });
 
 test("the host holding control on their own session is not toasted", () => {

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "@iconify/react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 import { useUIStore } from "@/stores/uiStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { BUILT_IN_THEMES } from "@/themes/presets";
@@ -13,7 +14,7 @@ import {
   MAX_TERMINAL_LINE_HEIGHT,
   MIN_TERMINAL_LINE_HEIGHT,
 } from "@/utils/terminalTheme";
-import { getUiGroups, getTerminalGroups, getFieldLabels } from "./colorGroups";
+import { getUiGroups, getTerminalGroups, getFieldLabels, OPTIONAL_TERMINAL_FIELDS } from "./colorGroups";
 import { ColorPicker } from "./ColorPicker";
 import { primaryFamily, toFontStack, useSystemFonts } from "@/utils/systemFonts";
 import { PickerSurface } from "@/components/shared/PickerSurface";
@@ -25,6 +26,7 @@ import {
   PickerTrigger,
 } from "@/components/shared/pickerParts";
 import { formInputClass, formInputStyle } from "@/components/shared/Panel";
+import { searchMatcher } from "@/utils/search";
 
 // ── CSS variable inspector ────────────────────────────────────────────────────
 
@@ -146,9 +148,10 @@ function FontPicker({
   const installed = systemFonts?.some((f) => f.family.toLowerCase() === selected.toLowerCase());
   const missing = systemFonts !== null && !isPreset && !installed;
 
+  const matchesQuery = searchMatcher(query);
   const listed = (systemFonts ?? []).filter((f) => {
     if (monospaceOnly && !showAll && !f.monospace) return false;
-    return f.family.toLowerCase().includes(query.trim().toLowerCase());
+    return matchesQuery(f.family);
   });
 
   const close = () => { setOpen(false); setCustom(false); setQuery(""); };
@@ -259,8 +262,10 @@ function FontPicker({
 
 // ── Var search overlay ────────────────────────────────────────────────────────
 
+/** Styles the Esc key named inside the overlay hints. */
+const ESC_KBD = <kbd style={{ color: "var(--t-text-primary)" }} />;
+
 function VarSearchOverlay({ varName, onClose }: { varName: string; onClose: () => void }) {
-  const { t } = useTranslation();
   const [rects, setRects] = useState<DOMRect[]>([]);
 
   useEffect(() => {
@@ -293,9 +298,12 @@ function VarSearchOverlay({ varName, onClose }: { varName: string; onClose: () =
         borderRadius: 6, padding: "6px 14px", fontSize: 12,
         color: "var(--t-text-secondary)", pointerEvents: "none", whiteSpace: "nowrap",
       }}>
-        {t("themeCreator.varSearch.usage", { count: rects.length })}{" "}
-        <code style={{ color: "var(--t-accent)" }}>{varName}</code>
-        {" — "}<kbd style={{ color: "var(--t-text-primary)" }}>{t("themeCreator.escKey")}</kbd> {t("themeCreator.varSearch.suffix")}
+        <Trans
+          i18nKey="themeCreator.varSearch.hint"
+          count={rects.length}
+          values={{ name: varName }}
+          components={{ var: <code style={{ color: "var(--t-accent)" }} />, kbd: ESC_KBD }}
+        />
       </div>
     </>,
     document.body
@@ -303,6 +311,65 @@ function VarSearchOverlay({ varName, onClose }: { varName: string; onClose: () =
 }
 
 // ── ColorEditor ───────────────────────────────────────────────────────────────
+
+const ROW_STYLE: React.CSSProperties = { padding: "2px 4px", margin: "0 -4px" };
+const PICKED_ROW_STYLE: React.CSSProperties = {
+  ...ROW_STYLE,
+  borderRadius: 4,
+  boxShadow: "inset 0 0 0 1px var(--t-accent)",
+  background: "color-mix(in srgb, var(--t-accent) 12%, transparent)",
+};
+
+function RowIconButton({ icon, title, active = false, onClick }: {
+  icon: string;
+  title: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 18, height: 18, borderRadius: 4, border: "1px solid",
+        cursor: "pointer", flexShrink: 0,
+        borderColor: active ? "var(--t-accent)" : "transparent",
+        background: active ? "color-mix(in srgb, var(--t-accent) 18%, transparent)" : "transparent",
+        color: active ? "var(--t-accent)" : "var(--t-text-dim)",
+      }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = "var(--t-text-muted)"; }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = "var(--t-text-dim)"; }}
+    >
+      <Icon icon={icon} width={10} />
+    </button>
+  );
+}
+
+function ColorRow({ field, label, picked, color, text, unset, onChange, children }: {
+  field: string;
+  label: string;
+  picked: boolean;
+  color: string;
+  text: string;
+  unset?: boolean;
+  onChange: (hex: string) => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      data-field={field}
+      data-picked={picked ? "true" : undefined}
+      className="flex items-center gap-2 transition-all duration-300"
+      style={picked ? PICKED_ROW_STYLE : ROW_STYLE}
+    >
+      <ColorPicker value={color} unset={unset} onChange={onChange} />
+      <span className="text-xs flex-1 text-(--t-text-secondary)">{label}</span>
+      <code className="text-xs font-mono text-(--t-text-muted)">{text}</code>
+      {children}
+    </div>
+  );
+}
 
 function ColorEditor({
   draft,
@@ -320,13 +387,11 @@ function ColorEditor({
 
   const setUiColor = (field: keyof UITheme, value: string) =>
     setDraft((d) => ({ ...d, ui: { ...d.ui, [field]: value } }));
-  const setTermColor = (field: keyof TerminalTheme, value: string) =>
+  const setTermColor = (field: keyof TerminalTheme, value: string | undefined) =>
     setDraft((d) => ({ ...d, terminal: { ...d.terminal, [field]: value } }));
 
   const [searchVar, setSearchVar] = useState<string | null>(null);
 
-  const ui = draft.ui as unknown as Record<string, string>;
-  const term = draft.terminal as unknown as Record<string, string>;
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Scroll to first match when pickedFields changes
@@ -335,17 +400,6 @@ function ColorEditor({
     const first = scrollRef.current.querySelector<HTMLElement>("[data-picked='true']");
     first?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [pickedFields]);
-
-  const rowStyle = (field: string): React.CSSProperties =>
-    pickedFields.has(field)
-      ? {
-          borderRadius: 4,
-          boxShadow: "inset 0 0 0 1px var(--t-accent)",
-          background: "color-mix(in srgb, var(--t-accent) 12%, transparent)",
-          padding: "2px 4px",
-          margin: "0 -4px",
-        }
-      : { padding: "2px 4px", margin: "0 -4px" };
 
   return (
     <>
@@ -389,38 +443,27 @@ function ColorEditor({
       {uiGroups.map((group) => (
         <div key={group.label} className="space-y-1.5">
           <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{group.label}</p>
-          {group.fields.map((field) => (
-            <div
-              key={field}
-              data-field={field}
-              data-picked={pickedFields.has(field as string) ? "true" : undefined}
-              className="flex items-center gap-2 transition-all duration-300"
-              style={rowStyle(field as string)}
-            >
-              <ColorPicker
-                value={ui[field as string]}
+          {group.fields.map((field) => {
+            const varName = fieldToVar(field);
+            return (
+              <ColorRow
+                key={field}
+                field={field}
+                label={fieldLabels[field] ?? field}
+                picked={pickedFields.has(field)}
+                color={draft.ui[field]}
+                text={draft.ui[field]}
                 onChange={(hex) => setUiColor(field, hex)}
-              />
-              <span className="text-xs flex-1 text-(--t-text-secondary)">{fieldLabels[field] ?? field}</span>
-              <code className="text-xs font-mono text-(--t-text-muted)">{ui[field as string]}</code>
-              <button
-                onClick={() => setSearchVar(searchVar === fieldToVar(field as string) ? null : fieldToVar(field as string))}
-                title={t("themeCreator.editor.highlightUsing", { varName: fieldToVar(field as string) })}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 18, height: 18, borderRadius: 4, border: "1px solid",
-                  cursor: "pointer", flexShrink: 0,
-                  borderColor: searchVar === fieldToVar(field as string) ? "var(--t-accent)" : "transparent",
-                  background: searchVar === fieldToVar(field as string) ? "color-mix(in srgb, var(--t-accent) 18%, transparent)" : "transparent",
-                  color: searchVar === fieldToVar(field as string) ? "var(--t-accent)" : "var(--t-text-dim)",
-                }}
-                onMouseEnter={(e) => { if (searchVar !== fieldToVar(field as string)) (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-muted)"; }}
-                onMouseLeave={(e) => { if (searchVar !== fieldToVar(field as string)) (e.currentTarget as HTMLButtonElement).style.color = "var(--t-text-dim)"; }}
               >
-                <Icon icon="lucide:search" width={10} />
-              </button>
-            </div>
-          ))}
+                <RowIconButton
+                  icon="lucide:search"
+                  title={t("themeCreator.editor.highlightUsing", { varName })}
+                  active={searchVar === varName}
+                  onClick={() => setSearchVar(searchVar === varName ? null : varName)}
+                />
+              </ColorRow>
+            );
+          })}
         </div>
       ))}
 
@@ -467,23 +510,30 @@ function ColorEditor({
       {terminalGroups.map((group) => (
         <div key={group.label} className="space-y-1.5">
           <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">{group.label}</p>
-          {group.fields.map((field) => (
-            <div
-              key={field}
-              data-field={field}
-              data-picked={pickedFields.has(field as string) ? "true" : undefined}
-              className="flex items-center gap-2 transition-all duration-300"
-              style={rowStyle(field as string)}
-            >
-              <ColorPicker
-                value={term[field as string].startsWith("#") && term[field as string].length >= 7
-                  ? term[field as string].slice(0, 7) : "#000000"}
-                onChange={(hex) => setTermColor(field, hex)}
-              />
-              <span className="text-xs flex-1 text-(--t-text-secondary)">{fieldLabels[field] ?? field}</span>
-              <code className="text-xs font-mono text-(--t-text-muted)">{term[field as string].slice(0, 7)}</code>
-            </div>
-          ))}
+          {group.fields.map((field) => {
+            const value = draft.terminal[field];
+            const hex = value?.startsWith("#") && value.length >= 7 ? value.slice(0, 7) : undefined;
+            return (
+              <ColorRow
+                key={field}
+                field={field}
+                label={fieldLabels[field] ?? field}
+                picked={pickedFields.has(field)}
+                color={hex ?? (value ? "#000000" : draft.terminal.foreground)}
+                text={value?.slice(0, 7) ?? "—"}
+                unset={!value}
+                onChange={(next) => setTermColor(field, next)}
+              >
+                {value && OPTIONAL_TERMINAL_FIELDS.has(field) && (
+                  <RowIconButton
+                    icon="lucide:x"
+                    title={t("themeCreator.editor.resetColor")}
+                    onClick={() => setTermColor(field, undefined)}
+                  />
+                )}
+              </ColorRow>
+            );
+          })}
         </div>
       ))}
     </div>
@@ -494,7 +544,6 @@ function ColorEditor({
 // ── Pick-mode overlay ─────────────────────────────────────────────────────────
 
 function PickOverlay({ rect }: { rect: DOMRect | null }) {
-  const { t } = useTranslation();
   if (!rect) return null;
   return createPortal(
     <>
@@ -525,7 +574,7 @@ function PickOverlay({ rect }: { rect: DOMRect | null }) {
         color: "var(--t-text-secondary)",
         pointerEvents: "none",
       }}>
-        {t("themeCreator.pickOverlay.prefix")} <kbd style={{ color: "var(--t-text-primary)" }}>{t("themeCreator.escKey")}</kbd> {t("themeCreator.pickOverlay.suffix")}
+        <Trans i18nKey="themeCreator.pickOverlay.hint" components={{ kbd: ESC_KBD }} />
       </div>
     </>,
     document.body
@@ -534,6 +583,13 @@ function PickOverlay({ rect }: { rect: DOMRect | null }) {
 
 // ── ThemeCreator ──────────────────────────────────────────────────────────────
 
+const defaultThemeName = () => i18n.t("themeCreator.defaultName");
+
+/** An unsaved custom theme seeded from `base`. */
+function freshDraft(base: AppTheme): AppTheme {
+  return { ...JSON.parse(JSON.stringify(base)), id: `custom-${Date.now()}`, name: defaultThemeName(), builtIn: false };
+}
+
 export default function ThemeCreator() {
   const { t } = useTranslation();
   const { themeCreatorOpen, themeCreatorEditId, closeThemeCreator } = useUIStore();
@@ -541,12 +597,7 @@ export default function ThemeCreator() {
 
   const panelRef = useRef<HTMLDivElement>(null);
   const [restoreThemeId, setRestoreThemeId] = useState<string | null>(null);
-  const [draft, setDraftRaw] = useState<AppTheme>(() => ({
-    ...JSON.parse(JSON.stringify(getActiveTheme())),
-    id: `custom-${Date.now()}`,
-    name: "My Theme",
-    builtIn: false,
-  }));
+  const [draft, setDraftRaw] = useState<AppTheme>(() => freshDraft(getActiveTheme()));
 
   // Undo/redo history
   const historyRef = useRef<AppTheme[]>([]);
@@ -611,12 +662,7 @@ export default function ThemeCreator() {
         return;
       }
     }
-    const d: AppTheme = {
-      ...JSON.parse(JSON.stringify(active)),
-      id: `custom-${Date.now()}`,
-      name: "My Theme",
-      builtIn: false,
-    };
+    const d = freshDraft(active);
     setDraftRaw(d);
     initHistory(d);
   }, [themeCreatorOpen, themeCreatorEditId, getActiveTheme, customThemes, initHistory]);
@@ -668,7 +714,7 @@ export default function ThemeCreator() {
   }, [pickMode]);
 
   const handleSave = useCallback(() => {
-    const themed = draft.name.trim() ? draft : { ...draft, name: "My Theme" };
+    const themed = draft.name.trim() ? draft : { ...draft, name: defaultThemeName() };
     saveCustomTheme(themed);
     setTheme(themed.id);
     closeThemeCreator();
@@ -705,9 +751,9 @@ export default function ThemeCreator() {
         className="fixed right-0 top-0 bottom-0 z-200 flex flex-col border-l border-(--t-border) bg-(--t-bg-modal)"
         style={{
           width: 320,
-          paddingTop: "env(safe-area-inset-top)",
-          paddingBottom: "env(safe-area-inset-bottom)",
-          paddingRight: "env(safe-area-inset-right)",
+          paddingTop: "var(--vt-safe-top)",
+          paddingBottom: "var(--vt-safe-bottom)",
+          paddingRight: "var(--vt-safe-right)",
         }}
       >
         {/* Panel header */}

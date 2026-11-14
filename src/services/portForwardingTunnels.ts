@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { ActiveTunnel, TunnelType } from "../types";
+import { invoke } from "@/lib/invoke";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { ActiveTunnel, PortForwardingRule, TunnelType } from "../types";
 
 export interface PfSessionState {
   tunnels: ActiveTunnel[];
@@ -8,6 +9,15 @@ export interface PfSessionState {
 
 export function getPfState(sessionId: string): Promise<PfSessionState> {
   return invoke("pf_get_state", { sessionId });
+}
+
+/** Pushed for every terminal of a host whenever its tunnels change. */
+export function onPfStateChanged(
+  callback: (sessionId: string, state: PfSessionState) => void,
+): Promise<UnlistenFn> {
+  return listen<PfSessionState & { session_id: string }>("pf-state-changed", ({ payload }) => {
+    callback(payload.session_id, { tunnels: payload.tunnels, suppressed_ports: payload.suppressed_ports });
+  });
 }
 
 export function openPfTunnel(opts: {
@@ -31,6 +41,20 @@ export function openPfTunnel(opts: {
     targetHost: opts.targetHost ?? null,
     ruleId: opts.ruleId ?? null,
     ruleName: opts.ruleName ?? null,
+  });
+}
+
+export function openRuleTunnel(sessionId: string, rule: PortForwardingRule): Promise<ActiveTunnel> {
+  return openPfTunnel({
+    sessionId,
+    localPort: rule.local_port,
+    remotePort: rule.remote_port,
+    remoteHost: rule.remote_host,
+    tunnelType: rule.tunnel_type ?? "local",
+    bindHost: rule.bind_host ?? "127.0.0.1",
+    targetHost: rule.target_host ?? "127.0.0.1",
+    ruleId: rule.id,
+    ruleName: rule.name,
   });
 }
 

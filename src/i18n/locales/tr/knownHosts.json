@@ -1,5 +1,7 @@
 {
   "knownHosts": {
+    "tlsBadge": "TLS",
+    "caVerified": "Sertifika yetkilisi",
     "toolbar": {
       "deleteSelected": "Seçilenleri sil",
       "deleteButton": "SİL"
@@ -10,7 +12,8 @@
       "confirmDelete": {
         "title_one": "Bilinen sunucu silinsin mi?",
         "title_other": "{{count}} bilinen sunucu silinsin mi?",
-        "message": "Güvenilen parmak izleri kaldırılacak. Bu sunuculara yapılacak bir sonraki bağlantı yeni bağlantı olarak değerlendirilecek."
+        "message_one": "Güvenilen parmak izi kaldırılacak. Bu sunucuya yapılacak bir sonraki bağlantı yeni bağlantı olarak değerlendirilecek.",
+        "message_other": "Güvenilen parmak izleri kaldırılacak. Bu sunuculara yapılacak bir sonraki bağlantı yeni bağlantı olarak değerlendirilecek."
       }
     }
   }

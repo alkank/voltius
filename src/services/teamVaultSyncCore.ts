@@ -3,6 +3,8 @@
  * blob's `files` map build/parse. No IO, no crypto — safe to unit test directly.
  */
 
+export { bytesToBase64, base64ToByteArray } from "@/utils/base64";
+
 export interface TeamVaultSlices {
   connections: unknown[];
   identities: unknown[];
@@ -11,22 +13,6 @@ export interface TeamVaultSlices {
   snippets: unknown[];
   snippetFolders: unknown[];
   portForwardingRules: unknown[];
-}
-
-export function bytesToBase64(bytes: number[]): string {
-  const CHUNK = 8192;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.slice(i, i + CHUNK));
-  }
-  return btoa(binary);
-}
-
-export function base64ToBytes(b64: string): number[] {
-  const binary = atob(b64);
-  const out = new Array<number>(binary.length);
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-  return out;
 }
 
 export function parseTeamVaultFile<T>(json: string | undefined): T[] {

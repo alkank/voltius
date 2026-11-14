@@ -19,13 +19,16 @@ pub struct LocalIntegration {
 /// Inspect a shell path and prepare a local PTY spawn that injects OSC 7
 /// emission on every prompt. Returns `Ok(None)` for shells that need no
 /// injection (fish already emits OSC 7) or can't be hooked (cmd, wsl).
+// Spawns a local desktop shell; Android has no local shell to hook.
+#[allow(clippy::disallowed_methods)]
 pub fn prepare_local(shell: &str, session_id: &str) -> std::io::Result<Option<LocalIntegration>> {
     let shell_name = Path::new(shell)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let temp_dir = std::env::temp_dir();
+    let temp_dir =
+        crate::local::flatpak::host_visible_temp_dir().unwrap_or_else(std::env::temp_dir);
 
     match shell_name.as_str() {
         "bash" | "sh" => {
@@ -120,60 +123,149 @@ pub fn cleanup(tempfiles: &[PathBuf]) {
     }
 }
 
-const BASH_RC: &str = "if [ -r /etc/profile ]; then . /etc/profile; fi\n\
-if [ -r \"$HOME/.bash_profile\" ]; then . \"$HOME/.bash_profile\"\n\
-elif [ -r \"$HOME/.bash_login\" ]; then . \"$HOME/.bash_login\"\n\
-elif [ -r \"$HOME/.profile\" ]; then . \"$HOME/.profile\"\n\
-else\n\
-  [ -r /etc/bash.bashrc ] && . /etc/bash.bashrc\n\
-  [ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n\
-fi\n\
-__voltius_pwd() { printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; }\n\
-case \";${PROMPT_COMMAND-};\" in\n\
-  *\";__voltius_pwd;\"*) ;;\n\
-  *) PROMPT_COMMAND=\"__voltius_pwd${PROMPT_COMMAND:+;${PROMPT_COMMAND}}\" ;;\n\
-esac\n\
-__voltius_pwd 2>/dev/null\n";
+// D (last exit status) and A (prompt start) ride on the OSC 7 printf, so each
+// prompt is still one write and nothing touches PS1.
+macro_rules! pwd_fn {
+    ($lead_fmt:literal, $lead_args:literal, $url:literal, $host:literal) => {
+        concat!(
+            r##"__voltius_pwd() { printf '"##,
+            $lead_fmt,
+            r##"\e]133;D;%s\a\e]133;A\a\e]7;"##,
+            $url,
+            r##"\a' "##,
+            $lead_args,
+            r##""$?" ""##,
+            $host,
+            r##"" "$PWD"; }
+"##
+        )
+    };
+}
+
+// PS0 is bash's only pre-exec point that needs no DEBUG trap; bash < 4.4
+// ignores it, so those hosts send no C.
+macro_rules! bash_hooks {
+    ($url:literal, $host:literal) => {
+        concat!(
+            // zsh's PROMPT_SP: readline assumes column 0. Skipped until bash knows COLUMNS,
+            // which checkwinsize keeps fresh.
+            pwd_fn!(
+                r##"%b%*s%b"##,
+                r##""${COLUMNS:+\e[7m%\e[m}" "$((${COLUMNS:-1}-1))" '' "${COLUMNS:+\r\e[K}" "##,
+                $url,
+                $host
+            ),
+            r##"case ";${PROMPT_COMMAND-};" in
+  *";__voltius_pwd;"*) ;;
+  *) PROMPT_COMMAND="__voltius_pwd${PROMPT_COMMAND:+;${PROMPT_COMMAND}}" ;;
+esac
+shopt -s checkwinsize
+PS0='\e]133;C\a'"${PS0-}"
+__voltius_pwd 2>/dev/null
+"##
+        )
+    };
+}
+
+// --rcfile skips bash's own startup files, so replay the login chain: PS1 and
+// profile-driven welcome text live there.
+macro_rules! bash_login_chain {
+    () => {
+        r##"if [ -r /etc/profile ]; then . /etc/profile; fi
+if [ -r "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile"
+elif [ -r "$HOME/.bash_login" ]; then . "$HOME/.bash_login"
+elif [ -r "$HOME/.profile" ]; then . "$HOME/.profile"
+else
+  [ -r /etc/bash.bashrc ] && . /etc/bash.bashrc
+  [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+fi
+"##
+    };
+}
+
+macro_rules! zsh_hooks {
+    ($url:literal, $host:literal) => {
+        concat!(
+            pwd_fn!("", "", $url, $host),
+            r##"__voltius_run() { printf '\e]133;C\a'; }
+typeset -ag precmd_functions preexec_functions
+(($precmd_functions[(I)__voltius_pwd])) || precmd_functions+=(__voltius_pwd)
+(($preexec_functions[(I)__voltius_run])) || preexec_functions+=(__voltius_run)
+__voltius_pwd 2>/dev/null
+"##
+        )
+    };
+}
 
 // .zshenv trampoline (kitty/ghostty technique): restores ZDOTDIR from
 // ZDOTDIR_ORIG then sources the real .zshenv so zsh continues startup with
 // the user's files. Fixes configs like zsh4humans that define functions in
-// ~/.zshenv before .zshrc runs. The hook installs at .zshenv time, so rc
-// files that overwrite precmd_functions (instead of appending) drop cwd
-// tracking — accepted trade-off shared with kitty/ghostty.
-const ZSH_ZSHENV: &str =
-    "if [ -n \"${ZDOTDIR_ORIG-}\" ]; then ZDOTDIR=\"$ZDOTDIR_ORIG\"; else unset ZDOTDIR; fi\n\
-unset ZDOTDIR_ORIG\n\
-[ -f \"${ZDOTDIR:-$HOME}/.zshenv\" ] && source \"${ZDOTDIR:-$HOME}/.zshenv\"\n\
-__voltius_pwd() { printf '\\e]7;file://%s%s\\a' \"${HOST}\" \"$PWD\"; }\n\
-typeset -ag precmd_functions\n\
-(($precmd_functions[(I)__voltius_pwd])) || precmd_functions+=(__voltius_pwd)\n\
-__voltius_pwd 2>/dev/null\n";
+// ~/.zshenv before .zshrc runs. The hooks install at .zshenv time, so rc
+// files that overwrite precmd_functions or preexec_functions (instead of
+// appending) drop them — accepted trade-off shared with kitty/ghostty.
+macro_rules! zsh_env {
+    ($url:literal, $host:literal) => {
+        concat!(
+            r##"if [ -n "${ZDOTDIR_ORIG-}" ]; then ZDOTDIR="$ZDOTDIR_ORIG"; else unset ZDOTDIR; fi
+unset ZDOTDIR_ORIG
+[ -f "${ZDOTDIR:-$HOME}/.zshenv" ] && source "${ZDOTDIR:-$HOME}/.zshenv"
+"##,
+            zsh_hooks!($url, $host)
+        )
+    };
+}
+
+// POSIX sh has no pre-exec or pre-prompt hook, so it reports the cwd only.
+macro_rules! sh_hooks {
+    () => {
+        r##"__voltius_pwd() { printf '\033]7;file://%s%s\007' "${HOSTNAME:-}" "$PWD"; }
+PS1='$(__voltius_pwd)'"${PS1:-$ }"
+"##
+    };
+}
+
+const BASH_RC: &str = concat!(bash_login_chain!(), bash_hooks!("file://%s%s", "$HOSTNAME"));
+
+const ZSH_ZSHENV: &str = zsh_env!("file://%s%s", "${HOST}");
 
 // $E = ESC, $P = path with backslashes, $G = >, $S = space. The $E\\ sequence
 // is ESC + backslash = ST (string terminator), closing the OSC 7. The path
 // uses backslashes; the frontend OSC handler normalizes to forward slashes.
 const CMD_BAT: &str = "@echo off\r\nprompt $E]7;file://localhost/$P$E\\$P$G$S\r\n";
 
-const PWSH_SCRIPT: &str = "if (Test-Path $PROFILE) { . $PROFILE }\n\
-$global:__voltiusOldPrompt = if (Test-Path Function:\\prompt) { $function:prompt } else { $null }\n\
-function global:prompt {\n\
-  $cwd = (Get-Location).Path -replace '\\\\', '/'\n\
-  $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'localhost' }\n\
-  [Console]::Write([char]27 + ']7;file://' + $hostName + '/' + $cwd + [char]7)\n\
-  if ($global:__voltiusOldPrompt) { & $global:__voltiusOldPrompt } else { \"PS $cwd> \" }\n\
-}\n";
+// PSReadLine defines PSConsoleHostReadLine only once it has loaded, so the C
+// wrapper is installed from the first prompt. Every variable is set or tested
+// before it is read: a profile may turn strict mode on.
+const PWSH_SCRIPT: &str = r##"if (Test-Path $PROFILE) { . $PROFILE }
+$global:__voltiusOldPrompt = if (Test-Path Function:\prompt) { $function:prompt } else { $null }
+$global:__voltiusReadLine = $null
+function global:prompt {
+  $code = if ($global:?) { 0 } elseif ((Test-Path Variable:\LASTEXITCODE) -and $global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }
+  if (-not $global:__voltiusReadLine -and (Test-Path Function:\PSConsoleHostReadLine)) {
+    $global:__voltiusReadLine = $function:PSConsoleHostReadLine
+    function global:PSConsoleHostReadLine {
+      $line = & $global:__voltiusReadLine
+      if ("$line".Trim()) { [Console]::Write([char]27 + ']133;C' + [char]7) }
+      $line
+    }
+  }
+  $cwd = (Get-Location).Path -replace '\\', '/'
+  $hostName = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { 'localhost' }
+  [Console]::Write([char]27 + ']133;D;' + $code + [char]7 + [char]27 + ']133;A' + [char]7 + [char]27 + ']7;file://' + $hostName + '/' + $cwd + [char]7)
+  if ($global:__voltiusOldPrompt) { & $global:__voltiusOldPrompt } else { "PS $cwd> " }
+}
+"##;
 
 /// POSIX wrapper that detects $SHELL at runtime, writes a per-session rcfile
 /// under /tmp, and execs into a hooked interactive shell. NOT invoked
-/// directly — `ssh_exec_command` wraps it in a base64 bootstrap so it's
+/// directly — `ssh_exec_command` wraps it in a printf bootstrap so it's
 /// safe to send regardless of the remote login shell's syntax (fish/csh
 /// would otherwise choke on POSIX case/heredoc).
 ///
 /// The `<&2` on every exec is load-bearing: when run via
-/// `echo b64 | base64 -d | sh`, the inner sh's stdin is the pipe from
-/// base64. After exec, the new shell would inherit that already-closed pipe
-/// and immediately exit on EOF (printing "exit" and looping reconnect).
+/// `printf '…' | sh`, the inner sh's stdin is the pipe from printf. After
+/// exec, the new shell would inherit that already-closed pipe and
+/// immediately exit on EOF (printing "exit" and looping reconnect).
 /// Duplicating stderr — which still holds the pty file description sshd
 /// created — restores the real PTY.
 ///
@@ -187,19 +279,23 @@ function global:prompt {\n\
 ///
 /// The temp file leaks intentionally — /tmp is cleared on reboot, and trying
 /// to rm it from inside the rcfile races with bash/zsh reading it.
-const SSH_WRAPPER: &str = r#"case "$(basename "${SHELL:-/bin/sh}")" in
+///
+/// No bash (busybox/dash-only host): hook a POSIX sh through an `$ENV` file.
+/// Without that branch `exec bash` fails with 127 and the session loops
+/// disconnect/reconnect. A login sh reads `$ENV` only after /etc/profile, which
+/// may repoint it (OpenWrt: /etc/shinit), so the file replays that chain.
+///
+/// Comments stay out of the script itself: every byte counts against
+/// `MAX_EXEC_COMMAND_LEN`.
+const SSH_WRAPPER: &str = concat!(
+    r##"case "$(basename "${SHELL:-/bin/sh}")" in
 zsh)
   ZDOTDIR_TMP=$(mktemp -d 2>/dev/null) || exec zsh -l -i <&2
   export ZDOTDIR_ORIG="${ZDOTDIR:-$HOME}"
   cat > "$ZDOTDIR_TMP/.zshenv" <<'EOF'
-if [ -n "${ZDOTDIR_ORIG-}" ]; then ZDOTDIR="$ZDOTDIR_ORIG"; else unset ZDOTDIR; fi
-unset ZDOTDIR_ORIG
-[ -f "${ZDOTDIR:-$HOME}/.zshenv" ] && source "${ZDOTDIR:-$HOME}/.zshenv"
-__voltius_pwd() { printf '\e]7;file://%s%s\a' "${HOST}" "$PWD"; }
-typeset -ag precmd_functions
-(($precmd_functions[(I)__voltius_pwd])) || precmd_functions+=(__voltius_pwd)
-__voltius_pwd 2>/dev/null
-EOF
+"##,
+    zsh_env!("file://%s%s", "${HOST}"),
+    r##"EOF
   ZDOTDIR="$ZDOTDIR_TMP" exec zsh -l -i <&2
   ;;
 fish)
@@ -209,40 +305,28 @@ fish)
   if command -v bash >/dev/null 2>&1; then
   RCFILE_TMP=$(mktemp 2>/dev/null) || exec bash -l -i <&2
   cat > "$RCFILE_TMP" <<'EOF'
-# Replicate bash's own startup so the session matches a normal interactive
-# login: --rcfile otherwise skips /etc/profile, /etc/bash.bashrc and the
-# profile chain, which is where PS1 and profile-driven welcome text live.
-if [ -r /etc/profile ]; then . /etc/profile; fi
-if [ -r "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile"
-elif [ -r "$HOME/.bash_login" ]; then . "$HOME/.bash_login"
-elif [ -r "$HOME/.profile" ]; then . "$HOME/.profile"
-else
-  [ -r /etc/bash.bashrc ] && . /etc/bash.bashrc
-  [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-fi
-__voltius_pwd() { printf '\e]7;file://%s%s\a' "$HOSTNAME" "$PWD"; }
-case ";${PROMPT_COMMAND-};" in
-  *";__voltius_pwd;"*) ;;
-  *) PROMPT_COMMAND="__voltius_pwd${PROMPT_COMMAND:+;${PROMPT_COMMAND}}" ;;
-esac
-__voltius_pwd 2>/dev/null
-EOF
+"##,
+    bash_login_chain!(),
+    bash_hooks!("file://%s%s", "$HOSTNAME"),
+    r##"EOF
   exec bash --rcfile "$RCFILE_TMP" -i <&2
   else
-  # No bash on the remote (busybox/dash-only host). Hooking OSC 7 into a POSIX
-  # sh via an $ENV file keeps integration working; without this branch the
-  # `exec bash` above would fail with 127, the sh would exit, and the session
-  # would loop disconnect/reconnect.
-  ENVF=$(mktemp 2>/dev/null) || exec sh -i <&2
+  ENVF=$(mktemp 2>/dev/null) || exec sh -l -i <&2
   cat > "$ENVF" <<'EOF'
-__voltius_pwd() { printf '\033]7;file://%s%s\007' "${HOSTNAME:-}" "$PWD"; }
-PS1='$(__voltius_pwd)'"${PS1:-$ }"
-EOF
+__voltius_env=$ENV
+[ -r /etc/profile ] && . /etc/profile
+[ -r "$HOME/.profile" ] && . "$HOME/.profile"
+[ "${ENV-}" != "$__voltius_env" ] && [ -r "${ENV-}" ] && . "$ENV"
+unset __voltius_env
+"##,
+    sh_hooks!(),
+    r##"EOF
   ENV="$ENVF" exec sh -i <&2
   fi
   ;;
 esac
-"#;
+"##
+);
 
 /// sshd emits the MOTD only for an interactive `shell` request, not the `exec`
 /// path integration/persistence use, so reproduce it. Single quote-free line so
@@ -250,8 +334,8 @@ esac
 pub const MOTD_PREAMBLE: &str = "[ ! -e $HOME/.hushlogin ] && { [ -r /run/motd.dynamic ] && cat /run/motd.dynamic; [ -r /etc/motd ] && cat /etc/motd; }";
 
 /// Build the SSH exec payload. The remote login shell (whatever it may be:
-/// bash, zsh, fish, csh, dash) only needs to parse `echo ... | base64 -d |
-/// sh` — a syntax common to every Unix shell. The decoded POSIX wrapper then
+/// bash, zsh, fish, csh, dash) only needs to parse `printf '...' | sh` — a
+/// syntax common to every Unix shell. The decoded POSIX wrapper then
 /// runs under /bin/sh and execs into the user's actual shell with OSC 7
 /// emission hooked.
 ///
@@ -269,6 +353,35 @@ pub fn ssh_exec_command(prefix: &str) -> String {
 pub const MAX_EXEC_COMMAND_LEN: usize = 8192;
 
 const TMUX_SOCKET: &str = "voltius";
+
+const TMUX_CC_VERSIONS: &str = r#"*"tmux "3.[2-9]*|*"tmux "[4-9]*|*"tmux "[1-9][0-9]*"#;
+
+pub const CONTROL_MODE_MARKER: &str = "VOLTIUS_CC";
+
+const RAW_SENTINEL: &str = r"printf '\033P1000r\033\\'";
+
+fn tmux_version_case(arms: &str) -> String {
+    format!(r#"case "$(tmux -V 2>/dev/null)" in {arms} esac"#)
+}
+
+fn tmux_cc_arm(action: &str) -> String {
+    format!("{TMUX_CC_VERSIONS}) {action} ;;")
+}
+
+fn tmux_cc_case(action: &str) -> String {
+    tmux_version_case(&tmux_cc_arm(action))
+}
+
+fn tmux_gate(arms: &str) -> String {
+    format!(
+        "command -v tmux >/dev/null 2>&1 || exit 0\n{}\n",
+        tmux_version_case(arms)
+    )
+}
+
+fn mode_style(colors: &crate::ssh::control_mode::TerminalColors) -> String {
+    format!("fg={},bg={}", colors.selection_fg, colors.selection_bg)
+}
 
 /// Prepended to the pane command so the session shell no longer looks like it
 /// is inside a multiplexer (#159). The persistence wrapper is an implementation
@@ -316,7 +429,7 @@ pub fn tmux_session_key(session_id: &str) -> String {
 
 /// Wrap `inner` (the existing exec bootstrap) in tmux, else screen, else a
 /// plain shell. `inner` must contain no double quotes: it is embedded in the
-/// double-quoted multiplexer command. The outer sh's stdin is the base64
+/// double-quoted multiplexer command. The outer sh's stdin is the printf
 /// pipe, so the pty is re-attached with `<&2`: stderr still holds the
 /// original pty file description sshd created. Re-opening the device by path
 /// (`</dev/tty` or the pts path) breaks modern tmux — 3.4+ rejects
@@ -386,6 +499,15 @@ if command -v tmux >/dev/null 2>&1; then
       tmux -L {socket} set -g prefix None >/dev/null 2>&1
       TMUX_PREFIX_NONE=1 ;;
   esac
+  CC=
+  SZ=
+  case "$(tmux -V 2>/dev/null)" in
+    {cc})
+      CC=-CC
+      S=$(stty size <&2 2>/dev/null)
+      [ -n "$S" ] && SZ="-x ${{S#* }} -y ${{S% *}}" ;;
+  esac
+  [ -n "$CC" ] || {raw}
   TMUX_CONF=$(mktemp 2>/dev/null)
   if [ -n "$TMUX_CONF" ]; then
     cat > "$TMUX_CONF" <<'EOF'
@@ -395,13 +517,14 @@ set -g default-terminal "xterm-256color"
 set -g history-limit 50000
 set -sg escape-time 0
 set -g destroy-unattached off
-set -ga terminal-overrides ',*:cnorm=\E[?25h'
+set -ga terminal-overrides ',*:cnorm=\E[?25h:Tc'
 EOF
     [ -n "$TMUX_PREFIX_NONE" ] && echo "set -g prefix None" >> "$TMUX_CONF"
-    exec tmux -L {socket} -f "$TMUX_CONF" new-session -A -s {key} "$V" <&2
+    exec tmux -L {socket} -f "$TMUX_CONF" $CC new-session -A -s {key} $SZ "$V" <&2
   fi
-  exec tmux -L {socket} new-session -A -s {key} "$V" <&2
+  exec tmux -L {socket} $CC new-session -A -s {key} $SZ "$V" <&2
 elif command -v screen >/dev/null 2>&1; then
+  {raw}
   V="{screen_strip}$V"
   screen -wipe >/dev/null 2>&1
   for d in $(screen -ls 2>/dev/null | grep -F .{key} | awk '{{print $1}}' | tail -n +2); do
@@ -428,6 +551,7 @@ EOF
   V="{screen_notice}; $V"
   exec screen -S {key} -D -R sh -c "$V" <&2
 else
+  {raw}
   {no_mux_notice}
   exec sh -c "$V" <&2
 fi
@@ -436,6 +560,8 @@ fi
         key = session_key,
         inner = inner,
         tmux_strip = TMUX_ENV_STRIP,
+        cc = TMUX_CC_VERSIONS,
+        raw = RAW_SENTINEL,
         screen_strip = SCREEN_ENV_STRIP,
         screen_notice = notice_printf(SCREEN_DEGRADED_NOTICE),
         no_mux_notice =
@@ -451,22 +577,29 @@ fi
 pub fn persistent_attach_command(session_key: &str) -> String {
     let script = format!(
         r#"if command -v tmux >/dev/null 2>&1 && tmux -L {socket} has-session -t {key} 2>/dev/null; then
-  exec tmux -L {socket} attach-session -t {key} <&2
+  CC=
+  {cc}
+  [ -n "$CC" ] || {raw}
+  exec tmux -L {socket} $CC attach-session -t {key} <&2
 elif command -v screen >/dev/null 2>&1; then
+  {raw}
   exec screen -x -S {key} <&2
 fi
+{raw}
 printf '\r\n[voltius] session has ended\r\n'
 exit 97
 "#,
         socket = TMUX_SOCKET,
         key = session_key,
+        cc = tmux_cc_case("CC=-CC"),
+        raw = RAW_SENTINEL,
     );
     encode_wrapper(&script)
 }
 
 /// One-shot existence probe mirroring the wrapper's tmux-first order. Prints
-/// VOLTIUS_PRESENT when the session is alive; `screen -wipe` first so a dead
-/// entry left by a crash doesn't read as present.
+/// VOLTIUS_PRESENT when the session is alive, VOLTIUS_NOMUX when the host has
+/// neither multiplexer; `screen -wipe` first so a dead entry doesn't read as present.
 pub fn persistent_probe_command(session_key: &str) -> String {
     let script = format!(
         r#"if command -v tmux >/dev/null 2>&1 && tmux -L {socket} has-session -t {key} 2>/dev/null; then
@@ -474,10 +607,214 @@ pub fn persistent_probe_command(session_key: &str) -> String {
 elif command -v screen >/dev/null 2>&1; then
   screen -wipe >/dev/null 2>&1
   screen -ls 2>/dev/null | grep -qF .{key} && printf VOLTIUS_PRESENT
+elif ! command -v tmux >/dev/null 2>&1; then
+  printf VOLTIUS_NOMUX
 fi
 true"#,
         socket = TMUX_SOCKET,
         key = session_key,
+    );
+    encode_wrapper(&script)
+}
+
+/// Legacy tmux (< 3.2) only: Enter leaves wheel-entered copy-mode, a drag keeps
+/// its highlight (3.0+), and the selection takes the theme colours.
+pub fn persistent_legacy_setup_command(
+    session_key: &str,
+    colors: Option<&crate::ssh::control_mode::TerminalColors>,
+) -> String {
+    let style = colors
+        .map(|c| {
+            format!(
+                "printf '%s\\n' \"set -g mode-style '{}'\" >> \"$F\"\n",
+                mode_style(c)
+            )
+        })
+        .unwrap_or_default();
+    let script = format!(
+        r#"NC=
+{gate}{wait}F=$(mktemp 2>/dev/null) || exit 0
+for t in copy-mode copy-mode-vi; do
+  printf 'bind -T %s Enter send -X cancel \; send-keys Enter\n' $t
+  [ -n "$NC" ] && printf 'bind -T %s MouseDragEnd1Pane send -X copy-selection-no-clear\n' $t
+done > "$F"
+{style}tmux -L {socket} source-file "$F"
+rm -f "$F"
+"#,
+        socket = TMUX_SOCKET,
+        gate = tmux_gate(r#"*"tmux "3.[01]*) NC=1 ;; *"tmux "2.[6-9]*) ;; *) exit 0 ;;"#),
+        wait = tmux_wait_session(session_key),
+    );
+    encode_wrapper(&script)
+}
+
+fn tmux_wait_session(session_key: &str) -> String {
+    format!(
+        r#"i=0
+until tmux -L {TMUX_SOCKET} has-session -t ={session_key} 2>/dev/null; do
+  [ $i -ge 15 ] && exit 0
+  sleep 1
+  i=$((i+1))
+done
+"#
+    )
+}
+
+/// tmux < 3.2 fires `client-detached` only for `detach-client`, never for a lost client.
+const TTL_TMUX_VERSIONS: &str = TMUX_CC_VERSIONS;
+
+/// `voltius_idle PID...`: every process under the pane pids is allowlisted and not running
+/// (prints the shell pids). `voltius_quiet PID...`: those shells' summed utime+stime.
+macro_rules! ttl_idle_check {
+    () => {
+        r#"unset COLUMNS
+voltius_idle() {
+  o=$(ps -e -o pid= -o ppid= -o stat= -o comm= -o args=) && [ -n "$o" ] || return 1
+  printf '%s\n' "$o" | awk -v r="$*" '
+function sh(c) { return c ~ /^(sh|bash|zsh|fish|dash|ksh|mksh|ash|tcsh|csh|busybox)$/ }
+function kind(l,  a, n, i) {
+  n = split(l, a, " ")
+  for (i = 6; i <= n; i++) {
+    if (a[i] ~ /^--(rcfile|init-file)$/) i++
+    else if (a[i] ~ /^-[^-]*c/ || a[i] ~ /^--command/) return "c"
+    else if (a[i] ~ /^-[^-]*s/ || a[i] !~ /^[-+]/) return "x"
+  }
+  return "i"
+}
+$1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || NF < 5 { bad = 1 }
+{ c = $4; sub(/^-/, "", c); C[$1] = c; S[$1] = $3; L[$1] = $0; K[$2] = K[$2] " " $1 }
+END {
+  if (bad || !(1 in C)) exit 1
+  t = split(r, Q, " ")
+  if (!t) exit 1
+  for (h = 1; h <= t; h++) W[h] = 1
+  for (h = 1; h <= t; h++) {
+    x = Q[h]
+    if (!(x in C) || S[x] ~ /^R/) exit 1
+    if (x in V) continue
+    V[x] = 1; c = C[x]; w = 0
+    if (sh(c)) {
+      k = kind(L[x])
+      if (k == "x" || (k == "c" && !W[h])) exit 1
+      w = k == "c"
+      print x
+    } else if (c !~ /^(login|sudo|su|doas)$/ && c !~ /^gitstatusd/) exit 1
+    m = split(K[x], z, " ")
+    for (j = 1; j <= m; j++) { Q[++t] = z[j]; W[t] = w }
+  }
+}'
+}
+voltius_quiet() {
+  l=$(voltius_idle "$@") || return 1
+  n=0
+  for p in $l; do
+    f=$(cat "${VOLTIUS_PROC:-/proc}/$p/stat" 2>/dev/null) || return 1
+    set -- ${f##*)}
+    case "${12}:${13}" in *[!0-9:]*|:*|*:) return 1 ;; esac
+    n=$((n + ${12} + ${13}))
+  done
+  echo $n
+}
+"#
+    };
+}
+
+#[cfg(test)]
+const TTL_IDLE_CHECK: &str = ttl_idle_check!();
+
+/// `$1` is the session; the hook decodes it from [`TTL_REAPER_OPTION`] (see [`ttl_reaper_option`]).
+/// Every failed check exits 0 without killing.
+pub(crate) const TTL_REAPER: &str = concat!(
+    ttl_idle_check!(),
+    r#"S=$1
+T="tmux -L voltius"
+case $S in voltius_*) ;; *) exit 0 ;; esac
+L=$($T show -v -t "=$S:" @voltius_ttl 2>/dev/null)
+case $L in ''|0?*|*[!0-9]*|??????????*) exit 0 ;; esac
+voltius_held() {
+  $T has-session -t "=$S" 2>/dev/null &&
+  [ "$($T display -p -t "=$S:" '#{session_attached}' 2>/dev/null)" = 0 ] &&
+  [ "$($T show -v -t "=$S:" @voltius_ttl 2>/dev/null)" = "$L" ] &&
+  { [ -z "$D" ] || [ "$($T show -v -t "=$S:" @voltius_detached_at 2>/dev/null)" = "$D" ]; }
+}
+voltius_now() {
+  N=$(date +%s 2>/dev/null)
+  case $N in ''|*[!0-9]*|????????????*) exit 0 ;; esac
+}
+D=
+voltius_held || exit 0
+voltius_now
+D="$N.$$"
+E=$((N + L))
+$T set -t "=$S:" @voltius_detached_at "$D" 2>/dev/null || exit 0
+while voltius_now; [ "$N" -lt "$E" ]; do
+  w=$((E - N))
+  [ "$w" -le 300 ] || w=300
+  sleep "$w" || exit 0
+  voltius_held || exit 0
+done
+voltius_held || exit 0
+P=$($T list-panes -s -t "=$S:" -F '#{pane_pid}' 2>/dev/null) && [ -n "$P" ] || exit 0
+c=
+for i in 1 2 3; do
+  [ $i = 1 ] || sleep 5 || exit 0
+  n=$(voltius_quiet $P) || exit 0
+  [ -z "$c" ] || [ "$n" = "$c" ] || exit 0
+  c=$n
+done
+voltius_held || exit 0
+$T kill-session -t "=$S" 2>/dev/null
+exit 0
+"#
+);
+
+/// Versioned: hooks already armed by older clients keep calling the name they were given.
+pub(crate) const TTL_REAPER_OPTION: &str = "@voltius_reap1";
+
+/// tmux 3.4 stores `$` as `\$` and `show` turns newlines into `_` outside tmux, so the
+/// option holds the reaper as a printf format of printable ASCII only.
+fn ttl_reaper_option() -> String {
+    printf_escape(TTL_REAPER)
+}
+
+/// The reaper rejects 10+ digit TTLs; `$((now + ttl))` must not overflow.
+const MAX_TTL_SECS: u64 = 999_999_999;
+
+pub fn persistent_ttl_command(session_key: &str, ttl_secs: Option<u64>) -> String {
+    let action = match ttl_secs {
+        Some(secs) => format!(
+            r#"$T set -g {TTL_REAPER_OPTION} {reaper} &&
+$T set -t ={key}: @voltius_ttl {secs} &&
+$T set-hook -t ={key}: client-detached 'run-shell -b "sh -c \"\$(printf \"\$(tmux -L {socket} show -gv {TTL_REAPER_OPTION})\")\" voltius-reap #{{session_name}} >/dev/null 2>&1 || :"'
+"#,
+            reaper = crate::ssh::exec::shell_quote(&ttl_reaper_option()),
+            secs = secs.min(MAX_TTL_SECS),
+            key = session_key,
+            socket = TMUX_SOCKET,
+        ),
+        None => format!(
+            r#"$T set-hook -u -t ={session_key}: client-detached 2>/dev/null
+$T set -u -t ={session_key}: @voltius_ttl 2>/dev/null
+true
+"#
+        ),
+    };
+    let script = format!(
+        r#"{gate}{wait}T="tmux -L {TMUX_SOCKET}"
+{action}"#,
+        gate = tmux_gate(&format!("{TTL_TMUX_VERSIONS}) ;; *) exit 0 ;;")),
+        wait = tmux_wait_session(session_key),
+    );
+    encode_wrapper(&script)
+}
+
+pub fn legacy_mode_style_command(colors: &crate::ssh::control_mode::TerminalColors) -> String {
+    let script = format!(
+        r#"{gate}tmux -L {socket} set -g mode-style '{style}' 2>/dev/null
+true"#,
+        gate = tmux_gate(&tmux_cc_arm("exit 0")),
+        socket = TMUX_SOCKET,
+        style = mode_style(colors),
     );
     encode_wrapper(&script)
 }
@@ -503,6 +840,7 @@ true"#,
 pub fn capture_history_command(session_key: &str, pty_rows: u32) -> String {
     format!(
         r#"if command -v tmux >/dev/null 2>&1 && tmux -L {socket} has-session -t {key} 2>/dev/null; then
+  {cc}
   tmux -L {socket} capture-pane -t {key} -peJ -S -50000 -E -1 2>/dev/null
 elif command -v screen >/dev/null 2>&1; then
   f=$(mktemp 2>/dev/null) || exit 0
@@ -518,6 +856,7 @@ true"#,
         socket = TMUX_SOCKET,
         key = session_key,
         rows = pty_rows,
+        cc = tmux_cc_case(&format!("printf {CONTROL_MODE_MARKER}; exit 0")),
     )
 }
 
@@ -623,10 +962,22 @@ pub fn wsl_exec_command() -> String {
 }
 
 fn encode_wrapper(script: &str) -> String {
-    use base64::engine::general_purpose;
-    use base64::Engine;
-    let encoded = general_purpose::STANDARD.encode(script);
-    format!("echo {encoded} | base64 -d | sh")
+    format!("printf '{}' | sh", printf_escape(script))
+}
+
+/// `script` as a printf format any login shell passes through unchanged, inside
+/// single or double quotes. busybox builds such as OpenWrt's ship no `base64`.
+fn printf_escape(script: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(script.len() * 5 / 4);
+    for c in script.chars() {
+        if !c.is_ascii() || c.is_ascii_alphanumeric() || " -_.,:;/=+(){}[]<>|&*?#@^~".contains(c) {
+            out.push(c);
+        } else {
+            let _ = write!(out, "\\{:03o}", c as u32);
+        }
+    }
+    out
 }
 
 /// Container wrapper (docker exec / pct exec). Like SSH_WRAPPER, but:
@@ -634,65 +985,58 @@ fn encode_wrapper(script: &str) -> String {
 ///     fallback is a POSIX `sh` whose `$ENV` startup file hooks OSC 7 into PS1
 ///     via command substitution (`$(__voltius_pwd)` re-runs every prompt and
 ///     emits the sequence — portable across dash and busybox ash).
-///   - No `</dev/tty` is needed: it's run via `eval "$(… | base64 -d)"`, so the
+///   - No `</dev/tty` is needed: it's run via `eval "$(printf …)"`, so the
 ///     wrapping shell keeps the container TTY on stdin and `exec sh -i`
 ///     inherits it directly (no pipe to escape from).
-const CONTAINER_WRAPPER: &str = r#"if command -v bash >/dev/null 2>&1; then
+const CONTAINER_WRAPPER: &str = concat!(
+    r##"if command -v bash >/dev/null 2>&1; then
   RC=$(mktemp 2>/dev/null || echo /tmp/.voltius_rc)
   cat > "$RC" <<'EOF'
 [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
-__voltius_pwd() { printf '\033]7;file://%s%s\007' "${HOSTNAME:-}" "$PWD"; }
-case ";${PROMPT_COMMAND-};" in
-  *";__voltius_pwd;"*) ;;
-  *) PROMPT_COMMAND="__voltius_pwd${PROMPT_COMMAND:+;${PROMPT_COMMAND}}" ;;
-esac
-__voltius_pwd 2>/dev/null
-EOF
+"##,
+    bash_hooks!("file://%s%s", "$HOSTNAME"),
+    r##"EOF
   exec bash --rcfile "$RC" -i
 else
   ENVF=$(mktemp 2>/dev/null || echo /tmp/.voltius_env)
   cat > "$ENVF" <<'EOF'
-__voltius_pwd() { printf '\033]7;file://%s%s\007' "${HOSTNAME:-}" "$PWD"; }
 PROMPT_COMMAND="__voltius_pwd"
-PS1='$(__voltius_pwd)'"${PS1:-$ }"
-EOF
+"##,
+    sh_hooks!(),
+    r##"EOF
   ENV="$ENVF" exec sh -i
 fi
-"#;
+"##
+);
 
-/// Build the argument for `sh -c '<…>'` inside a container (the caller prefixes
-/// `docker exec -it <cid>` or `pct exec <vmid> --`). Base64-decodes the wrapper
-/// and `eval`s it (keeping the container TTY on stdin); if `base64` is missing,
-/// falls back to a plain interactive shell so the session still opens.
-pub fn container_exec_payload() -> String {
-    use base64::engine::general_purpose;
-    use base64::Engine;
-    let encoded = general_purpose::STANDARD.encode(CONTAINER_WRAPPER);
-    // Single-quote-free (only double quotes + base64 alphabet) so the caller can
-    // safely wrap the whole thing in single quotes for the host shell.
+/// The argument for `sh -c '<…>'` inside a container. `eval`s the wrapper so the
+/// container TTY stays on stdin. Single-quote-free, so it can be wrapped as is.
+fn container_exec_payload() -> String {
     format!(
-        "if command -v base64 >/dev/null 2>&1; then eval \"$(printf %s \"{encoded}\" | base64 -d)\"; else exec sh -i; fi"
+        "eval \"$(printf \"{}\")\"",
+        printf_escape(CONTAINER_WRAPPER)
     )
+}
+
+/// The interactive shell `prefix` (`docker exec -it <cid>`, `pct exec <vmid> --`) enters.
+pub fn container_shell(prefix: &str) -> String {
+    format!("{prefix} sh -c '{}'", container_exec_payload())
 }
 
 /// WSL flavor: same structure as SSH_WRAPPER but the printf format embeds
 /// the distro into the OSC 7 path. The frontend recognizes the
 /// `wsl.localhost` host and constructs a UNC path Windows can read.
-const WSL_WRAPPER: &str = r#"WSL_DISTRO_NAME="${WSL_DISTRO_NAME:-Linux}"
+const WSL_WRAPPER: &str = concat!(
+    r##"WSL_DISTRO_NAME="${WSL_DISTRO_NAME:-Linux}"
 export WSL_DISTRO_NAME
 case "$(basename "${SHELL:-/bin/sh}")" in
 zsh)
   ZDOTDIR_TMP=$(mktemp -d 2>/dev/null) || exec zsh -i <&2
   export ZDOTDIR_ORIG="${ZDOTDIR:-$HOME}"
   cat > "$ZDOTDIR_TMP/.zshenv" <<'EOF'
-if [ -n "${ZDOTDIR_ORIG-}" ]; then ZDOTDIR="$ZDOTDIR_ORIG"; else unset ZDOTDIR; fi
-unset ZDOTDIR_ORIG
-[ -f "${ZDOTDIR:-$HOME}/.zshenv" ] && source "${ZDOTDIR:-$HOME}/.zshenv"
-__voltius_pwd() { printf '\e]7;file://wsl.localhost/%s%s\a' "$WSL_DISTRO_NAME" "$PWD"; }
-typeset -ag precmd_functions
-(($precmd_functions[(I)__voltius_pwd])) || precmd_functions+=(__voltius_pwd)
-__voltius_pwd 2>/dev/null
-EOF
+"##,
+    zsh_env!("file://wsl.localhost/%s%s", "$WSL_DISTRO_NAME"),
+    r##"EOF
   ZDOTDIR="$ZDOTDIR_TMP" exec zsh -i <&2
   ;;
 fish)
@@ -702,30 +1046,40 @@ fish)
   RCFILE_TMP=$(mktemp 2>/dev/null) || exec bash -i <&2
   cat > "$RCFILE_TMP" <<'EOF'
 [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
-__voltius_pwd() { printf '\e]7;file://wsl.localhost/%s%s\a' "$WSL_DISTRO_NAME" "$PWD"; }
-case ";${PROMPT_COMMAND-};" in
-  *";__voltius_pwd;"*) ;;
-  *) PROMPT_COMMAND="__voltius_pwd${PROMPT_COMMAND:+;${PROMPT_COMMAND}}" ;;
-esac
-__voltius_pwd 2>/dev/null
-EOF
+"##,
+    bash_hooks!("file://wsl.localhost/%s%s", "$WSL_DISTRO_NAME"),
+    r##"EOF
   exec bash --rcfile "$RCFILE_TMP" -i <&2
   ;;
 esac
-"#;
+"##
+);
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose;
-    use base64::Engine;
+
+    fn bootstrap_format(cmd: &str) -> &str {
+        cmd.strip_prefix("printf '")
+            .and_then(|s| s.strip_suffix("' | sh"))
+            .expect("bootstrap shape")
+    }
 
     fn decode_bootstrap(cmd: &str) -> String {
-        let b64 = cmd
-            .strip_prefix("echo ")
-            .and_then(|s| s.split(" |").next())
-            .expect("bootstrap shape");
-        String::from_utf8(general_purpose::STANDARD.decode(b64).unwrap()).unwrap()
+        unescape_printf(bootstrap_format(cmd))
+    }
+
+    fn unescape_printf(escaped: &str) -> String {
+        let mut out = String::new();
+        let mut rest = escaped;
+        while let Some(i) = rest.find('\\') {
+            out.push_str(&rest[..i]);
+            out.push(u8::from_str_radix(&rest[i + 1..i + 4], 8).unwrap() as char);
+            rest = &rest[i + 4..];
+        }
+        out.push_str(rest);
+        out
     }
 
     #[test]
@@ -779,6 +1133,7 @@ mod tests {
         // cnorm/ve stripped of ?12l so multiplexer redraws don't disable the
         // user's cursor-blink setting (xterm.js maps DECRST 12 to blink off).
         assert!(script.contains("cnorm=\\E[?25h"));
+        assert!(script.contains(r"set -ga terminal-overrides ',*:cnorm=\E[?25h:Tc'"));
         assert!(script.contains("ti@:te@:ve=\\E[?25h"));
         assert!(script.contains("will not survive disconnects"));
         assert!(!inner.contains('"'));
@@ -806,6 +1161,61 @@ mod tests {
         assert!(!decode_bootstrap(&ssh_exec_command("")).contains("cd '"));
     }
 
+    fn bootstrap_payloads() -> Vec<String> {
+        let key = tmux_session_key("s1");
+        vec![
+            ssh_exec_command("cd '/srv/app' 2>/dev/null; "),
+            persistent_exec_command(&key, &ssh_exec_command("")),
+            persistent_attach_command(&key),
+            persistent_legacy_setup_command(&key, Some(&test_colors())),
+            cwd_probe_command(&key),
+            force_kill_command("s1"),
+            wsl_exec_command(),
+            persistent_ttl_command(&key, Some(86400)),
+            persistent_ttl_command(&key, None),
+        ]
+    }
+
+    #[test]
+    fn bootstrap_escapes_survive_any_login_shell_quoting() {
+        let mut escaped: Vec<String> = bootstrap_payloads()
+            .iter()
+            .map(|cmd| bootstrap_format(cmd).to_string())
+            .collect();
+        escaped.push(printf_escape(CONTAINER_WRAPPER));
+        for e in escaped {
+            for bad in ['\'', '"', '$', '`', '!', '%', '\n', '\t'] {
+                assert!(!e.contains(bad), "{bad:?} must be octal-escaped");
+            }
+            for (i, _) in e.match_indices('\\') {
+                assert!(
+                    e.as_bytes()[i + 1..i + 4]
+                        .iter()
+                        .all(|b| (b'0'..=b'7').contains(b)),
+                    "backslash must open a three-digit octal escape"
+                );
+            }
+        }
+        assert!(!container_exec_payload().contains('\''));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_decodes_with_plain_sh_printf() {
+        for cmd in bootstrap_payloads() {
+            let printf = cmd.strip_suffix(" | sh").unwrap();
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(printf)
+                .output()
+                .expect("sh runs");
+            assert_eq!(
+                String::from_utf8(out.stdout).unwrap(),
+                decode_bootstrap(&cmd)
+            );
+        }
+    }
+
     #[test]
     fn persistent_attach_joins_without_stealing_or_creating() {
         let script = decode_bootstrap(&persistent_attach_command("voltius_s1"));
@@ -827,7 +1237,90 @@ mod tests {
         assert!(script.contains("screen -wipe"));
         assert!(script.contains("grep -qF .voltius_s1"));
         assert!(script.contains("VOLTIUS_PRESENT"));
+        assert!(script.contains("VOLTIUS_NOMUX"));
         assert!(script.trim_end().ends_with("true"));
+    }
+
+    fn test_colors() -> crate::ssh::control_mode::TerminalColors {
+        crate::ssh::control_mode::TerminalColors {
+            fg: "#101820".into(),
+            bg: "#fafaf0".into(),
+            selection_fg: "#101820".into(),
+            selection_bg: "#c8d0e0".into(),
+        }
+    }
+
+    #[test]
+    fn persistent_wrapper_attaches_in_control_mode_on_tmux_3_2_and_later() {
+        let script = decode_bootstrap(&persistent_exec_command(
+            "voltius_s1",
+            &ssh_exec_command(""),
+        ));
+        assert!(script.contains(&format!("    {TMUX_CC_VERSIONS})")));
+        assert!(script.contains("CC=-CC"));
+        assert!(script.contains("S=$(stty size <&2 2>/dev/null)"));
+        assert!(script.contains(
+            r#"exec tmux -L voltius -f "$TMUX_CONF" $CC new-session -A -s voltius_s1 $SZ "$V" <&2"#
+        ));
+        assert!(script
+            .contains(r#"exec tmux -L voltius $CC new-session -A -s voltius_s1 $SZ "$V" <&2"#));
+    }
+
+    #[test]
+    fn every_branch_but_control_mode_announces_raw_output() {
+        let sentinel = r"printf '\033P1000r\033\\'";
+        for script in [
+            decode_bootstrap(&persistent_exec_command(
+                "voltius_s1",
+                &ssh_exec_command(""),
+            )),
+            decode_bootstrap(&persistent_attach_command("voltius_s1")),
+        ] {
+            assert_eq!(script.matches(sentinel).count(), 3, "{script}");
+            assert!(script.contains(&format!(r#"[ -n "$CC" ] || {sentinel}"#)));
+        }
+    }
+
+    #[test]
+    fn persistent_attach_uses_control_mode_on_tmux_3_2_and_later() {
+        let script = decode_bootstrap(&persistent_attach_command("voltius_s1"));
+        assert!(script.contains(TMUX_CC_VERSIONS));
+        assert!(script.contains("exec tmux -L voltius $CC attach-session -t voltius_s1 <&2"));
+    }
+
+    #[test]
+    fn capture_history_defers_to_the_control_mode_sync() {
+        let cmd = capture_history_command("voltius_s1", 40);
+        let marker = cmd.find("printf VOLTIUS_CC").expect("marker");
+        assert!(marker < cmd.find("capture-pane").unwrap());
+        assert!(cmd.contains(TMUX_CC_VERSIONS));
+    }
+
+    #[test]
+    fn legacy_setup_only_touches_tmux_below_3_2() {
+        let script = decode_bootstrap(&persistent_legacy_setup_command(
+            "voltius_s1",
+            Some(&test_colors()),
+        ));
+        assert!(script.contains(r#"*"tmux "3.[01]*) NC=1 ;;"#));
+        assert!(script.contains(r#"*"tmux "2.[6-9]*) ;;"#));
+        assert!(script.contains("*) exit 0 ;;"));
+        assert!(script.contains("until tmux -L voltius has-session -t =voltius_s1"));
+        assert!(
+            script.contains(r"printf 'bind -T %s Enter send -X cancel \; send-keys Enter\n' $t")
+        );
+        assert!(script.contains("MouseDragEnd1Pane send -X copy-selection-no-clear"));
+        assert!(script.contains("set -g mode-style 'fg=#101820,bg=#c8d0e0'"));
+        assert!(script.contains("tmux -L voltius source-file"));
+        let plain = decode_bootstrap(&persistent_legacy_setup_command("voltius_s1", None));
+        assert!(!plain.contains("mode-style"));
+    }
+
+    #[test]
+    fn legacy_mode_style_skips_control_mode_hosts() {
+        let script = decode_bootstrap(&legacy_mode_style_command(&test_colors()));
+        assert!(script.contains(&format!("{TMUX_CC_VERSIONS}) exit 0 ;;")));
+        assert!(script.contains("tmux -L voltius set -g mode-style 'fg=#101820,bg=#c8d0e0'"));
     }
 
     #[test]
@@ -1146,6 +1639,113 @@ mod tests {
     }
 
     #[test]
+    fn bash_and_zsh_wrappers_carry_prompt_marks() {
+        let container = unescape_printf(&printf_escape(CONTAINER_WRAPPER));
+        for script in [
+            BASH_RC.to_string(),
+            ZSH_ZSHENV.to_string(),
+            decode_bootstrap(&ssh_exec_command("")),
+            decode_bootstrap(&wsl_exec_command()),
+            container,
+        ] {
+            assert!(script.contains(r"\e]133;D;%s\a\e]133;A\a\e]7;file://"));
+            assert!(script.contains(r"\e]133;C\a"));
+        }
+        assert!(BASH_RC.contains("PS0="));
+        assert!(ZSH_ZSHENV.contains("preexec_functions+=(__voltius_run)"));
+        assert!(!sh_hooks!().contains("133;"));
+        assert!(PWSH_SCRIPT.contains("']133;D;' + $code"));
+        assert!(PWSH_SCRIPT.contains("']133;C'"));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_hooked(shell_command: &str, hooks: &str, rc_name: &str, input: &str) -> String {
+        static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "voltius-marks-{}-{}",
+            std::process::id(),
+            RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(rc_name), hooks).unwrap();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '{input}' | {shell_command} 2>&1"))
+            .env("RC_DIR", &dir)
+            .output()
+            .expect("sh runs");
+        let _ = std::fs::remove_dir_all(&dir);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn prompt_marks(shell_command: &str, hooks: &str, rc_name: &str) -> Vec<String> {
+        run_hooked(shell_command, hooks, rc_name, "true\\nfalse\\n\\n")
+            .split("\x1b]133;")
+            .skip(1)
+            .filter_map(|rest| rest.split('\x07').next().map(str::to_string))
+            .collect()
+    }
+
+    // One D;A pair from the rc's own call, then per line: C when a command
+    // ran, and the D that reports it. The empty line re-reports the last status.
+    #[cfg(target_os = "linux")]
+    const EXPECTED_MARKS: [&str; 12] = [
+        "D;0", "A", "D;0", "A", "C", "D;0", "A", "C", "D;1", "A", "D;1", "A",
+    ];
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bash_hooks_mark_each_command() {
+        let marks = prompt_marks(
+            r#"bash --rcfile "$RC_DIR/rc" -i"#,
+            bash_hooks!("file://%s%s", "$HOSTNAME"),
+            "rc",
+        );
+        assert_eq!(marks, EXPECTED_MARKS);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bash_prompt_starts_on_a_fresh_line_after_unterminated_output() {
+        let run = |columns: &str| {
+            run_hooked(
+                &format!(r#"env {columns} bash --rcfile "$RC_DIR/rc" -i"#),
+                bash_hooks!("file://%s%s", "$HOSTNAME"),
+                "rc",
+                "printf x\\n",
+            )
+        };
+        let sized = run("COLUMNS=10");
+        assert!(
+            sized.contains("x\x1b[7m%\x1b[m         \r\x1b[K\x1b]133;D;0\x07"),
+            "{sized:?}"
+        );
+        // Readline sets COLUMNS at the first prompt; only the rc's own call can lack it.
+        let unknown = run("-u COLUMNS");
+        let rc_call = unknown.split("\x1b]133;D").next().unwrap_or_default();
+        assert!(!rc_call.contains('%'), "{unknown:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn zsh_hooks_mark_each_command() {
+        let has_zsh = std::process::Command::new("sh")
+            .args(["-c", "command -v zsh"])
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !has_zsh {
+            return;
+        }
+        let marks = prompt_marks(
+            r#"ZDOTDIR="$RC_DIR" zsh -i"#,
+            zsh_hooks!("file://%s%s", "${HOST}"),
+            ".zshenv",
+        );
+        assert_eq!(marks, EXPECTED_MARKS);
+    }
+
+    #[test]
     fn persistent_exec_command_fits_dropbear_max_string_len() {
         // dropbear exits the connection with "String too long" past 9000 bytes,
         // which surfaces as a hang just after auth (#85). Inlining `inner` at
@@ -1179,5 +1779,511 @@ mod tests {
             decoded.matches("\"$V\"").count() >= 5,
             "each branch uses $V"
         );
+    }
+
+    #[test]
+    fn ttl_command_arms_hook_with_seconds() {
+        let s = decode_bootstrap(&persistent_ttl_command("voltius_s1", Some(86400)));
+        assert!(s.contains("set -t =voltius_s1: @voltius_ttl 86400 "));
+        assert!(s.contains("set-hook -t =voltius_s1: client-detached"));
+        assert!(s.contains(&format!("set -g {TTL_REAPER_OPTION} ")));
+        assert!(s.contains("until tmux -L voltius has-session -t =voltius_s1"));
+        assert!(!s.contains("set-hook -u"));
+    }
+
+    #[test]
+    fn ttl_command_clamps_ttl_to_nine_digits() {
+        let s = decode_bootstrap(&persistent_ttl_command("voltius_s1", Some(u64::MAX)));
+        assert!(s.contains("@voltius_ttl 999999999 "));
+    }
+
+    #[test]
+    fn ttl_command_off_disarms() {
+        let s = decode_bootstrap(&persistent_ttl_command("voltius_s1", None));
+        assert!(s.contains("set-hook -u -t =voltius_s1: client-detached"));
+        assert!(s.contains("set -u -t =voltius_s1: @voltius_ttl"));
+        assert!(!s.contains(TTL_REAPER_OPTION));
+    }
+
+    #[test]
+    fn ttl_command_fits_dropbear_max_string_len() {
+        let key = tmux_session_key("0f8b1c22-4d7e-4a19-9f3b-2c6d5e8a7b41");
+        let len = persistent_ttl_command(&key, Some(u64::MAX)).len();
+        assert!(len <= MAX_EXEC_COMMAND_LEN, "ttl payload is {len} bytes");
+    }
+
+    #[test]
+    fn ttl_reaper_is_self_contained_and_never_ends_a_tmux_argument_with_a_semicolon() {
+        assert!(TTL_REAPER.starts_with(TTL_IDLE_CHECK));
+        assert!(TTL_REAPER.trim_end().ends_with("\nexit 0"));
+        assert!(TTL_REAPER.contains(&format!("T=\"tmux -L {TMUX_SOCKET}\"")));
+        assert!(!TTL_REAPER.contains("$TMUX"));
+    }
+
+    #[cfg(unix)]
+    fn ttl_scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("voltius-ttl-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    fn ps_fixture(dir: &std::path::Path, ps: &str) -> String {
+        let path = dir.join("ps");
+        std::fs::write(&path, format!("1 0 S init init\n{ps}")).unwrap();
+        format!("cat {}", path.display())
+    }
+
+    #[cfg(unix)]
+    const FAKE_PS: &str = "#!/bin/sh\nexec sh -c \"$FAKE_PS\"\n";
+
+    #[cfg(unix)]
+    fn fake_bin_path(dir: &std::path::Path, bins: &[(&str, &str)]) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        for (name, body) in bins {
+            let bin = dir.join(name);
+            std::fs::write(&bin, body).unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    }
+
+    #[cfg(unix)]
+    fn ttl_check(ps_cmd: &str, proc_dir: &std::path::Path, call: &str) -> std::process::Command {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("{TTL_IDLE_CHECK}\n{call}"))
+            .env(
+                "PATH",
+                fake_bin_path(&proc_dir.join("bin"), &[("ps", FAKE_PS)]),
+            )
+            .env("FAKE_PS", ps_cmd)
+            .env("VOLTIUS_PROC", proc_dir);
+        cmd
+    }
+
+    #[cfg(unix)]
+    fn run_ttl_check(ps_cmd: &str, proc_dir: &std::path::Path, call: &str) -> std::process::Output {
+        ttl_check(ps_cmd, proc_dir, call).output().expect("sh runs")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_check_classifies_process_trees() {
+        let wrapper = "10 1 S bash bash -c unset TMUX TMUX_PANE; printf '\\043!/bin/sh' | sh\n";
+        let rcfile = "11 10 S bash bash --rcfile /tmp/tmp.Xy12 -i\n";
+        #[rustfmt::skip]
+        let cases = [
+            ("10 1 S -bash -bash\n".to_string(), "10", true),
+            ("10 1 S sh sh -c V\n11 10 S bash bash -l\n".into(), "10", true),
+            ("10 1 S bash -bash\n11 10 S sudo sudo -i\n12 11 S bash -bash\n".into(), "10", true),
+            ("10 1 S zsh -zsh\n11 10 S gitstatusd-linu gitstatusd-linux-x86_64 -s 1\n".into(), "10", true),
+            ("10 1 S bash -bash\n11 10 S claude claude\n".into(), "10", false),
+            ("10 1 S bash -bash\n11 10 S sleep sleep 1000\n".into(), "10", false),
+            ("10 1 S bash -bash\n11 10 S bash bash backup.sh\n".into(), "10", false),
+            ("10 1 S bash -bash\n11 10 S sh sh -c rsync\n".into(), "10", false),
+            ("10 1 S bash -bash\n11 10 S backup.sh /bin/bash ./backup.sh\n".into(), "10", false),
+            ("10 1 R bash -bash\n".into(), "10", false),
+            ("10 1 S bash -bash\n11 10 S sudo sudo -i\n12 11 S bash -bash\n13 12 S make make\n".into(), "10", false),
+            ("99 1 S bash -bash\n".into(), "10", false),
+            (format!("{wrapper}{rcfile}"), "10", true),
+            (format!("{wrapper}12 10 S bash bash -c unset TMUX\n{rcfile}"), "10", true),
+            (format!("{wrapper}11 10 S zsh zsh -l -i\n"), "10", true),
+            (format!("{wrapper}{rcfile}12 11 S bash bash backup.sh\n"), "10", false),
+            (format!("{wrapper}{rcfile}12 11 S bash bash -ic true\n"), "10", false),
+            (format!("{wrapper}{rcfile}12 11 S sh sh -c V\n13 12 S bash -bash\n"), "10", false),
+            (format!("{wrapper}11 10 S bash bash backup.sh\n"), "10", false),
+            (format!("{wrapper}11 10 S vim vim\n"), "10", false),
+            ("10 1 S bash -bash\n20 1 S bash -bash\n".into(), "10 20", true),
+            ("10 1 S bash -bash\n20 1 S bash -bash\n21 20 S top top\n".into(), "10 20", false),
+            ("10 1 S bash -bash\n".into(), "10 20", false),
+            ("10 1 S bash -bash\n".into(), "", false),
+            ("10 root 0:00 -bash\n11 root 0:00 sleep 100\n".into(), "10", false),
+            ("PID PPID STAT COMMAND COMMAND\n10 1 S bash -bash\n".into(), "10", false),
+            (format!("{wrapper}{rcfile}12 11 S fish fish --command=make\n"), "10", false),
+            (format!("{wrapper}{rcfile}12 11 S bash bash -s\n"), "10", false),
+        ];
+        let dir = ttl_scratch("idle");
+        for (ps, panes, idle) in &cases {
+            let out = run_ttl_check(
+                &ps_fixture(&dir, ps),
+                &dir,
+                &format!("voltius_idle {panes}"),
+            );
+            assert_eq!(out.status.success(), *idle, "panes {panes:?} over:\n{ps}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_check_treats_unreadable_ps_as_busy() {
+        let dir = ttl_scratch("ps-fail");
+        for ps in [
+            "false",
+            "true",
+            "printf 'PID USER TIME COMMAND\\n'",
+            "printf '10 1 S bash -bash\\n'",
+        ] {
+            let out = run_ttl_check(ps, &dir, "voltius_idle 10");
+            assert!(!out.status.success(), "{ps} must read as busy");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_check_reads_untruncated_args_whatever_columns_says() {
+        let dir = ttl_scratch("columns");
+        let table = ps_fixture(&dir, "10 1 S bash -bash\n20 10 S bash bash -i -c make\n");
+        let ps = format!("{table} | cut -c1-${{COLUMNS:-999}}");
+        let out = ttl_check(&ps, &dir, "voltius_idle 10")
+            .env("COLUMNS", "20")
+            .output()
+            .expect("sh runs");
+        assert!(
+            !out.status.success(),
+            "a -c child cut off by COLUMNS must stay busy"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn quiet_check_reads_cpu_and_fails_closed() {
+        let dir = ttl_scratch("quiet");
+        let ps = ps_fixture(
+            &dir,
+            "10 1 S bash bash -c V\n11 10 S bash -bash\n12 11 S gitstatusd-linu gitstatusd\n",
+        );
+        let stat = |pid: &str, body: &str| {
+            std::fs::create_dir_all(dir.join(pid)).unwrap();
+            std::fs::write(dir.join(pid).join("stat"), body).unwrap();
+        };
+        stat(
+            "10",
+            "10 (ba) (sh) S 1 10 10 0 -1 4194560 100 0 0 0 7 5 0 0 20 0 1 0 100 0 0\n",
+        );
+        stat(
+            "11",
+            "11 (bash) S 10 11 11 0 -1 4194560 100 0 0 0 30 12 0 0 20 0 1 0 100 0 0\n",
+        );
+        let out = run_ttl_check(&ps, &dir, "voltius_quiet 10");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "54");
+
+        stat("11", "11 (bash) S 10 11 11\n");
+        assert!(!run_ttl_check(&ps, &dir, "voltius_quiet 10")
+            .status
+            .success());
+
+        std::fs::remove_file(dir.join("11").join("stat")).unwrap();
+        assert!(!run_ttl_check(&ps, &dir, "voltius_quiet 10")
+            .status
+            .success());
+
+        let busy = ps_fixture(&dir, "10 1 S bash -bash\n11 10 S make make\n");
+        assert!(!run_ttl_check(&busy, &dir, "voltius_quiet 10")
+            .status
+            .success());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    const FAKE_TMUX: &str = r#"#!/bin/sh
+for a; do printf '%s\037' "$a"; done >> "$LOG"
+printf '\036' >> "$LOG"
+[ "$1" = -V ] && { echo "$TMUX_V"; exit 0; }
+shift 2
+case "$1" in
+  has-session) exit "${HAS:-0}" ;;
+  display) echo "${ATT:-0}" ;;
+  show) case "$*" in
+    *@voltius_ttl*) v=$TTL; [ -f "$LOG.ttl" ] && v=$(cat "$LOG.ttl"); [ -n "$v" ] || exit 1; echo "$v" ;;
+    *@voltius_detached_at*) if [ -n "$STAMP" ]; then echo "$STAMP"; else cat "$LOG.stamp"; fi ;;
+  esac ;;
+  set) [ "$4" = @voltius_detached_at ] && printf %s "$5" > "$LOG.stamp" ;;
+  list-panes) echo 10 ;;
+esac
+exit 0
+"#;
+
+    #[cfg(unix)]
+    const FAKE_SLEEP: &str = r#"#!/bin/sh
+printf 'sleep\037%s\037\036' "$1" >> "$LOG"
+echo $(($(cat "$LOG.now" 2>/dev/null || echo 1000) + $1)) > "$LOG.now"
+c=$(($(cat "$LOG.n" 2>/dev/null || echo 0) + 1))
+echo $c > "$LOG.n"
+[ "$c" = "${FLIP_AT:-}" ] && printf %s "$FLIP_VAL" > "$LOG.$FLIP"
+exit 0
+"#;
+
+    #[cfg(unix)]
+    const FAKE_DATE: &str = "#!/bin/sh\ncat \"$LOG.now\" 2>/dev/null || echo 1000\n";
+
+    #[cfg(unix)]
+    fn run_fake_tmux(
+        sh_args: &[&str],
+        env: &[(&str, &str)],
+    ) -> (std::process::Output, Vec<Vec<String>>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static RUN: AtomicUsize = AtomicUsize::new(0);
+        let dir = ttl_scratch(&format!("tmux-{}", RUN.fetch_add(1, Ordering::Relaxed)));
+        let path = fake_bin_path(
+            &dir,
+            &[
+                ("tmux", FAKE_TMUX),
+                ("sleep", FAKE_SLEEP),
+                ("date", FAKE_DATE),
+                ("ps", FAKE_PS),
+            ],
+        );
+        let log = dir.join("log");
+        let out = std::process::Command::new("sh")
+            .args(sh_args)
+            .env("PATH", path)
+            .env("LOG", &log)
+            .envs(env.iter().copied())
+            .output()
+            .expect("sh runs");
+        let calls = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .split('\x1e')
+            .filter(|c| !c.is_empty())
+            .map(|c| {
+                c.trim_end_matches('\x1f')
+                    .split('\x1f')
+                    .map(String::from)
+                    .collect()
+            })
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        (out, calls)
+    }
+
+    #[cfg(unix)]
+    fn fake_tmux_calls(version: &str, cmd: &str) -> Vec<Vec<String>> {
+        let (out, calls) = run_fake_tmux(&["-c", cmd], &[("TMUX_V", version)]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        calls
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ttl_command_hands_tmux_the_reaper_and_hook_verbatim() {
+        let tmux = |args: &[&str]| -> Vec<String> {
+            ["-L", "voltius"]
+                .iter()
+                .chain(args)
+                .map(|s| s.to_string())
+                .collect()
+        };
+        let armed = fake_tmux_calls(
+            "tmux 3.4",
+            &persistent_ttl_command("voltius_s1", Some(3600)),
+        );
+        assert!(armed.contains(&tmux(&[
+            "set",
+            "-g",
+            TTL_REAPER_OPTION,
+            &ttl_reaper_option()
+        ])));
+        assert!(armed.contains(&tmux(&[
+            "set",
+            "-t",
+            "=voltius_s1:",
+            "@voltius_ttl",
+            "3600"
+        ])));
+        assert!(armed.contains(&tmux(&[
+            "set-hook",
+            "-t",
+            "=voltius_s1:",
+            "client-detached",
+            r#"run-shell -b "sh -c \"\$(printf \"\$(tmux -L voltius show -gv @voltius_reap1)\")\" voltius-reap #{session_name} >/dev/null 2>&1 || :""#,
+        ])));
+
+        let off = fake_tmux_calls("tmux 3.2a", &persistent_ttl_command("voltius_s1", None));
+        assert!(off.contains(&tmux(&[
+            "set-hook",
+            "-u",
+            "-t",
+            "=voltius_s1:",
+            "client-detached"
+        ])));
+        assert!(off.contains(&tmux(&["set", "-u", "-t", "=voltius_s1:", "@voltius_ttl"])));
+
+        for old in ["tmux 2.9a", "tmux 3.0a", "tmux 3.1c", "tmux next-3.5", ""] {
+            let calls = fake_tmux_calls(old, &persistent_ttl_command("voltius_s1", Some(3600)));
+            assert!(
+                calls.iter().all(|c| c.len() == 1),
+                "{old:?} must stop after -V: {calls:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ttl_reaper_option_decodes_back_with_printf() {
+        let out = std::process::Command::new("sh")
+            .args(["-c", r#"printf "$1""#, "x", &ttl_reaper_option()])
+            .output()
+            .expect("sh runs");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), TTL_REAPER);
+        assert!(ttl_reaper_option()
+            .chars()
+            .all(|c| c.is_ascii_graphic() || c == ' '));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ttl_reaper_parses_as_posix_sh() {
+        let out = std::process::Command::new("sh")
+            .arg("-n")
+            .arg("-c")
+            .arg(TTL_REAPER)
+            .output()
+            .expect("sh runs");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    fn reaper_fixture(name: &str) -> (std::path::PathBuf, String, String) {
+        let dir = ttl_scratch(name);
+        std::fs::create_dir_all(dir.join("10")).unwrap();
+        std::fs::write(
+            dir.join("10").join("stat"),
+            "10 (bash) S 1 10 10 0 -1 0 0 0 0 0 3 4 0\n",
+        )
+        .unwrap();
+        let busy_path = dir.join("busy");
+        std::fs::write(&busy_path, "10 1 S bash -bash\n11 10 S vim vim\n").unwrap();
+        let idle = ps_fixture(&dir, "10 1 S bash -bash\n");
+        (dir, idle, format!("cat {}", busy_path.display()))
+    }
+
+    #[cfg(unix)]
+    fn run_reaper(
+        dir: &std::path::Path,
+        session: &str,
+        ps: &str,
+        env: &[(&str, &str)],
+    ) -> Vec<Vec<String>> {
+        let proc_dir = dir.to_string_lossy().into_owned();
+        let mut all = vec![("TTL", "0"), ("VOLTIUS_PROC", &proc_dir), ("FAKE_PS", ps)];
+        all.extend_from_slice(env);
+        let (out, calls) = run_fake_tmux(&["-c", TTL_REAPER, "voltius-reap", session], &all);
+        assert!(
+            out.status.success(),
+            "reaper must exit 0 ({env:?}): {calls:?}"
+        );
+        calls
+    }
+
+    #[cfg(unix)]
+    fn reaper_killed(calls: &[Vec<String>]) -> bool {
+        calls.contains(
+            &["-L", "voltius", "kill-session", "-t", "=voltius_s1"]
+                .map(String::from)
+                .to_vec(),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reaper_kills_only_an_idle_detached_session_it_still_owns() {
+        let (dir, idle, busy) = reaper_fixture("reaper");
+        #[rustfmt::skip]
+        let cases = [
+            ("voltius_s1", &idle, ("", ""), true),
+            ("voltius_s1", &busy, ("", ""), false),
+            ("voltius_s1", &idle, ("STAMP", "1.1"), false),
+            ("voltius_s1", &idle, ("ATT", "1"), false),
+            ("voltius_s1", &idle, ("TTL", ""), false),
+            ("voltius_s1", &idle, ("TTL", "9999999999"), false),
+            ("voltius_s1", &idle, ("TTL", "000000008"), false),
+            ("voltius_s1", &idle, ("HAS", "1"), false),
+            ("work", &idle, ("", ""), false),
+        ];
+        for (session, ps, tweak, killed) in cases {
+            let env: &[(&str, &str)] = if tweak.0.is_empty() { &[] } else { &[tweak] };
+            let calls = run_reaper(&dir, session, ps, env);
+            assert_eq!(
+                reaper_killed(&calls),
+                killed,
+                "{session} {tweak:?}: {calls:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reaper_sleeps_in_bounded_chunks_and_rechecks_between_them() {
+        let (dir, idle, _) = reaper_fixture("chunks");
+        let sleeps = |calls: &[Vec<String>]| -> Vec<String> {
+            calls
+                .iter()
+                .filter(|c| c[0] == "sleep")
+                .map(|c| c[1].clone())
+                .collect()
+        };
+        let calls = run_reaper(&dir, "voltius_s1", &idle, &[("TTL", "601")]);
+        assert_eq!(sleeps(&calls), ["300", "300", "1", "5", "5"]);
+        assert!(reaper_killed(&calls));
+        for (flip, value) in [("ttl", "600"), ("ttl", ""), ("stamp", "1.1")] {
+            let env = [
+                ("TTL", "601"),
+                ("FLIP_AT", "2"),
+                ("FLIP", flip),
+                ("FLIP_VAL", value),
+            ];
+            let calls = run_reaper(&dir, "voltius_s1", &idle, &env);
+            assert_eq!(sleeps(&calls), ["300", "300"], "{flip}={value:?}");
+            assert!(!reaper_killed(&calls), "{flip}={value:?}: {calls:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_check_terminates_on_a_self_parented_pid() {
+        let dir = ttl_scratch("cycle");
+        let mut child = ttl_check(
+            &ps_fixture(&dir, "10 10 S bash -bash\n"),
+            &dir,
+            "voltius_idle 10",
+        )
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("sh runs");
+        let mut done = None;
+        for _ in 0..100 {
+            done = child.try_wait().unwrap();
+            if done.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if done.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(done.is_some(), "voltius_idle must not loop on a pid cycle");
     }
 }

@@ -1,15 +1,15 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
-const reportClientEvent = vi.fn().mockResolvedValue(undefined);
+const enqueueAuditEvent = vi.fn().mockResolvedValue(undefined);
 const reportLocalClientEvent = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("@/services/auditService", () => ({ reportClientEvent }));
+vi.mock("@/services/auditOutbox", () => ({ enqueueAuditEvent }));
 vi.mock("@/services/localAuditService", () => ({ reportLocalClientEvent }));
 
-const { reportPluginAuditEvent, localSinkVaultId, boundLocalMetadata } = await import("@/services/auditReporter");
+const { reportAuditClientEvent, reportPluginAuditEvent, localSinkVaultId, boundLocalMetadata } = await import("@/services/auditReporter");
 
 beforeEach(() => {
-  reportClientEvent.mockClear();
+  enqueueAuditEvent.mockClear();
   reportLocalClientEvent.mockClear();
 });
 
@@ -27,14 +27,14 @@ describe("reportPluginAuditEvent", () => {
   test("a local context writes only the local sink", () => {
     reportPluginAuditEvent({ kind: "local", vaultId: "personal" }, "agent.command_run");
     expect(reportLocalClientEvent).toHaveBeenCalledTimes(1);
-    expect(reportClientEvent).not.toHaveBeenCalled();
+    expect(enqueueAuditEvent).not.toHaveBeenCalled();
   });
 
   test("a team context writes local AND posts the team", () => {
     reportPluginAuditEvent({ kind: "team", teamId: "t1", vaultId: "v1" }, "agent.command_run");
     expect(reportLocalClientEvent).toHaveBeenCalledTimes(1);
-    expect(reportClientEvent).toHaveBeenCalledTimes(1);
-    expect(reportClientEvent.mock.calls[0][0]).toBe("t1");
+    expect(enqueueAuditEvent).toHaveBeenCalledTimes(1);
+    expect(enqueueAuditEvent.mock.calls[0][0]).toBe("t1");
   });
 
   test("localMetadata reaches the local sink and never the wire", () => {
@@ -50,7 +50,7 @@ describe("reportPluginAuditEvent", () => {
     );
 
     const local = reportLocalClientEvent.mock.calls[1][1] as { metadata: Record<string, unknown> };
-    const team = reportClientEvent.mock.calls[1][1] as { metadata?: Record<string, unknown> };
+    const team = enqueueAuditEvent.mock.calls[1][1] as { metadata?: Record<string, unknown> };
     expect(local.metadata).toEqual({ shared: 1, command: "rm -rf /" });
     expect(team.metadata).toEqual({ shared: 1 });
   });
@@ -66,7 +66,7 @@ describe("reportPluginAuditEvent", () => {
   });
 
   test("a team POST failure does not reject, and the local write still happens", () => {
-    reportClientEvent.mockReturnValueOnce(Promise.reject(new Error("400")));
+    enqueueAuditEvent.mockReturnValueOnce(Promise.reject(new Error("400")));
     expect(() =>
       reportPluginAuditEvent({ kind: "team", teamId: "t1" }, "agent.command_run"),
     ).not.toThrow();
@@ -90,7 +90,7 @@ describe("reportPluginAuditEvent", () => {
     const local = reportLocalClientEvent.mock.calls[0][1] as { metadata: Record<string, unknown> };
     expect(local.metadata).toEqual({ blob: "x".repeat(2000), blob_truncated: true, plugin_id: "agent" });
 
-    const team = reportClientEvent.mock.calls[0][1] as { metadata: Record<string, unknown> };
+    const team = enqueueAuditEvent.mock.calls[0][1] as { metadata: Record<string, unknown> };
     expect(team.metadata).toEqual({ blob: huge, plugin_id: "agent" });
   });
 
@@ -150,5 +150,17 @@ describe("boundLocalMetadata", () => {
     const circular: Record<string, unknown> = { command: "ls" };
     circular.self = circular;
     expect(boundLocalMetadata(circular)).toEqual({ localMetadata_dropped: true });
+  });
+});
+
+describe("reportAuditClientEvent", () => {
+  test("a pre-captured occurred_at wins over the report time", () => {
+    reportAuditClientEvent({ kind: "local", vaultId: "personal" }, "connection.started", { occurred_at: "2020-01-01T00:00:00.000Z" });
+    expect(reportLocalClientEvent.mock.calls[0][1]).toMatchObject({ occurred_at: "2020-01-01T00:00:00.000Z" });
+  });
+
+  test("without one it stamps the current time", () => {
+    reportAuditClientEvent({ kind: "local", vaultId: "personal" }, "connection.started");
+    expect(reportLocalClientEvent.mock.calls[0][1].occurred_at).not.toBe("2020-01-01T00:00:00.000Z");
   });
 });

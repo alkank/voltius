@@ -1,9 +1,12 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { cardGridProps } from "@/components/shared/cardGrid";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { SectionHeader } from "@/components/shared/SectionHeader";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { BaseCard } from "@/components/shared/BaseCard";
-import { CardActionButton } from "@/components/shared/CardActionButton";
+import { CardActionButton, CardMenuButton } from "@/components/shared/CardActionButton";
 import { TagBadge } from "@/components/shared/TagBadge";
 import type { LayoutMode } from "@/components/shared/ToolbarViewControls";
 import type { SshKey, Identity, VaultOption } from "@/types";
@@ -14,35 +17,20 @@ import { usePermissions } from "@/hooks/usePermission";
 import { vaultMenuItems } from "@/utils/vaultMenuItems";
 import { getShortcutHint } from "@/stores/shortcutStore";
 import { clipboardMenuItems } from "@/utils/clipboardMenuItems";
-import { useKeyStore } from "@/stores/keyStore";
-import { useIdentityStore } from "@/stores/identityStore";
+import { useKeyStore, keyToFormData } from "@/stores/keyStore";
+import { useIdentityStore, identityToFormData } from "@/stores/identityStore";
+import { useInlineRename } from "@/hooks/useInlineRename";
 import { useTeamStore } from "@/stores/teamStore";
 import {
   useEffectivePinned,
   useEffectivePinSource,
   nextPersonalPinValue,
 } from "@/hooks/useEffectivePinned";
+import { formatDate, SHORT_DATE } from "@/utils/localeFormat";
 
 // ─────────────────────────────────────────────────────────────────
 // Small shared display components
 // ─────────────────────────────────────────────────────────────────
-
-export function SectionHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">
-        {label}
-      </p>
-      {count > 0 && (
-        <span
-          className="text-xs px-1.5 py-0.5 rounded-md bg-(--t-bg-elevated) text-(--t-text-dim)"
-        >
-          {count}
-        </span>
-      )}
-    </div>
-  );
-}
 
 export function DraftCard({ icon, label }: { icon: string; label: string }) {
   return (
@@ -55,47 +43,12 @@ export function DraftCard({ icon, label }: { icon: string; label: string }) {
   );
 }
 
-export function EmptySection({
-  icon, title, description, buttonLabel, onAdd,
-}: {
-  icon: string;
-  title: string;
-  description: string;
-  buttonLabel: string;
-  onAdd?: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-8 gap-3">
-      <div
-        className="w-12 h-12 rounded-xl flex items-center justify-center bg-(--t-bg-toolbar) border border-(--t-border)"
-      >
-        <Icon icon={icon} width={20} className="text-(--t-text-dim)" />
-      </div>
-      <div className="text-center">
-        <p className="text-sm font-medium mb-1 text-(--t-text-primary)">{title}</p>
-        <p className="text-xs text-(--t-text-dim)">{description}</p>
-      </div>
-      {onAdd && <button
-        onClick={onAdd}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-(--t-bg-elevated) text-(--t-accent) border border-(--t-border-hover)"
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--t-border-hover)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "var(--t-bg-elevated)")}
-      >
-        <Icon icon="lucide:plus" width={13} />
-        {buttonLabel}
-      </button>}
-    </div>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────
 // SSH Key cards
 // ─────────────────────────────────────────────────────────────────
 
-export function KeyCardContent({ sshKey, avatarSize, iconSize, isList }: { sshKey: SshKey; avatarSize: number; iconSize: number; isList?: boolean }) {
-  const formattedDate = new Date(sshKey.created_at).toLocaleDateString(undefined, {
-    year: "numeric", month: "short", day: "numeric",
-  });
+export function KeyCardContent({ sshKey, avatarSize, iconSize, isList, name = sshKey.name }: { sshKey: SshKey; avatarSize: number; iconSize: number; isList?: boolean; name?: ReactNode }) {
+  const formattedDate = formatDate(sshKey.created_at, SHORT_DATE);
   const avatar = (
     <AvatarTile icon="lucide:key-round" iconSize={iconSize} size={avatarSize} className="rounded-lg" />
   );
@@ -110,7 +63,7 @@ export function KeyCardContent({ sshKey, avatarSize, iconSize, isList }: { sshKe
       <>
         {avatar}
         <p className="text-sm font-medium-bold truncate w-52 shrink-0 text-(--t-text-bright)">
-          {sshKey.name}
+          {name}
         </p>
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {keyType}
@@ -130,7 +83,7 @@ export function KeyCardContent({ sshKey, avatarSize, iconSize, isList }: { sshKe
       {avatar}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate text-(--t-text-bright)">
-          {sshKey.name}
+          {name}
         </p>
         <div className="flex items-center gap-2 mt-0.5">
           {keyType}
@@ -172,9 +125,7 @@ function KeyCard({
   const isList = layoutMode === "list";
   const avatarSize = isList ? 28 : 48;
   const iconSize = isList ? 14 : 24;
-  const formattedDate = new Date(sshKey.created_at).toLocaleDateString(undefined, {
-    year: "numeric", month: "short", day: "numeric",
-  });
+  const formattedDate = formatDate(sshKey.created_at, SHORT_DATE);
   const contributions = useUIContributions("key.contextMenu", sshKey);
   const isSynced = useSyncPrefsStore((s) => s.isObjectSynced(sshKey.id, "key"));
   const pinKey = useKeyStore((s) => s.pinKey);
@@ -182,9 +133,12 @@ function KeyCard({
   const effPinned = useEffectivePinned(sshKey, "key");
   const pinSource = useEffectivePinSource(sshKey, "key");
   const isTeamVault = useTeamStore((s) => s.teams.some((t) => t.id === sshKey.vault_id));
+  const updateKey = useKeyStore((s) => s.updateKey);
+  const rename = useInlineRename(sshKey.id, canEdit, sshKey.name ?? "", (name) => { void updateKey(sshKey.id, { ...keyToFormData(sshKey), name }); });
 
   const contextMenuItems = useMemo<ContextMenuItem[]>(() => [
     ...(canEdit ? [{ label: t("common.action.edit"), icon: "lucide:pencil", onClick: () => onEdit(sshKey), shortcut: "E" }] : []),
+    ...rename.menuItems,
     { label: t("keychain.common.addToHost"), icon: "lucide:square-arrow-right", onClick: () => onExport(sshKey) },
     {
       label: isTeamVault
@@ -220,14 +174,14 @@ function KeyCard({
       t,
     ),
     {
-      label: isSynced ? t("keychain.common.disableCloudSync") : t("keychain.common.enableCloudSync"),
+      label: isSynced ? t("common.objectSync.disable") : t("common.objectSync.enable"),
       icon: isSynced ? "lucide:cloud-off" : "lucide:cloud",
       onClick: () => useSyncPrefsStore.getState().toggleExcluded(sshKey.id),
       divider: true,
     },
     ...clipboardMenuItems(t),
     ...(canEdit ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => onDelete(sshKey.id), danger: true, divider: true, shortcut: getShortcutHint("delete") }] : []),
-  ], [canEdit, sshKey, contributions, vaults, isSynced, pinKey, pinKeyForTeam, effPinned, pinSource, isTeamVault, onEdit, onDelete, onExport, onMoveToVault, onCopyToVault, t]);
+  ], [canEdit, rename.menuItems, sshKey, contributions, vaults, isSynced, pinKey, pinKeyForTeam, effPinned, pinSource, isTeamVault, onEdit, onDelete, onExport, onMoveToVault, onCopyToVault, t]);
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => onSectionPointerDown?.(e, sshKey.id),
@@ -252,15 +206,16 @@ function KeyCard({
     >
       {isList ? (
         <>
-          <KeyCardContent sshKey={sshKey} avatarSize={avatarSize} iconSize={iconSize} isList />
+          <KeyCardContent sshKey={sshKey} avatarSize={avatarSize} iconSize={iconSize} isList name={rename.editor ?? sshKey.name} />
           <div className="flex items-center gap-1 shrink-0">
             {!isSynced && (
-              <span title={t("keychain.common.cloudSyncDisabledTitle")} className="text-(--t-text-dim) flex items-center">
+              <span title={t("common.objectSync.notSynced")} className="text-(--t-text-dim) flex items-center">
                 <Icon icon="lucide:cloud-off" width={18} />
               </span>
             )}
             {canEdit && <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} onClick={() => onEdit(sshKey)} />}
             {canEdit && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} onClick={() => onDelete(sshKey.id)} danger />}
+            <CardMenuButton />
           </div>
         </>
       ) : (
@@ -270,7 +225,7 @@ function KeyCard({
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
               <div className="flex items-center gap-2 min-w-0">
                 <p className="text-sm font-bold truncate flex-1 min-w-0 text-(--t-text-bright)">
-                  {sshKey.name}
+                  {rename.editor ?? sshKey.name}
                 </p>
                 {sshKey.key_type && (
                   <span className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px] font-mono bg-(--t-bg-input) text-(--t-text-dim) border border-(--t-border)">
@@ -278,7 +233,7 @@ function KeyCard({
                   </span>
                 )}
                 {!isSynced && (
-                  <span title={t("keychain.common.cloudSyncDisabledTitle")} className="shrink-0 text-(--t-text-dim) flex items-center">
+                  <span title={t("common.objectSync.notSynced")} className="shrink-0 text-(--t-text-dim) flex items-center">
                     <Icon icon="lucide:cloud-off" width={14} />
                   </span>
                 )}
@@ -287,24 +242,20 @@ function KeyCard({
             </div>
           </div>
 
-          {(sshKey.tags.length > 0 || canEdit) && (
-            <div className="flex items-center justify-between gap-2 -mt-0.5">
-              <div className="flex items-center gap-1 min-w-0 overflow-hidden">
-                {sshKey.tags.slice(0, 3).map((tag) => (
-                  <TagBadge key={tag} tag={tag} className="rounded-md shrink-0 py-0 text-[10px]" />
-                ))}
-                {sshKey.tags.length > 3 && (
-                  <span className="text-[10px] text-(--t-text-dim) shrink-0">+{sshKey.tags.length - 3}</span>
-                )}
-              </div>
-              {canEdit && (
-                <div className="flex items-center gap-0.5 shrink-0">
-                  <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} reveal={false} onClick={() => onEdit(sshKey)} />
-                  <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} danger reveal={false} onClick={() => onDelete(sshKey.id)} />
-                </div>
+          <div className="flex items-center justify-between gap-2 -mt-0.5">
+            <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+              {sshKey.tags.slice(0, 3).map((tag) => (
+                <TagBadge key={tag} tag={tag} className="rounded-md shrink-0 py-0 text-[10px]" />
+              ))}
+              {sshKey.tags.length > 3 && (
+                <span className="text-[10px] text-(--t-text-dim) shrink-0">+{sshKey.tags.length - 3}</span>
               )}
             </div>
-          )}
+            <div className="flex items-center gap-0.5 shrink-0">
+              {canEdit && <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} reveal={false} onClick={() => onEdit(sshKey)} />}
+              <CardMenuButton />
+            </div>
+          </div>
         </div>
       )}
     </BaseCard>
@@ -355,28 +306,24 @@ export function KeySection({
 
   if (keys.length === 0 && !showDraft) {
     return (
-      <EmptySection
+      <EmptyState
+        size="section"
         icon="lucide:key-round"
         title={t("keychain.cards.keySection.emptyTitle")}
-        description={t("keychain.cards.keySection.emptyDescription")}
-        buttonLabel={t("keychain.cards.keySection.addButton")}
-        onAdd={onAdd}
+        body={t("keychain.cards.keySection.emptyDescription")}
+        action={onAdd && { label: t("keychain.cards.keySection.addButton"), onClick: onAdd }}
       />
     );
   }
 
-  const gridClass = layoutMode === "grid"
-    ? "grid gap-4 mt-3"
-    : "flex flex-col gap-1 mt-3";
-
   return (
     <div>
       <SectionHeader label={label ?? t("keychain.cards.sshKeysLabel")} count={keys.length} />
-      <div className={gridClass} style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" } : undefined}>
+      <div {...cardGridProps(layoutMode, "card")}>
         {showDraft && <DraftCard icon="lucide:key-round" label={t("keychain.toolbar.newKey")} />}
         {keys.map((k) => {
           const vaultId = k.vault_id ?? "personal";
-          const canEdit = can("EDIT_KEYS", vaultId);
+          const canEdit = can("EDIT_KEYS", vaultId, k.id);
           return (
             <KeyCard
               key={k.id}
@@ -439,9 +386,10 @@ function IdentityCard({
   const effPinned = useEffectivePinned(identity, "identity");
   const pinSource = useEffectivePinSource(identity, "identity");
   const isTeamVault = useTeamStore((s) => s.teams.some((t) => t.id === identity.vault_id));
-  const formattedDate = new Date(identity.created_at).toLocaleDateString(undefined, {
-    year: "numeric", month: "short", day: "numeric",
-  });
+  const updateIdentity = useIdentityStore((s) => s.updateIdentity);
+  const identityName = identity.name ?? identity.username;
+  const rename = useInlineRename(identity.id, canEdit, identityName, (name) => { void updateIdentity(identity.id, { ...identityToFormData(identity), name }); });
+  const formattedDate = formatDate(identity.created_at, SHORT_DATE);
 
   const isList = layoutMode === "list";
   const avatarSize = isList ? 28 : 48;
@@ -449,6 +397,7 @@ function IdentityCard({
 
   const contextMenuItems = useMemo<ContextMenuItem[]>(() => [
     ...(canEdit ? [{ label: t("common.action.edit"), icon: "lucide:pencil", onClick: () => onEdit(identity), shortcut: "E" }] : []),
+    ...rename.menuItems,
     {
       label: isTeamVault
         ? (pinSource === "personal" || pinSource === "team+personal")
@@ -483,14 +432,14 @@ function IdentityCard({
       t,
     ),
     {
-      label: isSynced ? t("keychain.common.disableCloudSync") : t("keychain.common.enableCloudSync"),
+      label: isSynced ? t("common.objectSync.disable") : t("common.objectSync.enable"),
       icon: isSynced ? "lucide:cloud-off" : "lucide:cloud",
       onClick: () => useSyncPrefsStore.getState().toggleExcluded(identity.id),
       divider: true,
     },
     ...clipboardMenuItems(t),
     ...(canEdit ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => onDelete(identity.id), danger: true, divider: true, shortcut: getShortcutHint("delete") }] : []),
-  ], [canEdit, identity, contributions, vaults, isSynced, pinIdentity, pinIdentityForTeam, effPinned, pinSource, isTeamVault, onEdit, onDelete, onMoveToVault, onCopyToVault, t]);
+  ], [canEdit, rename.menuItems, identity, contributions, vaults, isSynced, pinIdentity, pinIdentityForTeam, effPinned, pinSource, isTeamVault, onEdit, onDelete, onMoveToVault, onCopyToVault, t]);
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => onSectionPointerDown?.(e, identity.id),
@@ -517,7 +466,7 @@ function IdentityCard({
         <>
           <AvatarTile icon="lucide:id-card" iconSize={iconSize} size={avatarSize} className="rounded-lg" />
           <p className="text-sm font-medium-bold truncate w-52 shrink-0 text-(--t-text-bright)">
-            {identity.name ?? identity.username}
+            {rename.editor ?? identityName}
           </p>
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {identity.name && (
@@ -544,12 +493,13 @@ function IdentityCard({
           )}
           <div className="flex items-center gap-1 shrink-0">
             {!isSynced && (
-              <span title={t("keychain.common.cloudSyncDisabledTitle")} className="text-(--t-text-dim) flex items-center">
+              <span title={t("common.objectSync.notSynced")} className="text-(--t-text-dim) flex items-center">
                 <Icon icon="lucide:cloud-off" width={18} />
               </span>
             )}
             {canEdit && <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} onClick={() => onEdit(identity)} />}
             {canEdit && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} onClick={() => onDelete(identity.id)} danger />}
+            <CardMenuButton />
           </div>
         </>
       ) : (
@@ -559,7 +509,7 @@ function IdentityCard({
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
               <div className="flex items-center gap-2 min-w-0">
                 <p className="text-sm font-bold truncate flex-1 min-w-0 text-(--t-text-bright)">
-                  {identity.name ?? identity.username}
+                  {rename.editor ?? identityName}
                 </p>
                 {linkedKey ? (
                   <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] bg-(--t-bg-input) text-(--t-text-dim) border border-(--t-border)">
@@ -572,7 +522,7 @@ function IdentityCard({
                   </span>
                 )}
                 {!isSynced && (
-                  <span title={t("keychain.common.cloudSyncDisabledTitle")} className="shrink-0 text-(--t-text-dim) flex items-center">
+                  <span title={t("common.objectSync.notSynced")} className="shrink-0 text-(--t-text-dim) flex items-center">
                     <Icon icon="lucide:cloud-off" width={14} />
                   </span>
                 )}
@@ -585,24 +535,20 @@ function IdentityCard({
             </div>
           </div>
 
-          {(identity.tags.length > 0 || canEdit) && (
-            <div className="flex items-center justify-between gap-2 -mt-0.5">
-              <div className="flex items-center gap-1 min-w-0 overflow-hidden">
-                {identity.tags.slice(0, 3).map((tag) => (
-                  <TagBadge key={tag} tag={tag} className="rounded-md shrink-0 py-0 text-[10px]" />
-                ))}
-                {identity.tags.length > 3 && (
-                  <span className="text-[10px] text-(--t-text-dim) shrink-0">+{identity.tags.length - 3}</span>
-                )}
-              </div>
-              {canEdit && (
-                <div className="flex items-center gap-0.5 shrink-0">
-                  <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} reveal={false} onClick={() => onEdit(identity)} />
-                  <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} danger reveal={false} onClick={() => onDelete(identity.id)} />
-                </div>
+          <div className="flex items-center justify-between gap-2 -mt-0.5">
+            <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+              {identity.tags.slice(0, 3).map((tag) => (
+                <TagBadge key={tag} tag={tag} className="rounded-md shrink-0 py-0 text-[10px]" />
+              ))}
+              {identity.tags.length > 3 && (
+                <span className="text-[10px] text-(--t-text-dim) shrink-0">+{identity.tags.length - 3}</span>
               )}
             </div>
-          )}
+            <div className="flex items-center gap-0.5 shrink-0">
+              {canEdit && <CardActionButton icon="lucide:pencil" title={t("common.action.edit")} reveal={false} onClick={() => onEdit(identity)} />}
+              <CardMenuButton />
+            </div>
+          </div>
         </div>
       )}
     </BaseCard>
@@ -658,28 +604,24 @@ export function IdentitySection({
 
   if (identities.length === 0 && !showDraft) {
     return (
-      <EmptySection
+      <EmptyState
+        size="section"
         icon="lucide:users"
         title={t("keychain.cards.identitySection.emptyTitle")}
-        description={t("keychain.cards.identitySection.emptyDescription")}
-        buttonLabel={t("keychain.cards.identitySection.addButton")}
-        onAdd={onAdd}
+        body={t("keychain.cards.identitySection.emptyDescription")}
+        action={onAdd && { label: t("keychain.cards.identitySection.addButton"), onClick: onAdd }}
       />
     );
   }
 
-  const gridClass = layoutMode === "grid"
-    ? "grid gap-4 mt-3"
-    : "flex flex-col gap-1 mt-3";
-
   return (
     <div>
       <SectionHeader label={label ?? t("keychain.cards.identitiesLabel")} count={identities.length} />
-      <div className={gridClass} style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" } : undefined}>
+      <div {...cardGridProps(layoutMode, "card")}>
         {showDraft && <DraftCard icon="lucide:id-card" label={t("keychain.toolbar.newIdentity")} />}
         {identities.map((i) => {
           const vaultId = i.vault_id ?? "personal";
-          const canEdit = can("EDIT_IDENTITIES", vaultId);
+          const canEdit = can("EDIT_IDENTITIES", vaultId, i.id);
           return (
             <IdentityCard
               key={i.id}

@@ -1,17 +1,22 @@
+// @vitest-environment jsdom
 import { test, expect, vi, beforeEach, afterEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
   appFetch: vi.fn(),
   getUserPublicKey: vi.fn(),
+  listRoles: vi.fn(),
   unwrap: vi.fn(),
   getSecret: vi.fn(),
   storeSecret: vi.fn(),
-  deleteSecret: vi.fn(),
+  purge: vi.fn(),
+  getLocalSecret: vi.fn(async (_key: string) => null as string | null),
+  noteSeen: vi.fn(),
 }));
+vi.mock("@/services/teamVaultCatchUp", async (orig) => ({ ...(await orig<object>()), noteTeamDataSeen: h.noteSeen }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: h.invoke }));
 vi.mock("@/services/http", () => ({ appFetch: h.appFetch }));
-vi.mock("@/services/teamService", () => ({ getUserPublicKey: h.getUserPublicKey }));
+vi.mock("@/services/teamService", () => ({ getUserPublicKey: h.getUserPublicKey, listRoles: h.listRoles }));
 vi.mock("@/services/multiplayerService", () => ({
   unwrapSessionKey: h.unwrap,
   wrapSessionKeyForUser: vi.fn(),
@@ -20,7 +25,8 @@ vi.mock("@/services/multiplayerService", () => ({
 vi.mock("@/services/vault", () => ({
   getSecret: h.getSecret,
   storeSecret: h.storeSecret,
-  deleteSecret: h.deleteSecret,
+  purgeLocalSecrets: h.purge,
+  getLocalSecret: h.getLocalSecret,
 }));
 vi.mock("@/services/teamObjects", () => ({ listTeamObjects: vi.fn(async () => []) }));
 
@@ -34,6 +40,9 @@ import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { usePortForwardingStore } from "@/stores/portForwardingStore";
 import { useTeamVaultStateStore } from "@/stores/teamVaultStateStore";
 import { useTeamStore } from "@/stores/teamStore";
+import { listTeamObjects } from "@/services/teamObjects";
+import { teamSecretCache } from "./teamSecretCache";
+import { PERM_BITS } from "@/services/permissions";
 
 function futureJwt(): string {
   const exp = Math.floor(Date.now() / 1000) + 3600;
@@ -54,13 +63,15 @@ beforeEach(() => {
   h.invoke.mockReset();
   h.appFetch.mockReset();
   h.getUserPublicKey.mockReset();
+  h.listRoles.mockReset();
   h.unwrap.mockReset();
   h.getSecret.mockReset();
   h.storeSecret.mockReset();
-  h.deleteSecret.mockReset();
+  h.purge.mockReset();
+  h.noteSeen.mockReset();
   h.getSecret.mockResolvedValue(null);
   h.storeSecret.mockResolvedValue(undefined);
-  h.deleteSecret.mockResolvedValue(undefined);
+  h.purge.mockImplementation(async (keys: string[]) => keys);
   clearTeamKeyCache();
 });
 afterEach(() => {
@@ -90,11 +101,14 @@ test("clearing a team vault deletes every secret it owns, passphrases included",
 
   await fetchTeamData(teamId);
 
-  expect(h.deleteSecret.mock.calls.map((c) => c[0]).sort()).toEqual(
+  expect(h.purge).toHaveBeenCalledTimes(1);
+  expect(h.purge.mock.calls[0][0].sort()).toEqual(
     [
       "password:c1",
       "key:c1",
       "passphrase:c1",
+      "proxy_password:c1",
+      "knock_sequence:c1",
       "key:k1:private",
       "key:k1:public",
       "key:k1:passphrase",
@@ -199,6 +213,47 @@ test("fetchTeamData shows an empty vault, not a revocation, when the key route 4
   expect(useConnectionStore.getState().teamConnections[teamId] ?? []).toEqual([]);
 });
 
+test.each([
+  ["lost Connect to the lapse", "plan_lapsed", { role_ids: [], permission_allow: PERM_BITS.VIEW | PERM_BITS.CONNECT }],
+  ["never had Connect from Business", "loaded", { role_ids: ["b"], permission_deny: PERM_BITS.CONNECT }],
+])("a listed member on a locked team who %s gets %s on a key-route 403", async (_why, expected, masks) => {
+  const teamId = `t-lapse-${expected}`;
+  const builtin = { id: "b", team_id: teamId, name: "member", permissions: PERM_BITS.VIEW | PERM_BITS.CONNECT, is_builtin: true, position: 3, created_at: "" };
+  useTeamStore.setState({
+    teams: [{ id: teamId, owner_tier: "teams", ...masks }] as never,
+    rolesByTeam: { [teamId]: [builtin] },
+  });
+  keychain({ server_url: "https://s", jwt: futureJwt() });
+  h.appFetch.mockImplementation(async (url: string) => {
+    if (url.endsWith("/vault-key")) return res(403);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  await fetchTeamData(teamId);
+
+  expect(useTeamVaultStateStore.getState().statusByTeamId[teamId]).toBe(expected);
+});
+
+test.each([
+  ["fetches them and reports the lapse", "plan_lapsed", async () => [{ id: "c", team_id: "t", name: "ops", permissions: PERM_BITS.VIEW | PERM_BITS.CONNECT, is_builtin: false, position: 5, created_at: "" }]],
+  ["falls back to loaded when the fetch fails", "loaded", async () => { throw new Error("offline"); }],
+])("a lapsed member whose roles are not cached yet %s", async (_why, expected, listRoles) => {
+  const teamId = `t-roles-${expected}`;
+  h.listRoles.mockImplementation(listRoles);
+  const { [teamId]: _drop, ...rolesByTeam } = useTeamStore.getState().rolesByTeam;
+  useTeamStore.setState({ teams: [{ id: teamId, owner_tier: "teams", role_ids: ["c"] }] as never, rolesByTeam });
+  keychain({ server_url: "https://s", jwt: futureJwt() });
+  h.appFetch.mockImplementation(async (url: string) => {
+    if (url.endsWith("/vault-key")) return res(403);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  await fetchTeamData(teamId);
+
+  expect(h.listRoles).toHaveBeenCalledWith(teamId);
+  expect(useTeamVaultStateStore.getState().statusByTeamId[teamId]).toBe(expected);
+});
+
 test("fetchTeamData still reports a revocation when the 403'd team is no longer listed", async () => {
   const teamId = "t-revoked";
   useTeamStore.setState({ teams: [] as never });
@@ -211,4 +266,98 @@ test("fetchTeamData still reports a revocation when the 403'd team is no longer 
   await fetchTeamData(teamId);
 
   expect(useTeamVaultStateStore.getState().statusByTeamId[teamId]).toBe("forbidden");
+});
+
+function blob404(): void {
+  keychain({ server_url: "https://s", jwt: futureJwt() });
+  h.appFetch.mockImplementation(async (url: string) => {
+    if (url.endsWith("/vault-key")) return res(200, { wrapped_key: "wk", wrapped_by_user_id: "u1" });
+    if (url.endsWith("/sync-blob")) return res(404);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  h.getUserPublicKey.mockResolvedValue({ user_id: "u1", handle: "u1", public_key: "pk" });
+  h.unwrap.mockResolvedValue(new Uint8Array([9, 9, 9]));
+}
+
+test("a failed object list followed by a missing legacy blob is an error, not an empty vault", async () => {
+  blob404();
+  vi.mocked(listTeamObjects).mockRejectedValueOnce(Object.assign(new Error("boom"), { status: 500 }));
+
+  await fetchTeamData("t-list-500");
+
+  expect(useTeamVaultStateStore.getState().statusByTeamId["t-list-500"]).toBe("error");
+});
+
+test("a team whose object list is genuinely empty and has no blob loads as empty", async () => {
+  blob404();
+  vi.mocked(listTeamObjects).mockResolvedValueOnce([]);
+
+  await fetchTeamData("t-empty");
+
+  expect(useTeamVaultStateStore.getState().statusByTeamId["t-empty"]).toBe("loaded");
+});
+
+function staleTeam(teamId: string, blobStatus: number, keyStatus = 200): void {
+  useTeamStore.setState({ teams: [{ id: teamId, role_ids: [] }] as never });
+  useConnectionStore.getState().setTeamConnections(teamId, [{ id: "stale" }] as never);
+  useFolderStore.getState().setTeamFolders(teamId, [{ id: "stale-folder" }] as never);
+  teamSecretCache.set(teamId, "password:stale", "pw");
+  keychain({ server_url: "https://s", jwt: futureJwt() });
+  h.appFetch.mockImplementation(async (url: string) => {
+    if (url.endsWith("/vault-key")) return keyStatus === 200 ? res(200, { wrapped_key: "wk", wrapped_by_user_id: "u1" }) : res(keyStatus);
+    if (url.endsWith("/sync-blob")) return res(blobStatus);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  h.getUserPublicKey.mockResolvedValue({ user_id: "u1", handle: "u1", public_key: "pk" });
+  h.unwrap.mockResolvedValue(new Uint8Array([9, 9, 9]));
+  vi.mocked(listTeamObjects).mockResolvedValueOnce([]);
+}
+
+const expectEmptied = (teamId: string) => {
+  expect(useConnectionStore.getState().teamConnections[teamId] ?? []).toEqual([]);
+  expect(useFolderStore.getState().teamFolders[teamId] ?? []).toEqual([]);
+  expect(teamSecretCache.entries(teamId).size).toBe(0);
+};
+
+test.each([
+  ["the legacy blob is forbidden", "t-bg-403", 403, 200],
+  ["there is no legacy blob", "t-bg-404", 404, 200],
+  ["the key route 403s a listed member", "t-bg-key-403", 404, 403],
+])("a background refetch whose object list is empty clears the team when %s", async (_, teamId, blobStatus, keyStatus) => {
+  staleTeam(teamId, blobStatus, keyStatus);
+
+  await fetchTeamData(teamId, { background: true });
+
+  expectEmptied(teamId);
+});
+
+test("a fetch that loads the vault records the team version listed when it was asked for", async () => {
+  const teamId = "t-version-seen";
+  useTeamStore.setState({ teams: [{ id: teamId, data_version: 7 }] as never });
+  keychain({ server_url: "https://s", jwt: futureJwt() });
+  h.appFetch.mockImplementation(async (url: string) => {
+    if (url.endsWith("/vault-key")) return res(200, { wrapped_key: "wk", wrapped_by_user_id: "u1" });
+    if (url.endsWith("/sync-blob")) return res(404);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  h.getUserPublicKey.mockResolvedValue({ user_id: "u1", handle: "u1", public_key: "pk" });
+  h.unwrap.mockResolvedValue(new Uint8Array([9, 9, 9]));
+
+  await fetchTeamData(teamId);
+
+  expect(useTeamVaultStateStore.getState().statusByTeamId[teamId]).toBe("loaded");
+  expect(h.noteSeen).toHaveBeenCalledWith(teamId, 7);
+});
+
+test("a background fetch that cannot reach the server records no version", async () => {
+  const teamId = "t-version-unreachable";
+  useTeamStore.setState({ teams: [{ id: teamId, data_version: 7 }] as never });
+  useTeamVaultStateStore.getState().setStatus(teamId, "loaded");
+  keychain({ server_url: "https://s", jwt: futureJwt() });
+  h.appFetch.mockRejectedValue("error sending request");
+
+  await fetchTeamData(teamId, { background: true });
+
+  expect(useTeamVaultStateStore.getState().statusByTeamId[teamId]).toBe("loaded");
+  expect(h.noteSeen).not.toHaveBeenCalled();
 });

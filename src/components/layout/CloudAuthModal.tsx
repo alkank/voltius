@@ -1,43 +1,61 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type ComponentProps, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { Modal, ModalCard } from "@/components/shared/Modal";
 import { useUIStore, type CloudAuthMode } from "@/stores/uiStore";
-import { useSubscriptionStore } from "@/stores/subscriptionStore";
-import { getAccountMode, linkToCloud, setMasterPassword, signInToCloud } from "@/services/account";
-import { startRealtimeSync, syncOnLogin, syncOnLoginReplace } from "@/services/sync";
+import { authenticateServerAccount, getCurrentUserEmail, login } from "@/services/account";
+import { addAccount } from "@/services/savedAccounts";
+import { syncNow } from "@/services/sync";
 import { ServerUrlField } from "@/components/shared/ServerUrlField";
-import { lastServerUrl } from "@/utils/serverInstance";
+import { TwoFactorStep, useTwoFactorChallenge } from "@/components/shared/TwoFactorStep";
+import { resolveServerUrl, startingServerUrl } from "@/services/policy/serverPolicy";
+import { accountErrorText } from "@/services/accountErrors";
+import { usePolicyLock } from "@/stores/policyStore";
+import { localSyncContext, usePlatform } from "@/utils/platform";
+import { Input, MasterPasswordNote, emailError, newPasswordProblem } from "./authParts";
+import { useLocalUpgrade } from "./useLocalUpgrade";
+import { InvitationEntry, useInvitationSignup } from "./InvitationEntry";
 
 const AUTH_INPUT_CLASS =
-  "w-full px-3 py-2.5 rounded-lg text-sm outline-hidden bg-(--t-bg-input) border border-(--t-border) text-(--t-text-primary) placeholder:text-(--t-text-muted) focus:border-(--t-accent)";
+  "w-full px-3 py-2.5 rounded-lg text-sm outline-hidden bg-(--t-bg-input) border border-(--t-border) text-(--t-text-primary) focus:border-(--t-accent)";
 
 export default function CloudAuthModal() {
   const { t } = useTranslation();
+  const lanContext = localSyncContext(usePlatform());
   const open = useUIStore((s) => s.cloudAuthOpen);
-  const mode = useUIStore((s) => s.cloudAuthMode);
+  const purpose = useUIStore((s) => s.cloudAuthPurpose);
+  const isAdd = purpose === "add";
+  // The session this device held was ended by the server; the account itself is unchanged.
+  const isReauth = purpose === "reauth";
+  const mode = useUIStore((s) => (s.cloudAuthPurpose === "reauth" ? "signin" : s.cloudAuthMode));
   const setMode = useUIStore((s) => s.setCloudAuthMode);
   const onClose = useUIStore((s) => s.closeCloudAuth);
-  const reloadSubscription = useSubscriptionStore((s) => s.load);
 
-  const [accountMode, setAccountMode] = useState<string | null>(null);
+  const upgrade = useLocalUpgrade(open);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [serverUrl, setServerUrl] = useState(lastServerUrl);
+  const [serverUrl, setServerUrl] = useState(startingServerUrl);
+  const invite = useInvitationSignup(serverUrl);
+  const serverLocked = usePolicyLock("server.url").locked;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const twoFactor = useTwoFactorChallenge();
 
   useEffect(() => {
     if (!open) return;
-    getAccountMode().then(setAccountMode).catch(() => setAccountMode(null));
+    if (isReauth) getCurrentUserEmail().then((current) => setEmail(current ?? "")).catch(() => {});
     setError("");
-  }, [open]);
+    twoFactor.cancel();
+  }, [open, isReauth]);
 
   if (!open) return null;
 
   const isRegister = mode === "register";
-  const isLocalNoPassword = accountMode === "local-nopassword";
+  // Adding creates an account from nothing, so it needs a password of its own.
+  const needsNewPassword = isRegister && (isAdd || upgrade.passwordMode === "new");
+  const needsCurrentPassword = isRegister && !isAdd && upgrade.passwordMode === "current";
+  const { value: accountEmail, locked: emailLocked } = invite.email(email, isRegister);
 
   const switchMode = (next: CloudAuthMode) => {
     setMode(next);
@@ -48,34 +66,44 @@ export default function CloudAuthModal() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!email.includes("@")) { setError(t("layout.auth.errorInvalidEmail")); return; }
-    const normalizedUrl = serverUrl.replace(/\/+$/, "");
+    const invalidEmail = emailError(accountEmail, t);
+    if (invalidEmail) { setError(invalidEmail); return; }
+    const normalizedUrl = resolveServerUrl(serverUrl);
 
-    if (!isRegister && password.length < 1) { setError(t("layout.cloudAuthModal.errorPasswordRequired")); return; }
-    if (isRegister && isLocalNoPassword) {
-      if (password.length < 4) { setError(t("layout.cloudAuthModal.errorMinLength4")); return; }
-      if (password !== confirm) { setError(t("layout.auth.errorPasswordMismatch")); return; }
-    }
+    if ((!isRegister || needsCurrentPassword) && password.length < 1) { setError(t("layout.cloudAuthModal.errorPasswordRequired")); return; }
+    const invalidPassword = needsNewPassword ? newPasswordProblem(password, confirm, t) : "";
+    if (invalidPassword) { setError(invalidPassword); return; }
 
-    setLoading(true);
-    setError("");
-    try {
-      if (isRegister) {
-        if (isLocalNoPassword) await setMasterPassword(password);
-        await linkToCloud(email, normalizedUrl);
-        syncOnLogin().catch(() => {});
-      } else {
-        await signInToCloud(email, password, normalizedUrl);
-        syncOnLoginReplace().catch(() => {});
-      }
-      startRealtimeSync();
-      await reloadSubscription().catch(() => {});
+    const finished = () => {
       onClose();
       setEmail("");
       setPassword("");
       setConfirm("");
+    };
+
+    setLoading(true);
+    setError("");
+    try {
+      if (isReauth) {
+        await twoFactor.run(() => login(password), async () => { await upgrade.connected(syncNow); finished(); });
+      } else if (isAdd) {
+        // Nothing of the current session is touched until the server accepts these.
+        await twoFactor.run(
+          invite.askOnClosed(() =>
+            authenticateServerAccount(isRegister ? "register" : "signin", accountEmail, password, normalizedUrl, invite.credential)),
+          async ({ account }) => {
+            await addAccount(account);
+            onClose();
+          },
+        );
+      } else if (isRegister) {
+        await invite.askOnClosed(() => upgrade.link(accountEmail, normalizedUrl, password, invite.credential))();
+        finished();
+      } else {
+        await twoFactor.run(() => upgrade.signIn(email, normalizedUrl, password), finished);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(accountErrorText(err, t));
     } finally {
       setLoading(false);
     }
@@ -93,18 +121,31 @@ export default function CloudAuthModal() {
           </div>
           <div>
             <p className="text-base font-semibold text-(--t-text-primary) mb-1">
-              {isRegister ? t("layout.cloudAuthModal.registerTitle") : t("layout.cloudAuthModal.signinTitle")}
+              {isReauth
+                ? t("layout.cloudAuthModal.reauthTitle")
+                : isAdd
+                  ? t("layout.cloudAuthModal.addTitle")
+                  : isRegister ? t("layout.cloudAuthModal.registerTitle") : t("layout.cloudAuthModal.signinTitle")}
             </p>
             <p className="text-sm text-(--t-text-muted) leading-relaxed">
-              {isRegister
-                ? t("layout.cloudAuthModal.registerDesc")
-                : t("layout.cloudAuthModal.signinDesc")
-              }
+              {isReauth
+                ? t("layout.cloudAuthModal.reauthDesc")
+                : isAdd
+                  ? t("layout.cloudAuthModal.addDesc")
+                  : isRegister ? t("layout.cloudAuthModal.registerDesc", { context: lanContext }) : t("layout.cloudAuthModal.signinDesc", { context: lanContext })}
             </p>
           </div>
         </div>
 
-        <div className="flex rounded-lg overflow-hidden border border-(--t-border)">
+        {twoFactor.challenge ? (
+          <TwoFactorStep
+            challenge={twoFactor.challenge}
+            onCancel={twoFactor.cancel}
+            inputClassName={AUTH_INPUT_CLASS}
+            buttonClassName="py-2.5"
+          />
+        ) : (<>
+        {!isReauth && <div className="flex rounded-lg overflow-hidden border border-(--t-border)">
           {(["signin", "register"] as CloudAuthMode[]).map((next) => {
             const active = mode === next;
             return (
@@ -113,36 +154,42 @@ export default function CloudAuthModal() {
                 type="button"
                 onClick={() => switchMode(next)}
                 className="flex-1 py-1.5 text-xs font-medium transition-colors"
-                style={{ background: active ? "var(--t-accent)" : "var(--t-bg-elevated)", color: active ? "#fff" : "var(--t-text-muted)" }}
+                style={{ background: active ? "var(--t-accent)" : "var(--t-bg-elevated)", color: active ? "var(--t-on-accent)" : "var(--t-text-secondary)" }}
               >
                 {next === "signin" ? t("layout.auth.signIn") : t("layout.auth.createAccount")}
               </button>
             );
           })}
-        </div>
+        </div>}
 
         <form onSubmit={submit} className="space-y-2">
-          <AuthInput type="email" placeholder={t("layout.auth.emailPlaceholder")} value={email} onChange={setEmail} autoFocus />
-          {!isRegister && (
-            <AuthInput type="password" placeholder={t("layout.auth.masterPasswordPlaceholder")} value={password} onChange={setPassword} />
+          <AuthInput type="email" placeholder={t("layout.auth.emailPlaceholder")} value={accountEmail} onChange={setEmail}
+            autoFocus={!isReauth} disabled={isReauth || emailLocked} />
+          {(!isRegister || needsCurrentPassword) && (
+            <AuthInput type="password" placeholder={t("layout.auth.masterPasswordPlaceholder")} value={password} onChange={setPassword}
+              autoFocus={isReauth} />
           )}
-          {isRegister && isLocalNoPassword && (
+          {needsNewPassword && (
             <>
               <AuthInput type="password" placeholder={t("layout.cloudAuthModal.createMasterPasswordPlaceholder")} value={password} onChange={setPassword} />
               <AuthInput type="password" placeholder={t("layout.cloudAuthModal.confirmMasterPasswordPlaceholder")} value={confirm} onChange={setConfirm} />
+              <MasterPasswordNote />
             </>
           )}
 
-          <ServerUrlField value={serverUrl} onChange={setServerUrl} inputClassName={AUTH_INPUT_CLASS} />
+          {!isReauth && <ServerUrlField value={serverUrl} onChange={setServerUrl} inputClassName={AUTH_INPUT_CLASS} locked={serverLocked} />}
+          {isRegister && <InvitationEntry state={invite.entry} inputClassName={AUTH_INPUT_CLASS} />}
 
-          {error && <p className="text-xs px-1 text-(--t-status-error)">{error}</p>}
+          {error && <p role="alert" className="text-xs px-1 text-(--t-status-error)">{error}</p>}
 
           <button
             type="submit"
             disabled={loading}
             className="btn btn-primary w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-60"
           >
-            {loading ? t("layout.cloudAuthModal.pleaseWait") : isRegister ? t("layout.auth.createAccount") : t("layout.auth.signIn")}
+            {loading
+              ? t("layout.cloudAuthModal.pleaseWait")
+              : isRegister ? invite.createLabel : t("layout.auth.signIn")}
           </button>
           <button
             type="button"
@@ -152,32 +199,12 @@ export default function CloudAuthModal() {
             {t("common.action.cancel")}
           </button>
         </form>
+        </>)}
       </ModalCard>
     </Modal>
   );
 }
 
-function AuthInput({
-  type,
-  placeholder,
-  value,
-  onChange,
-  autoFocus,
-}: {
-  type: string;
-  placeholder: string;
-  value: string;
-  onChange: (value: string) => void;
-  autoFocus?: boolean;
-}) {
-  return (
-    <input
-      type={type}
-      placeholder={placeholder}
-      value={value}
-      autoFocus={autoFocus}
-      onChange={(e) => onChange(e.target.value)}
-      className={AUTH_INPUT_CLASS}
-    />
-  );
+function AuthInput(props: Omit<ComponentProps<typeof Input>, "className">) {
+  return <Input {...props} className={AUTH_INPUT_CLASS} />;
 }

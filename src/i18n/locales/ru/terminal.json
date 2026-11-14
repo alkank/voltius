@@ -7,21 +7,32 @@
       "noActiveSession": "Нет активной сессии"
     },
     "historyPanel": {
-      "relativeTime": {
-        "justNow": "только что",
-        "secondsAgo": "{{count}} сек назад",
-        "minutesAgo": "{{count}} мин назад",
-        "hoursAgo": "{{count}} ч назад",
-        "daysAgo": "{{count}} дн назад"
-      },
+      "historyOff": "История команд отключена.\nВключите её в разделе Настройки › Терминал.",
       "removeFromHistory": "Удалить из истории",
       "searchPlaceholder": "Поиск в истории…",
-      "showCurrentOnly": "Показано только текущее подключение",
       "showAllConnections": "Показать все подключения",
       "clearAllTitle": "Очистить всю историю",
       "noCommandsMatch": "Нет подходящих команд",
       "noHistoryForConnection": "Для этого подключения пока нет истории",
-      "noHistoryYet": "История команд пока пуста.\nВведённые команды будут отображаться здесь."
+      "noHistoryYet": "История команд пока пуста.\nВведённые команды будут отображаться здесь.",
+      "favorites": "Избранное",
+      "recent": "Недавние",
+      "addFavorite": "Добавить в избранное",
+      "addFavoriteTeam": "Добавить в избранное. Избранное сохраняется в вашем аккаунте, синхронизируется и остаётся, даже если вы покинете команду.",
+      "removeFavorite": "Убрать из избранного",
+      "saveAsSnippet": "Сохранить как сниппет…",
+      "showOnlyHost": "Показать только {{host}}",
+      "clearHostFilter": "Сбросить фильтр по хосту",
+      "showCurrentHost": "Показать только текущий хост",
+      "clearConfirm_one": "Очистить {{count}} команду?",
+      "clearConfirm_few": "Очистить {{count}} команды?",
+      "clearConfirm_many": "Очистить {{count}} команд?",
+      "clearConfirm_other": "Очистить {{count}} команды?",
+      "favoritesStay_one": "{{count}} избранная команда останется.",
+      "favoritesStay_few": "{{count}} избранные команды останутся.",
+      "favoritesStay_many": "{{count}} избранных команд останутся.",
+      "favoritesStay_other": "{{count}} избранной команды останутся.",
+      "clear": "Очистить"
     },
     "multiplayerBar": {
       "ended": "Завершено",
@@ -37,7 +48,9 @@
       "stopSharingTitle": "Остановить совместный доступ",
       "leaveSessionTitle": "Покинуть сессию",
       "stop": "Остановить",
-      "leave": "Покинуть"
+      "leave": "Покинуть",
+      "waitingForKey": "Ожидание хоста…",
+      "keyFailed": "Хост не передал ключ"
     },
     "sftp": {
       "hostLabel": {
@@ -87,7 +100,20 @@
         "tooManyParts": "Используйте формат «порт» или «удалённый:локальный»",
         "invalidRemotePort": "Порт должен быть от 1 до 65535",
         "invalidLocalPort": "Локальный порт должен быть от 1 до 65535"
-      }
+      },
+      "toast": {
+        "viewPorts": "Показать порты →",
+        "forwardedOne": "Порт {{port}} → localhost:{{localPort}} проброшен",
+        "forwardedMany_one": "{{count}} порт проброшен",
+        "forwardedMany_few": "{{count}} порта проброшено",
+        "forwardedMany_many": "{{count}} портов проброшено",
+        "forwardedMany_other": "{{count}} порта проброшено",
+        "autoForwardCapped_one": "Автопроброс приостановлен — уже проброшен {{count}} порт",
+        "autoForwardCapped_few": "Автопроброс приостановлен — уже проброшено {{count}} порта",
+        "autoForwardCapped_many": "Автопроброс приостановлен — уже проброшено {{count}} портов",
+        "autoForwardCapped_other": "Автопроброс приостановлен — уже проброшено {{count}} порта"
+      },
+      "portLabel": "Порт {{port}}"
     },
     "rightPanel": {
       "font": "Шрифт",
@@ -97,9 +123,11 @@
       "themeCustom": "пользовательская",
       "createNewTheme": "Создать новую тему",
       "closePanelTitle": "Закрыть панель",
+      "resizeHandle": "Перетащите, чтобы изменить размер; двойной щелчок — сбросить",
       "sections": {
         "history": "История",
-        "sftp": "SFTP"
+        "sftp": "SFTP",
+        "notes": "Заметки"
       },
       "pluginUnavailable": "Эта панель больше недоступна. Плагин, который её добавлял, удалён или отключён.",
       "pluginUnavailableAction": "Вернуться к темам"
@@ -237,11 +265,8 @@
         "openingShell": "Открытие оболочки",
         "sftpSubsystem": "Подсистема SFTP",
         "openingPort": "Открытие порта",
-        "ready": "Готово"
-      },
-      "connectionLost": {
-        "title": "Соединение потеряно",
-        "subtitle": "Переподключение…"
+        "ready": "Готово",
+        "portKnock": "Стук в порты"
       },
       "reconnectWait": {
         "offline": {
@@ -257,17 +282,17 @@
       "connectionError": {
         "title": "Ошибка подключения",
         "retry": "Повторить",
+        "enableLegacyAndRetry": "Включить устаревшие алгоритмы и повторить",
         "dismiss": "Закрыть"
       },
       "hostKeyConflict": {
         "title": "КЛЮЧ ХОСТА ИЗМЕНЁН",
-        "descriptionPrefix": "Отпечаток ",
-        "descriptionSuffix": " изменился.",
         "replace": "Заменить",
         "addAsNew": "Добавить как новый",
         "abort": "Прервать",
         "stored": "Сохранённый",
-        "received": "Полученный"
+        "received": "Полученный",
+        "description": "Отпечаток <host>{{address}}</host> изменился."
       },
       "passphrasePrompt": {
         "title": "ТРЕБУЕТСЯ КОДОВАЯ ФРАЗА КЛЮЧА",
@@ -296,6 +321,24 @@
         "unlock": "Разблокировать хранилище",
         "retry": "Повторить",
         "dismiss": "Закрыть вкладку"
+      },
+      "identityPick": {
+        "title": "Ваша личность недоступна",
+        "missingBody": "Вы выбрали личность для {{host}}, но её нет на этом устройстве или она была удалена. Подключение не выполнялось.",
+        "forbiddenBody": "Вы выбрали {{identity}} для {{host}}, но больше не можете её использовать. Подключение не выполнялось.",
+        "choose": "Выбрать другую личность",
+        "useHostNamed": "Использовать {{name}} (хост) в этот раз",
+        "useHost": "Использовать учётные данные хоста в этот раз"
+      },
+      "saveTarget": {
+        "rememberFor": "Запомнить для",
+        "saveFor": "Сохранить для",
+        "thisHost": "Этого хоста",
+        "allVaultHosts": "Всех хостов {{vault}}",
+        "everyone": "Всех",
+        "onlyMe": "Только меня",
+        "ownNote": "Только для вас. У коллег остаются настройки хоста.",
+        "teamNote": "«Всех» меняет {{host}} для всей команды. «Только меня» оставляет хост без изменений."
       }
     },
     "statusBar": {
@@ -316,6 +359,10 @@
       "serialReopen": "Снова открыть последовательный порт",
       "serialAutoReconnectOn": "Автопереподключение включено — нажмите, чтобы не занимать порт",
       "serialAutoReconnectOff": "Автопереподключение выключено — после обрыва порт остаётся свободным",
+      "serialLineOn": "{{line}} включён — нажмите, чтобы выключить",
+      "serialLineOff": "{{line}} выключен — нажмите, чтобы включить",
+      "serialRtsFlowControlled": "RTS управляется аппаратным контролем потока RTS/CTS",
+      "serialBreak": "Отправить сигнал break",
       "systemMetricsTitle": "Системные метрики",
       "activeTunnels_one": "{{count}} активный туннель",
       "activeTunnels_few": "{{count}} активных туннеля",
@@ -327,6 +374,25 @@
       "sparklineMin": "мин {{value}}мс",
       "sparklineAvg": "сред {{value}}мс",
       "sparklineMax": "макс {{value}}мс"
+    },
+    "xterm": {
+      "linkTooltip": "Alt+щелчок, чтобы открыть",
+      "sessionClosed": "Сессия закрыта",
+      "serialClosed": "Последовательное подключение закрыто"
+    },
+    "pasteImage": {
+      "uploading": "Загрузка снимка",
+      "uploadingDetail": "на {{host}} · {{size}} · {{width}}×{{height}}",
+      "pasted": "Снимок вставлен",
+      "pastedDetail": "{{host}} · {{name}}",
+      "firstUse": "Хранится на хосте 7 дней, доступен только вам",
+      "settings": "Настройки вставки изображений",
+      "deleteFromHost": "Удалить с хоста",
+      "deleted": "Снимок удалён с хоста",
+      "deleteFailed": "Не удалось удалить снимок",
+      "failed": "Не удалось загрузить снимок",
+      "retry": "Повторить",
+      "broadcast": "Вставка изображений отключена, пока вы вводите текст сразу в несколько панелей."
     }
   }
 }

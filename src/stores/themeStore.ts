@@ -1,12 +1,18 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { BUILT_IN_THEMES, DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "@/themes/presets";
 import type { AppTheme } from "@/themes/types";
 import { usePluginStore } from "@/stores/pluginStore";
 import { useUIStore } from "@/stores/uiStore";
+import { writeUnlessLocked } from "./policyStore";
+import { storeSetting } from "@/services/policy/effectiveCore";
+import { useAdminDefaultsStore } from "./adminDefaultsStore";
 import { pushSettingsChange, remoteApplyTimestamp, settingsStamp } from "./remoteApplyGuard";
 import type { ThemeMode, GeoLocation, AutomationConfig, ThemePhase } from "@/services/themeAutomation";
+import { DYNAMIC_THEME_ID, dynamicThemeFor } from "@/themes/dynamic";
+import { useSystemColorsStore } from "@/services/androidSystemColors";
+import { getSystemPrefersDark } from "@/services/systemAppearance";
 
 // `location` is deliberately absent: it is device-scoped, and theme.json is the
 // plugin path's only theme wire — a per-key filter cannot reach inside a file.
@@ -33,6 +39,8 @@ async function saveToDisk(state: ThemeDiskState): Promise<void> {
   } catch {}
 }
 
+const LOCATION_KEY = "themes.location";
+
 interface ThemeStore {
   activeThemeId: string;
   customThemes: AppTheme[];
@@ -58,7 +66,27 @@ interface ThemeStore {
   getAutomationConfig: () => AutomationConfig;
   getEffectiveThemeId: () => string;
   getActiveTheme: () => AppTheme;
+  /** The Material You theme (D1) for the current phase, or null when the device has no palette. */
+  getDynamicTheme: () => AppTheme | null;
   loadFromDisk: () => Promise<void>;
+}
+
+/** Material You picks its light or dark tones from the automation phase when a mode drives the
+ *  theme, otherwise (manual) from the phone's own light/dark setting. */
+function dynamicPhase(s: Pick<ThemeStore, "mode" | "resolvedPhase">): ThemePhase {
+  if (s.mode !== "manual") return s.resolvedPhase;
+  return getSystemPrefersDark() ? "dark" : "light";
+}
+
+function phaseDefault(phase: ThemePhase): AppTheme {
+  const id = phase === "dark" ? DEFAULT_THEME_ID : DEFAULT_LIGHT_THEME_ID;
+  return BUILT_IN_THEMES.find((t) => t.id === id) ?? BUILT_IN_THEMES[0];
+}
+
+/** The dynamic theme, or, where there is no palette (desktop after a sync, Android < 12), the
+ *  default theme of the same phase, so a synced "material-you" degrades gracefully. */
+function dynamicOrFallback(s: ThemeStore): AppTheme {
+  return s.getDynamicTheme() ?? phaseDefault(dynamicPhase(s));
 }
 
 export const useThemeStore = create<ThemeStore>()(
@@ -121,10 +149,12 @@ export const useThemeStore = create<ThemeStore>()(
         set({ scheduleLightStart: lightStart, scheduleDarkStart: darkStart });
         get().persist();
       },
-      setLocation: (loc) => {
-        set({ location: loc });
-        get().persist();
-      },
+      setLocation: (loc) =>
+        writeUnlessLocked(LOCATION_KEY, () => {
+          set({ location: loc });
+          useAdminDefaultsStore.getState().clear(LOCATION_KEY);
+          get().persist();
+        }),
       setResolvedPhase: (phase) => set({ resolvedPhase: phase }), // device-local, no persist/sync
       toggleLightDark: () => {
         const { lightThemeId, darkThemeId } = get();
@@ -139,7 +169,7 @@ export const useThemeStore = create<ThemeStore>()(
           mode: s.mode,
           scheduleLightStart: s.scheduleLightStart,
           scheduleDarkStart: s.scheduleDarkStart,
-          location: s.location,
+          location: locationSetting.get(),
         };
       },
       getEffectiveThemeId: () => {
@@ -152,6 +182,7 @@ export const useThemeStore = create<ThemeStore>()(
         const { customThemes } = get();
         const pluginThemes = usePluginStore.getState().pluginThemes;
         const theme =
+          (id === DYNAMIC_THEME_ID ? dynamicOrFallback(get()) : undefined) ??
           BUILT_IN_THEMES.find((t) => t.id === id) ??
           customThemes.find((t) => t.id === id) ??
           pluginThemes.get(id) ??
@@ -164,6 +195,10 @@ export const useThemeStore = create<ThemeStore>()(
         return override === null || override === theme.terminalFontSize
           ? theme
           : { ...theme, terminalFontSize: override };
+      },
+      getDynamicTheme: () => {
+        const palette = useSystemColorsStore.getState().palette;
+        return palette ? dynamicThemeFor(palette, dynamicPhase(get()), phaseDefault(dynamicPhase(get()))) : null;
       },
       loadFromDisk: async () => {
         try {
@@ -187,3 +222,5 @@ export const useThemeStore = create<ThemeStore>()(
     { name: "voltius-theme" },
   ),
 );
+
+export const locationSetting: { get: () => GeoLocation | null; use: () => GeoLocation | null } = storeSetting(useThemeStore, "location", LOCATION_KEY);

@@ -44,6 +44,8 @@
         "portForwardDeleted": "已删除端口转发",
         "vaultRenamed": "保险库已重命名",
         "vaultKeyRotated": "密钥已轮换",
+        "teamLockPolicySet": "已设置锁定策略",
+        "teamLockPolicyRemoved": "已移除锁定策略",
         "roleCreated": "已创建角色",
         "roleUpdated": "已更新角色",
         "roleDeleted": "已删除角色",
@@ -52,7 +54,13 @@
         "secretViewed": "密钥已查看",
         "sessionStarted": "会话已开始",
         "sessionEnded": "会话已结束",
-        "sessionJoined": "会话已加入"
+        "sessionJoined": "会话已加入",
+        "memberRenamed": "成员已重命名",
+        "permissionGranted": "已授予权限",
+        "permissionRevoked": "已撤销权限",
+        "sessionLeft": "已离开会话",
+        "vaultCreated": "已创建保险库",
+        "vaultDeleted": "已删除保险库"
       }
     },
     "timeRange": {
@@ -73,18 +81,27 @@
     },
     "badges": {
       "client": "客户端",
-      "clientTooltip": "由客户端应用报告——非权威"
+      "clientTooltip": "由客户端应用报告——非权威",
+      "ownKey": "自有密钥",
+      "ownKeyTooltip": "使用成员自己的身份连接；该身份从不离开其设备",
+      "shared": "共享 · {{name}}",
+      "sharedUnknown": "共享"
     },
     "eventLabels": {
       "memberInvited": "邀请了 {{name}}",
       "memberJoined": "以 {{role}} 身份加入了团队",
       "memberRemoved": "移除了 {{name}}",
+      "memberRenamed": "将 {{name}} 命名为“{{to}}”",
+      "memberNameRemoved": "移除了 {{name}} 的名称",
       "memberRoleChanged": "更改了 {{name}} 的角色",
       "memberPermissionsChanged": "更改了 {{name}} 的权限",
       "vaultCreated": "创建了保险库 \"{{name}}\"",
       "vaultDeleted": "删除了保险库 \"{{name}}\"",
       "vaultRenamed": "将保险库重命名为 \"{{name}}\"",
       "vaultKeyRotated": "为保险库 \"{{name}}\" 轮换密钥",
+      "lockPolicySet": "设置了锁定策略（自动锁定：{{timeout}}）",
+      "lockPolicySetVault": "设置了锁定策略（自动锁定：{{timeout}}，要求“锁定保险库”）",
+      "lockPolicyRemoved": "移除了锁定策略",
       "roleCreated": "创建了角色 \"{{name}}\"",
       "roleUpdated": "更新了角色 \"{{name}}\"",
       "roleDeleted": "删除了角色 \"{{name}}\"",
@@ -119,7 +136,8 @@
       "fallbackMember": "一名成员",
       "fallbackRole": "成员",
       "fallbackResource": "一个资源",
-      "fallbackHost": "一台主机"
+      "fallbackHost": "一台主机",
+      "you": "你"
     },
     "timeline": {
       "today": "今天",

@@ -1,0 +1,171 @@
+{
+  "portForwarding": {
+    "toolbar": {
+      "filterPlaceholder": "Filtrovat pravidla…",
+      "deleteSelected": "Smazat vybrané",
+      "deleteButton": "SMAZAT",
+      "newRule": "Nové pravidlo",
+      "newFolder": "Nová složka"
+    },
+    "reach": {
+      "copied": "{{address}} zkopírováno do schránky"
+    },
+    "page": {
+      "all": "Vše",
+      "folders": "Složky",
+      "new": "Nové",
+      "noRulesMatchSearch": "Hledanému výrazu neodpovídá žádné pravidlo.",
+      "noRulesYet": "Zatím žádná pravidla. Začněte vytvořením prvního.",
+      "addRule": "Přidat pravidlo",
+      "ejectMoveTo": "Přesunout do {{name}}",
+      "ejectRemoveFromFolder": "Odebrat ze složky",
+      "activeCount": "aktivní: {{count}}",
+      "errorCount": "chyby: {{count}}",
+      "confirmDelete": {
+        "title": "Smazat pravidlo",
+        "message": "Toto pravidlo bude trvale smazáno."
+      },
+      "confirmDeleteBulk": {
+        "title_one": "Smazat {{count}} pravidlo",
+        "title_few": "Smazat {{count}} pravidla",
+        "title_many": "Smazat {{count}} pravidla",
+        "title_other": "Smazat {{count}} pravidel",
+        "message_one": "Opravdu chcete smazat {{count}} pravidlo? Tuto akci nelze vrátit zpět.",
+        "message_few": "Opravdu chcete smazat {{count}} pravidla? Tuto akci nelze vrátit zpět.",
+        "message_many": "Opravdu chcete smazat {{count}} pravidla? Tuto akci nelze vrátit zpět.",
+        "message_other": "Opravdu chcete smazat {{count}} pravidel? Tuto akci nelze vrátit zpět."
+      },
+      "confirmDeleteFolder": {
+        "title": "Smazat složku",
+        "message_one": "Smaže se složka, její podsložky a {{count}} pravidlo uvnitř. Tuto akci nelze vrátit zpět.",
+        "message_few": "Smaže se složka, její podsložky a {{count}} pravidla uvnitř. Tuto akci nelze vrátit zpět.",
+        "message_many": "Smaže se složka, její podsložky a {{count}} pravidla uvnitř. Tuto akci nelze vrátit zpět.",
+        "message_other": "Smaže se složka, její podsložky a {{count}} pravidel uvnitř. Tuto akci nelze vrátit zpět.",
+        "messageEmpty": "Smaže se složka a vše, co obsahuje. Tuto akci nelze vrátit zpět."
+      },
+      "vaultCascade": {
+        "moveDescription": "Přesunutím složky „{{folderName}}“ se do trezoru „{{targetVaultName}}“ přesunou také tato pravidla:",
+        "copyDescription": "Zkopírováním složky „{{folderName}}“ se do trezoru „{{targetVaultName}}“ zkopírují také tato pravidla:"
+      },
+      "bulk": {
+        "duplicateRules": "Duplikovat pravidla ({{count}})",
+        "exportRules": "Exportovat pravidla ({{count}})",
+        "deleteRules": "Smazat pravidla ({{count}})"
+      }
+    },
+    "ruleCard": {
+      "pause": "Pozastavit",
+      "resume": "Obnovit",
+      "openWebLink": "Otevřít webový odkaz",
+      "activateInSession": "Aktivovat v relaci",
+      "duplicate": "Duplikovat",
+      "pauseForwarding": "Pozastavit přesměrování",
+      "resumeForwarding": "Obnovit přesměrování",
+      "active": "Aktivní",
+      "error": "Chyba",
+      "stopped": "Zastaveno",
+      "noSshSession": "Žádná SSH relace",
+      "openUrl": "Otevřít {{url}}",
+      "scopedToConnections_one": "Omezeno na {{count}} připojení",
+      "scopedToConnections_few": "Omezeno na {{count}} připojení",
+      "scopedToConnections_many": "Omezeno na {{count}} připojení",
+      "scopedToConnections_other": "Omezeno na {{count}} připojení",
+      "connectionsCount_one": "{{count}} připojení",
+      "connectionsCount_few": "{{count}} připojení",
+      "connectionsCount_many": "{{count}} připojení",
+      "connectionsCount_other": "{{count}} připojení"
+    },
+    "activeTunnels": {
+      "sectionTitle": "Aktivní přesměrování v relacích",
+      "tunnelCount_one": "{{count}} tunel",
+      "tunnelCount_few": "{{count}} tunely",
+      "tunnelCount_many": "{{count}} tunelu",
+      "tunnelCount_other": "{{count}} tunelů",
+      "forwardCount_one": "{{count}} přesměrování",
+      "forwardCount_few": "{{count}} přesměrování",
+      "forwardCount_many": "{{count}} přesměrování",
+      "forwardCount_other": "{{count}} přesměrování",
+      "errorCount": "chyby: {{count}}",
+      "activeCountLabel": "aktivní: {{count}}",
+      "connected": "Připojeno",
+      "local": "Lokální",
+      "remote": "Vzdálené",
+      "socks5": "SOCKS5",
+      "auto": "Auto",
+      "adHoc": "Ad hoc",
+      "portLabel": "Port {{port}}",
+      "socksPortLabel": "SOCKS5 :{{port}}",
+      "pauseForwarding": "Pozastavit přesměrování",
+      "resumeForwarding": "Obnovit přesměrování",
+      "openUrl": "Otevřít {{url}}"
+    },
+    "ruleForm": {
+      "editRule": "Upravit pravidlo",
+      "newRule": "Nové pravidlo",
+      "general": "Obecné",
+      "name": "Název",
+      "namePlaceholder": "Můj tunel",
+      "description": "Popis",
+      "descriptionPlaceholder": "Vývojový server, proxy databáze…",
+      "type": "Typ",
+      "tunnelTypes": {
+        "local": {
+          "label": "Lokální",
+          "title": "Lokální tunel",
+          "summary": "Zpřístupní službu dostupnou ze SSH serveru na vašem počítači."
+        },
+        "remote": {
+          "label": "Vzdálený",
+          "title": "Vzdálený tunel",
+          "summary": "Zpřístupní službu dostupnou z vašeho počítače na SSH serveru."
+        },
+        "dynamic": {
+          "label": "Dynamický",
+          "title": "Dynamická SOCKS proxy",
+          "summary": "Vytvoří lokální SOCKS5 proxy, která posílá provoz aplikací přes SSH server."
+        }
+      },
+      "route": "Trasa",
+      "yourComputer": "Váš počítač",
+      "sshServer": "SSH server",
+      "service": "Služba",
+      "anyDestination": "Libovolný cíl",
+      "anyDestinationHelp": "Každá aplikace si cíl volí sama. Provoz odchází z SSH serveru.",
+      "listenPort": "Port pro naslouchání",
+      "socksPort": "Port SOCKS proxy",
+      "whoCanConnect": "Kdo se může připojit",
+      "audience": {
+        "thisComputer": "Tento počítač",
+        "serverOnly": "Jen server",
+        "network": "Síť",
+        "custom": "Vlastní",
+        "customAddress": "Adresa pro naslouchání"
+      },
+      "sharedWarning": {
+        "computer": "Tunel mohou používat i další zařízení, která se na tuto adresu dostanou.",
+        "server": "Tunel může používat kdokoli, kdo se na tuto adresu na serveru dostane."
+      },
+      "host": "Host",
+      "port": "Port",
+      "throughTunnel": "tunelem",
+      "reaches": "vede na",
+      "backThroughTunnel": "zpět tunelem",
+      "summary": {
+        "incomplete": "Vyplňte porty a uvidíte, kam provoz povede.",
+        "local": "Otevřete <b>{{listener}}</b> na tomto počítači a dostanete se na <b>{{target}}</b> z pohledu SSH serveru.",
+        "localShared": "Zařízení v síti otevřou <b>{{listener}}</b> a dostanou se na <b>{{target}}</b> z pohledu SSH serveru.",
+        "remote": "SSH server naslouchá na <b>{{listener}}</b> a každé připojení posílá na <b>{{target}}</b> na tomto počítači.",
+        "dynamic": "Aplikace, které používají <b>{{listener}}</b> jako SOCKS5 proxy, přistupují k síti z SSH serveru.",
+        "dynamicShared": "Zařízení, která používají <b>{{listener}}</b> jako SOCKS5 proxy, přistupují k síti z SSH serveru.",
+        "anyAddress": "<vaše-ip>",
+        "anyHost": "<host>",
+        "copyCommand": "Zkopírovat příkaz"
+      },
+      "applyTo": "Použít pro",
+      "allConnections": "Všechna připojení",
+      "specificConnections": "Vybraná",
+      "noSavedConnections": "Žádná uložená připojení.",
+      "removeHost": "Odebrat {{name}}"
+    }
+  }
+}

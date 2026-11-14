@@ -1,10 +1,16 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { EnrollmentTokenParts } from "@/services/enrollment/enrollmentToken";
 import { pushSettingsChange, settingsStamp } from "./remoteApplyGuard";
 
 export type NavItem = "hosts" | "keychain" | "port-forwarding" | "snippets" | "known-hosts" | "members" | "logs" | "terminal";
+export type PageNavItem = Exclude<NavItem, "terminal">;
 
-export type BuiltinRightPanelSection = "snippets" | "history" | "themes" | "ports" | "sftp";
+const navTo = (nav: NavItem) => (nav === "terminal" ? { activeNav: nav } : { activeNav: nav, lastPageNav: nav });
+
+export interface PluginBrowseRequest { query?: string; tag?: string }
+
+export type BuiltinRightPanelSection = "snippets" | "history" | "notes" | "themes" | "ports" | "sftp";
 /** Widened to allow plugin-contributed section IDs (prefixed with "plugin:") */
 export type RightPanelSection = BuiltinRightPanelSection | (string & {});
 /**
@@ -12,8 +18,10 @@ export type RightPanelSection = BuiltinRightPanelSection | (string & {});
  * section id it received from outside, and a type alone cannot be checked at
  * runtime.
  */
-export const SETTINGS_SECTIONS = ["appearance", "account", "sync", "plugins", "integrations", "terminal", "sftp", "portForwarding", "hosts", "shortcuts", "diagnostics", "about"] as const;
+export const SETTINGS_SECTIONS = ["appearance", "account", "sync", "plugins", "integrations", "terminal", "sftp", "portForwarding", "hosts", "devices", "shortcuts", "diagnostics", "about"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+const NO_SETTINGS_FILTER = { settingsQuery: "", settingsChangedOnly: false };
 
 export function isSettingsSection(value: string): value is SettingsSection {
   return (SETTINGS_SECTIONS as readonly string[]).includes(value);
@@ -34,6 +42,13 @@ export const MAX_TERMINAL_FONT_SIZE = 32;
 
 export function clampTerminalFontSize(value: number): number {
   return Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, Math.round(value)));
+}
+
+export const RIGHT_PANEL_WIDTH = { default: 300, min: 300, max: 560 } as const;
+
+export function clampRightPanelWidth(value: number): number {
+  const width = Number.isFinite(value) ? Math.round(value) : RIGHT_PANEL_WIDTH.default;
+  return Math.min(RIGHT_PANEL_WIDTH.max, Math.max(RIGHT_PANEL_WIDTH.min, width));
 }
 
 export type ImportExportSection = "vaults" | "user-data";
@@ -76,13 +91,21 @@ export type KeychainPendingAction =
   | { action: "edit-key"; id: string }
   | { action: "edit-identity"; id: string }
   | null;
+export type EnrollSource = "machine" | "link" | "paste";
+export type EnrollTarget = { token: EnrollmentTokenParts; source: EnrollSource };
 export type CloudAuthMode = "signin" | "register";
+/** `link` moves the current local account to the cloud; `add` signs in to another one beside it; `reauth` renews the current one after the server ended its session. */
+export type CloudAuthPurpose = "link" | "add" | "reauth";
+
+export type MembersPanel = "invite" | "roles" | "security";
 
 interface UIStore {
   sidebarOpen: boolean;
   homeView: boolean;
   activeNav: NavItem;
+  lastPageNav: PageNavItem;
   omniOpen: boolean;
+  omniSeed: string;
   globalPanelOpen: Record<string, boolean>;
   setGlobalPanelOpen: (id: string, open: boolean) => void;
   toggleGlobalPanel: (id: string) => void;
@@ -94,16 +117,23 @@ interface UIStore {
   notificationCenterOpen: boolean;
   /** Inbox entry a deep link asked for; the bell clears it once shown. */
   notificationFocusId: string | null;
+  enrollTarget: EnrollTarget | null;
   cloudAuthOpen: boolean;
   cloudAuthMode: CloudAuthMode;
+  cloudAuthPurpose: CloudAuthPurpose;
   settingsSection: SettingsSection;
   /** Mobile drill-down page: null = section list, otherwise the open section. */
   settingsSubPage: SettingsSection | null;
   settingsPluginPageId: string | null;
+  settingsQuery: string;
+  settingsChangedOnly: boolean;
+  /** Browse-tab search / tag a caller asked for; the Plugins section consumes it. */
+  pluginBrowseRequest: PluginBrowseRequest | null;
   /** Whether the Plugins nav group is expanded. Persisted; a selected child force-expands regardless. */
   pluginsNavExpanded: boolean;
   rightPanelOpen: boolean;
   rightPanelSection: RightPanelSection;
+  rightPanelWidth: number;
   sftpPanelOpen: boolean;
   pendingSftpConnectionId: string | null;
   uiScale: number;
@@ -119,10 +149,12 @@ interface UIStore {
   keychainSortMode: SortMode;
   homePendingAction: HomePendingAction;
   portForwardingLayoutMode: LayoutMode;
+  activeTunnelsCollapsed: boolean;
   portForwardingSortMode: SortMode;
   membersLayoutMode: LayoutMode;
   membersSortMode: SortMode;
   snippetsLayoutMode: LayoutMode;
+  knownHostsLayoutMode: LayoutMode;
   prefsUpdatedAt: string;
   portForwardingPendingAction: PortForwardingPendingAction;
   keychainPendingAction: KeychainPendingAction;
@@ -138,13 +170,18 @@ interface UIStore {
   setSidebarOpen: (open: boolean) => void;
   setHomeView: (v: boolean) => void;
   setActiveNav: (nav: NavItem) => void;
+  /** From the terminal view, go back to the page shown before it. */
+  leaveTerminal: () => void;
   setOmniOpen: (open: boolean) => void;
+  openOmniWith: (query: string) => void;
   setSettingsOpen: (open: boolean) => void;
   setNotificationCenterOpen: (open: boolean) => void;
   openNotificationCenter: (focusId?: string | null) => void;
   clearNotificationFocus: () => void;
-  openCloudAuth: (mode?: CloudAuthMode) => void;
+  openCloudAuth: (mode?: CloudAuthMode, purpose?: CloudAuthPurpose) => void;
   closeCloudAuth: () => void;
+  openEnroll: (token: EnrollmentTokenParts, source: EnrollSource) => void;
+  closeEnroll: () => void;
   setCloudAuthMode: (mode: CloudAuthMode) => void;
   setSettingsSection: (section: SettingsSection) => void;
   setSettingsSubPage: (section: SettingsSection | null) => void;
@@ -152,9 +189,13 @@ interface UIStore {
   setPluginsNavExpanded: (expanded: boolean) => void;
   /** Select a plugin settings page as the current settings target (both shells). */
   selectPluginPage: (pageId: string) => void;
-  openSettings: (section?: SettingsSection, pluginPageId?: string) => void;
+  openSettings: (section?: SettingsSection, pluginPageId?: string, opts?: { query?: string }) => void;
+  setSettingsQuery: (query: string) => void;
+  setSettingsChangedOnly: (on: boolean) => void;
+  setPluginBrowseRequest: (request: PluginBrowseRequest | null) => void;
   setRightPanelOpen: (open: boolean) => void;
   setRightPanelSection: (section: RightPanelSection) => void;
+  setRightPanelWidth: (width: number) => void;
   toggleRightPanel: (section?: RightPanelSection) => void;
   setSftpPanelOpen: (open: boolean) => void;
   openSftpWith: (connectionId: string) => void;
@@ -167,20 +208,19 @@ interface UIStore {
   setKeychainSortMode: (v: SortMode) => void;
   setHomePendingAction: (action: HomePendingAction) => void;
   setPortForwardingLayoutMode: (v: LayoutMode) => void;
+  toggleActiveTunnelsCollapsed: () => void;
   setPortForwardingSortMode: (v: SortMode) => void;
   setPortForwardingPendingAction: (action: PortForwardingPendingAction) => void;
   setKeychainPendingAction: (action: KeychainPendingAction) => void;
   setMembersLayoutMode: (v: LayoutMode) => void;
   setMembersSortMode: (v: SortMode) => void;
   setSnippetsLayoutMode: (v: LayoutMode) => void;
+  setKnownHostsLayoutMode: (v: LayoutMode) => void;
   snippetsPendingAction: SnippetsPendingAction;
   setSnippetsPendingAction: (action: SnippetsPendingAction) => void;
-  membersInvitePending: boolean;
-  openMembersInvite: () => void;
-  clearMembersInvitePending: () => void;
-  membersRolesPending: boolean;
-  openMembersRoles: () => void;
-  clearMembersRolesPending: () => void;
+  membersPanelPending: MembersPanel | null;
+  openMembersPanel: (panel: MembersPanel) => void;
+  clearMembersPanelPending: () => void;
   openMembersNav: () => void;
   vaultSharePending: boolean;
   openVaultSharePending: () => void;
@@ -190,8 +230,15 @@ interface UIStore {
   openWhatsNew: () => void;
   closeWhatsNew: () => void;
   markChangelogSeen: (version: string) => void;
+  imagePasteNoticeSeen: boolean;
+  markImagePasteNoticeSeen: () => void;
   terminalPanelsRowOpen: boolean;
   toggleTerminalPanelsRow: () => void;
+  hostPanelPinned: boolean;
+  setHostPanelPinned: (pinned: boolean) => void;
+  /** Mobile SFTP shows two panes (else one). Device-local, like terminalPanelsRowOpen. */
+  mobileSftpTwoPanes: boolean;
+  toggleMobileSftpTwoPanes: () => void;
 }
 
 export const useUIStore = create<UIStore>()(
@@ -206,20 +253,28 @@ export const useUIStore = create<UIStore>()(
         sidebarOpen: true,
         homeView: true,
         activeNav: "hosts" as NavItem,
+        lastPageNav: "hosts" as PageNavItem,
         omniOpen: false,
+        omniSeed: "",
         globalPanelOpen: {},
         dockedPanelWidth: 0,
         settingsOpen: false,
         notificationCenterOpen: false,
         notificationFocusId: null as string | null,
+        enrollTarget: null as EnrollTarget | null,
         cloudAuthOpen: false,
         cloudAuthMode: "signin" as CloudAuthMode,
+        cloudAuthPurpose: "link" as CloudAuthPurpose,
         settingsSection: "appearance" as SettingsSection,
+        settingsQuery: "",
+        settingsChangedOnly: false,
         settingsSubPage: null as SettingsSection | null,
         settingsPluginPageId: null as string | null,
+        pluginBrowseRequest: null as PluginBrowseRequest | null,
         pluginsNavExpanded: true,
         rightPanelOpen: false,
         rightPanelSection: "themes" as RightPanelSection,
+        rightPanelWidth: RIGHT_PANEL_WIDTH.default,
         sftpPanelOpen: false,
         pendingSftpConnectionId: null as string | null,
         uiScale: 1,
@@ -230,18 +285,22 @@ export const useUIStore = create<UIStore>()(
         keychainSortMode: "newest" as SortMode,
         homePendingAction: null as HomePendingAction,
         portForwardingLayoutMode: "list" as LayoutMode,
+        activeTunnelsCollapsed: false,
         portForwardingSortMode: "newest" as SortMode,
         portForwardingPendingAction: null as PortForwardingPendingAction,
         membersLayoutMode: "list" as LayoutMode,
         membersSortMode: "role-asc" as SortMode,
         snippetsLayoutMode: "list" as LayoutMode,
+        knownHostsLayoutMode: "grid" as LayoutMode,
         snippetsPendingAction: null as SnippetsPendingAction,
-        membersInvitePending: false,
-        membersRolesPending: false,
+        membersPanelPending: null,
         vaultSharePending: false,
         whatsNewOpen: false,
         lastSeenChangelogVersion: null as string | null,
+        imagePasteNoticeSeen: false,
         terminalPanelsRowOpen: false,
+        hostPanelPinned: false,
+        mobileSftpTwoPanes: false,
         prefsUpdatedAt: new Date(0).toISOString(),
         keychainPendingAction: null as KeychainPendingAction,
         importExportModal: { open: false, mode: "export" as const, section: "vaults" as ImportExportSection },
@@ -255,30 +314,38 @@ export const useUIStore = create<UIStore>()(
         toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
         setSidebarOpen: (open) => set({ sidebarOpen: open }),
         setHomeView: (v) => set({ homeView: v }),
-        setActiveNav: (nav) => set({ activeNav: nav }),
-        setOmniOpen: (open) => set({ omniOpen: open }),
+        setActiveNav: (nav) => set(navTo(nav)),
+        leaveTerminal: () => set((s) => (s.activeNav === "terminal" ? { activeNav: s.lastPageNav } : {})),
+        setOmniOpen: (open) => set({ omniOpen: open, ...(open ? {} : { omniSeed: "" }) }),
+        openOmniWith: (query) => set({ omniOpen: true, omniSeed: query }),
         setGlobalPanelOpen: (id, open) => set((s) => ({ globalPanelOpen: { ...s.globalPanelOpen, [id]: open } })),
         toggleGlobalPanel: (id) => set((s) => ({ globalPanelOpen: { ...s.globalPanelOpen, [id]: !s.globalPanelOpen[id] } })),
         setDockedPanelWidth: (width) => set({ dockedPanelWidth: width }),
-        setSettingsOpen: (open) => set((s) => ({ settingsOpen: open, settingsSubPage: open ? s.settingsSubPage : null })),
+        setSettingsOpen: (open) => set((s) => ({ settingsOpen: open, settingsSubPage: open ? s.settingsSubPage : null, ...(open ? {} : NO_SETTINGS_FILTER) })),
         setNotificationCenterOpen: (open) => set((s) => ({ notificationCenterOpen: open, notificationFocusId: open ? s.notificationFocusId : null })),
         openNotificationCenter: (focusId) => set({ notificationCenterOpen: true, notificationFocusId: focusId ?? null }),
         clearNotificationFocus: () => set({ notificationFocusId: null }),
-        openCloudAuth: (mode) => set({ cloudAuthOpen: true, cloudAuthMode: mode ?? "signin" }),
+        openCloudAuth: (mode, purpose) => set({ cloudAuthOpen: true, cloudAuthMode: mode ?? "signin", cloudAuthPurpose: purpose ?? "link" }),
         closeCloudAuth: () => set({ cloudAuthOpen: false }),
+        openEnroll: (token, source) => set({ enrollTarget: { token, source }, notificationCenterOpen: false, notificationFocusId: null }),
+        closeEnroll: () => set({ enrollTarget: null }),
         setCloudAuthMode: (mode) => set({ cloudAuthMode: mode }),
         // Selecting a builtin section must drop any plugin target, or
         // `settingsPluginPageId ?? settingsSection` would keep showing the plugin pane.
-        setSettingsSection: (section) => set({ settingsSection: section, settingsPluginPageId: null }),
-        setSettingsSubPage: (section) => set({ settingsSubPage: section, settingsPluginPageId: null }),
+        setSettingsSection: (section) => set({ settingsSection: section, settingsPluginPageId: null, ...NO_SETTINGS_FILTER }),
+        setSettingsSubPage: (section) => set({ settingsSubPage: section, settingsPluginPageId: null, ...NO_SETTINGS_FILTER }),
+        setSettingsQuery: (query) => set({ settingsQuery: query }),
+        setSettingsChangedOnly: (on) => set({ settingsChangedOnly: on }),
         setSettingsPluginPageId: (id) => set({ settingsPluginPageId: id }),
         setPluginsNavExpanded: (expanded) => set({ pluginsNavExpanded: expanded }),
         selectPluginPage: (pageId) =>
-          set({ settingsSection: "plugins", settingsSubPage: "plugins", settingsPluginPageId: pageId }),
+          set({ settingsSection: "plugins", settingsSubPage: "plugins", settingsPluginPageId: pageId, ...NO_SETTINGS_FILTER }),
         // section given = deep-link → mobile drills straight in; no section = plain open → mobile lands on the list.
-        openSettings: (section, pluginPageId) => set((s) => ({ settingsOpen: true, settingsSection: section ?? s.settingsSection, settingsSubPage: section ?? null, settingsPluginPageId: pluginPageId ?? null })),
+        openSettings: (section, pluginPageId, opts) => set((s) => ({ settingsOpen: true, settingsSection: section ?? s.settingsSection, settingsSubPage: section ?? null, settingsPluginPageId: pluginPageId ?? null, settingsQuery: opts?.query ?? "", settingsChangedOnly: false })),
+        setPluginBrowseRequest: (request) => set({ pluginBrowseRequest: request }),
         setRightPanelOpen: (open) => set({ rightPanelOpen: open }),
         setRightPanelSection: (section) => set({ rightPanelSection: section }),
+        setRightPanelWidth: (width) => set({ rightPanelWidth: clampRightPanelWidth(width) }),
         toggleRightPanel: (section) =>
           set((s) => ({
             rightPanelOpen: section && section !== s.rightPanelSection ? true : !s.rightPanelOpen,
@@ -295,24 +362,27 @@ export const useUIStore = create<UIStore>()(
         setKeychainSortMode: (v) => setPref({ keychainSortMode: v }),
         setHomePendingAction: (action) => set({ homePendingAction: action }),
         setPortForwardingLayoutMode: (v) => setPref({ portForwardingLayoutMode: v }),
+        toggleActiveTunnelsCollapsed: () => set((s) => ({ activeTunnelsCollapsed: !s.activeTunnelsCollapsed })),
         setPortForwardingSortMode: (v) => setPref({ portForwardingSortMode: v }),
         setPortForwardingPendingAction: (action) => set({ portForwardingPendingAction: action }),
         setKeychainPendingAction: (action) => set({ keychainPendingAction: action }),
         setMembersLayoutMode: (v) => setPref({ membersLayoutMode: v }),
         setMembersSortMode: (v) => setPref({ membersSortMode: v }),
         setSnippetsLayoutMode: (v) => setPref({ snippetsLayoutMode: v }),
+        setKnownHostsLayoutMode: (v) => setPref({ knownHostsLayoutMode: v }),
         setSnippetsPendingAction: (action) => set({ snippetsPendingAction: action }),
-        openMembersInvite: () => set({ activeNav: "members", homeView: false, membersInvitePending: true }),
-        clearMembersInvitePending: () => set({ membersInvitePending: false }),
-        openMembersRoles: () => set({ activeNav: "members", homeView: false, membersRolesPending: true }),
-        clearMembersRolesPending: () => set({ membersRolesPending: false }),
-        openMembersNav: () => set({ activeNav: "members", homeView: false }),
+        openMembersPanel: (panel) => set({ ...navTo("members"), homeView: false, membersPanelPending: panel }),
+        clearMembersPanelPending: () => set({ membersPanelPending: null }),
+        openMembersNav: () => set({ ...navTo("members"), homeView: false }),
         openVaultSharePending: () => set({ vaultSharePending: true }),
         clearVaultSharePending: () => set({ vaultSharePending: false }),
         openWhatsNew: () => set({ whatsNewOpen: true }),
         closeWhatsNew: () => set({ whatsNewOpen: false }),
         markChangelogSeen: (version) => set({ lastSeenChangelogVersion: version }),
+        markImagePasteNoticeSeen: () => set({ imagePasteNoticeSeen: true }),
         toggleTerminalPanelsRow: () => set((s) => ({ terminalPanelsRowOpen: !s.terminalPanelsRowOpen })),
+        setHostPanelPinned: (pinned) => set({ hostPanelPinned: pinned }),
+        toggleMobileSftpTwoPanes: () => set((s) => ({ mobileSftpTwoPanes: !s.mobileSftpTwoPanes })),
       };
     },
     {
@@ -339,14 +409,20 @@ export const useUIStore = create<UIStore>()(
         keychainLayoutMode: state.keychainLayoutMode,
         keychainSortMode: state.keychainSortMode,
         portForwardingLayoutMode: state.portForwardingLayoutMode,
+        activeTunnelsCollapsed: state.activeTunnelsCollapsed,
         portForwardingSortMode: state.portForwardingSortMode,
         membersLayoutMode: state.membersLayoutMode,
         membersSortMode: state.membersSortMode,
         snippetsLayoutMode: state.snippetsLayoutMode,
+        knownHostsLayoutMode: state.knownHostsLayoutMode,
         rightPanelSection: state.rightPanelSection,
+        rightPanelWidth: state.rightPanelWidth,
         prefsUpdatedAt: state.prefsUpdatedAt,
         lastSeenChangelogVersion: state.lastSeenChangelogVersion,
+        imagePasteNoticeSeen: state.imagePasteNoticeSeen,
         terminalPanelsRowOpen: state.terminalPanelsRowOpen,
+        hostPanelPinned: state.hostPanelPinned,
+        mobileSftpTwoPanes: state.mobileSftpTwoPanes,
       }),
     },
   ),

@@ -1,50 +1,41 @@
-import { useState } from "react";
-import { Icon } from "@iconify/react";
+import { useLayoutEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAllConnections } from "@/hooks/useAllConnections";
-import { useUIStore } from "@/stores/uiStore";
-import { useSessionStore } from "@/stores/sessionStore";
 import { DashboardHostCard } from "./DashboardHostCard";
+import { useConnectFromHome } from "./hostDisplay";
+import { cardGridProps } from "@/components/shared/cardGrid";
 import { useEffectivePinnedPredicate } from "@/hooks/useEffectivePinned";
-import type { Connection } from "@/types";
+import { pinnedThenRecent } from "@/utils/recentHosts";
 
-const PAGE_SIZE = 6;
-
-function selectHosts(
-  connections: Connection[],
-  isPinned: (c: Connection) => boolean,
-): Connection[] {
-  const pinned = connections.filter((c) => isPinned(c));
-  const used = connections
-    .filter((c) => !isPinned(c) && c.last_used_at)
-    .sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? ""));
-  return [...pinned, ...used];
-}
+const MAX_ROWS = 2;
 
 interface Props {
   onSeeAll: () => void;
 }
 
+function useGridColumnCount(fallback: number) {
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
+  const [count, setCount] = useState(fallback);
+  useLayoutEffect(() => {
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const update = () => setCount(getComputedStyle(el).gridTemplateColumns.split(" ").filter(Boolean).length || fallback);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el, fallback]);
+  return [setEl, count] as const;
+}
+
 export function RecentHostsSection({ onSeeAll }: Props) {
   const { t } = useTranslation();
   const connections = useAllConnections();
-  const connect = useSessionStore((s) => s.connect);
-  const setActiveNav = useUIStore((s) => s.setActiveNav);
-  const [page, setPage] = useState(0);
-
-  const handleConnect = (conn: Connection) => {
-    connect(conn.id).catch(() => {});
-    setActiveNav("terminal");
-  };
-
+  const handleConnect = useConnectFromHome();
   const isPinnedFn = useEffectivePinnedPredicate();
-  const hosts = selectHosts(connections, (c) => isPinnedFn(c, "connection"));
-  if (hosts.length === 0) return null;
+  const [gridRef, columns] = useGridColumnCount(6);
 
-  const totalPages = Math.ceil(hosts.length / PAGE_SIZE);
-  const pageHosts = hosts.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
-  const canPrev = page > 0;
-  const canNext = page < totalPages - 1;
+  const hosts = pinnedThenRecent(connections, (c) => isPinnedFn(c, "connection"), true);
+  if (hosts.length === 0) return null;
 
   return (
     <div className="mb-8">
@@ -56,70 +47,18 @@ export function RecentHostsSection({ onSeeAll }: Props) {
           {t("home.recentHosts.title")}
         </h2>
         <button
-          className="text-xs transition-colors"
-          style={{ color: "var(--t-text-dim)" }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t-accent)")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t-text-dim)")}
+          className="text-xs transition-colors text-(--t-text-dim) hover:text-(--t-accent)"
           onClick={onSeeAll}
         >
           {t("home.recentHosts.seeAll")}
         </button>
       </div>
 
-      <div className="flex items-center gap-2">
-        <button
-          className="flex items-center justify-center w-6 h-6 rounded-lg transition-opacity shrink-0"
-          style={{
-            color: "var(--t-text-dim)",
-            opacity: canPrev ? 1 : 0,
-            pointerEvents: canPrev ? "auto" : "none",
-          }}
-          onClick={() => setPage((p) => p - 1)}
-          aria-label={t("home.recentHosts.prevPage")}
-        >
-          <Icon icon="lucide:chevron-left" width={16} />
-        </button>
-
-        <div className="flex gap-3 flex-1">
-          {pageHosts.map((conn) => (
-            <DashboardHostCard
-              key={conn.id}
-              connection={conn}
-              onConnect={handleConnect}
-            />
-          ))}
-        </div>
-
-        <button
-          className="flex items-center justify-center w-6 h-6 rounded-lg transition-opacity shrink-0"
-          style={{
-            color: "var(--t-text-dim)",
-            opacity: canNext ? 1 : 0,
-            pointerEvents: canNext ? "auto" : "none",
-          }}
-          onClick={() => setPage((p) => p + 1)}
-          aria-label={t("home.recentHosts.nextPage")}
-        >
-          <Icon icon="lucide:chevron-right" width={16} />
-        </button>
+      <div ref={gridRef} {...cardGridProps("grid", "tile")}>
+        {hosts.slice(0, columns * MAX_ROWS).map((conn) => (
+          <DashboardHostCard key={conn.id} connection={conn} onConnect={handleConnect} />
+        ))}
       </div>
-
-      {totalPages > 1 && (
-        <div className="flex justify-center gap-1 mt-3">
-          {Array.from({ length: totalPages }).map((_, i) => (
-            <button
-              key={i}
-              className="w-1.5 h-1.5 rounded-full transition-all"
-              style={{
-                background: i === page ? "var(--t-accent)" : "var(--t-text-dim)",
-                opacity: i === page ? 1 : 0.5,
-              }}
-              onClick={() => setPage(i)}
-              aria-label={t("home.recentHosts.pageNumber", { number: i + 1 })}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { listVaultBackups, restoreVaultBackup, type VaultBackup } from "@/services/vault";
 import { formatSize } from "@/components/filetransfer/SFTPTypes";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
+import { formatDateTime } from "@/utils/localeFormat";
+import { describeError } from "@/services/backendErrors";
 
 interface Props {
   /** True when the live vault can be read, so restoring displaces something usable. */
@@ -41,7 +43,7 @@ export function VaultBackups({ currentReadable, hideWhenEmpty, className }: Prop
     try {
       const setAside = await restoreVaultBackup(file);
       addToast({
-        source: { kind: "plugin", id: "system", name: "Voltius" },
+        source: APP_SOURCE,
         type: "toast",
         message: setAside
           ? t("shared.vaultBackups.restoredToast", { file: setAside })
@@ -51,7 +53,7 @@ export function VaultBackups({ currentReadable, hideWhenEmpty, className }: Prop
       });
       window.location.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeError(e, t));
       setConfirming(null);
     } finally {
       setBusy(false);
@@ -75,7 +77,7 @@ export function VaultBackups({ currentReadable, hideWhenEmpty, className }: Prop
             <div className="flex-1 min-w-0">
               <p className="text-xs truncate text-(--t-text-primary)">{b.file}</p>
               <p className="text-[11px] text-(--t-text-dim)">
-                {new Date(b.stamp_millis).toLocaleString()} · {formatSize(b.size)}
+                {formatDateTime(b.stamp_millis)} · {formatSize(b.size)}
               </p>
             </div>
             {confirming !== b.file && (
@@ -107,7 +109,7 @@ export function VaultBackups({ currentReadable, hideWhenEmpty, className }: Prop
                   type="button"
                   disabled={busy}
                   onClick={() => void restore(b.file)}
-                  className="flex-1 text-xs px-3 py-1.5 rounded-md font-medium transition-opacity bg-(--t-accent) text-white hover:opacity-80"
+                  className="flex-1 text-xs px-3 py-1.5 rounded-md font-medium transition-opacity bg-(--t-accent) text-(--t-on-accent) hover:opacity-80"
                 >
                   {t("shared.vaultBackups.confirm")}
                 </button>

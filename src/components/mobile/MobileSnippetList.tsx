@@ -4,26 +4,50 @@ import { useTranslation } from "react-i18next";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { useAllSnippetFolders } from "@/hooks/useAllSnippetFolders";
-import { useFolderNavigation } from "@/hooks/useFolderNavigation";
-import { useVaultStore } from "@/stores/vaultStore";
+import { useAllSnippets } from "@/hooks/useAllSnippets";
+import { useMobileFolderScope } from "@/components/mobile/folders/useMobileFolderScope";
 import { useMobileNavStore } from "@/stores/mobileNavStore";
 import { runSnippetIntoSessions } from "@/services/snippetRun";
-import { scopeItems, folderItemCount } from "@/components/mobile/folders/mobileFolderCore";
+import { scopeItems } from "@/components/mobile/folders/mobileFolderCore";
+import { folderItemCounter } from "@/utils/folderTree";
 import MobileFolderBreadcrumb from "@/components/mobile/folders/MobileFolderBreadcrumb";
+import MobileFilterBar from "@/components/mobile/MobileFilterBar";
 import MobileFolderRow from "@/components/mobile/folders/MobileFolderRow";
 import FolderBackTrap from "@/components/mobile/folders/FolderBackTrap";
-import FolderFormSheet from "@/components/mobile/sheets/FolderFormSheet";
+import FolderFormSheet, { type FolderEdit } from "@/components/mobile/sheets/FolderFormSheet";
 import FolderActionsSheet from "@/components/mobile/sheets/FolderActionsSheet";
 import type { Snippet, Folder } from "@/types";
-import { snippetSearchText } from "@/services/snippetSteps";
+import { snippetMatcher } from "@/services/snippetSteps";
+import { SnippetPreview } from "@/components/snippets/HighlightedScript";
+import { compareStrings } from "@/utils/localeFormat";
 
-export default function MobileSnippetList({
-  currentSessionId, addFolderOpen = false, onCloseAddFolder,
-}: { currentSessionId?: string; addFolderOpen?: boolean; onCloseAddFolder?: () => void }) {
+export function useMobileSnippetScope() {
+  return useMobileFolderScope(useAllSnippetFolders(), "snippet");
+}
+
+type MobileSnippetScope = ReturnType<typeof useMobileSnippetScope>;
+
+interface ListProps {
+  currentSessionId?: string;
+  addFolderOpen?: boolean;
+  onCloseAddFolder?: () => void;
+}
+
+/** Pass `scope` when the caller also needs the open folder, e.g. to create inside it. */
+export default function MobileSnippetList({ scope, ...props }: ListProps & { scope?: MobileSnippetScope }) {
+  return scope ? <SnippetList {...props} scope={scope} /> : <OwnScopeSnippetList {...props} />;
+}
+
+function OwnScopeSnippetList(props: ListProps) {
+  return <SnippetList {...props} scope={useMobileSnippetScope()} />;
+}
+
+function SnippetList({
+  currentSessionId, addFolderOpen = false, onCloseAddFolder, scope,
+}: ListProps & { scope: MobileSnippetScope }) {
   const { t } = useTranslation();
-  const snippets = useSnippetStore((s) => s.snippets);
-  const allSnippetFolders = useAllSnippetFolders();
-  const selectedVaultIds = useVaultStore((s) => s.selectedVaultIds);
+  const snippets = useAllSnippets();
+  const { inScope, nav, axisRef, openPath, folders: snFolders, folderIds: snFolderIds, targetVaultId, canEditFolder } = scope;
   const openSheet = useMobileNavStore((s) => s.openSheet);
   const setTab = useMobileNavStore((s) => s.setTab);
   const closeSheet = useMobileNavStore((s) => s.closeSheet);
@@ -35,32 +59,25 @@ export default function MobileSnippetList({
 
   const foldersEnabled = !currentSessionId;
 
-  const snFolders = useMemo(
-    () => allSnippetFolders.filter((f) => f.object_type === "snippet" && selectedVaultIds.includes(f.vault_id ?? "personal")),
-    [allSnippetFolders, selectedVaultIds],
-  );
-  const nav = useFolderNavigation(snFolders);
-
   const inVault = useMemo(
-    () => snippets.filter((s) => !s.deleted_at && selectedVaultIds.includes(s.vault_id ?? "personal")),
-    [snippets, selectedVaultIds],
+    () => snippets.filter((s) => !s.deleted_at && inScope(s)),
+    [snippets, inScope],
   );
+  const folderCount = useMemo(() => folderItemCounter(inVault, snFolders), [inVault, snFolders]);
 
   const subFolders = useMemo(
-    () => (foldersEnabled ? [...nav.visibleFolders].sort((a, b) => a.name.localeCompare(b.name)) : []),
+    () => (foldersEnabled ? [...nav.visibleFolders].sort((a, b) => compareStrings(a.name, b.name)) : []),
     [foldersEnabled, nav.visibleFolders],
   );
 
   const visible = useMemo(() => {
-    const scoped = foldersEnabled ? scopeItems(inVault, nav.activeFolderId) : inVault;
-    const q = search.trim().toLowerCase();
-    return (q ? scoped.filter((s) => s.name.toLowerCase().includes(q) || snippetSearchText(s).toLowerCase().includes(q)) : scoped)
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [foldersEnabled, inVault, nav.activeFolderId, search]);
+    const scoped = foldersEnabled ? scopeItems(inVault, nav.activeFolderId, snFolderIds) : inVault;
+    return scoped.filter(snippetMatcher(search))
+      .sort((a, b) => compareStrings(a.name, b.name));
+  }, [foldersEnabled, inVault, nav.activeFolderId, snFolderIds, search]);
 
-  const targetVaultId = nav.folderPath[nav.folderPath.length - 1]?.vault_id ?? selectedVaultIds[0] ?? "personal";
-  const createFolder = (name: string) =>
-    void saveFolder({ name, object_type: "snippet", parent_folder_id: nav.activeFolderId ?? undefined, vault_id: targetVaultId });
+  const createFolder = (edit: FolderEdit) =>
+    void saveFolder({ ...edit, object_type: "snippet", parent_folder_id: nav.activeFolderId ?? undefined, vault_id: targetVaultId });
 
   function runCurrent(sn: Snippet, execute: boolean) {
     if (!currentSessionId) return;
@@ -78,23 +95,18 @@ export default function MobileSnippetList({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {foldersEnabled && nav.folderPath.map((f) => <FolderBackTrap key={f.id} onBack={() => nav.setFolderPath((p) => p.slice(0, -1))} />)}
-      <div className="shrink-0 px-3 py-2">
-        <div className="flex items-center gap-2 rounded-xl px-3 h-10" style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}>
-          <Icon icon="lucide:search" width={16} className="text-(--t-text-dim)" />
-          <input data-mobile-snippet-search value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("mobile.snippets.searchPlaceholder")} className="flex-1 bg-transparent text-sm outline-none text-(--t-text-primary)" />
-        </div>
-      </div>
+      {foldersEnabled && openPath.map((f) => <FolderBackTrap key={f.id} onBack={nav.navigateUp} />)}
+      <MobileFilterBar value={search} onChange={setSearch} attr="mobile-snippet-search"
+        placeholder={t("mobile.snippets.searchPlaceholder")} clearLabel={t("mobile.hostsScreen.clearSearchAriaLabel")} />
       {foldersEnabled && <MobileFolderBreadcrumb path={nav.folderPath} onNavigate={(i) => (i < 0 ? nav.navigateToRoot() : nav.navigateTo(i))} />}
-      <div className="flex-1 overflow-y-auto">
+      <div ref={axisRef} data-mobile-folder-level className="flex-1 overflow-y-auto">
         {foldersEnabled && !search && subFolders.map((f) => (
           <MobileFolderRow
             key={f.id}
-            name={f.name}
-            count={folderItemCount(inVault, f.id)}
+            folder={f}
+            count={folderCount(f.id)}
             onOpen={() => nav.navigateInto(f)}
-            onActions={() => setFolderSheet(f)}
+            onActions={canEditFolder(f) ? () => setFolderSheet(f) : undefined}
           />
         ))}
         {visible.length === 0 && subFolders.length === 0 && (
@@ -108,16 +120,16 @@ export default function MobileSnippetList({
             <button className="flex-1 flex flex-col gap-0.5 px-4 py-3 text-left active:bg-(--t-bg-card) min-w-0"
               onClick={() => openPicker(sn.id, "execute")}>
               <span className="text-sm font-medium text-(--t-text-primary) truncate">{sn.name}</span>
-              <span className="text-xs font-mono text-(--t-text-dim) truncate">{snippetSearchText(sn)}</span>
+              <span className="text-xs font-mono text-(--t-text-dim) truncate"><SnippetPreview snippet={sn} /></span>
             </button>
-            <button className="p-2.5 text-(--t-text-secondary)" data-mobile-snippet-insert={sn.id} aria-label={t("mobile.snippets.insertAriaLabel")} onClick={() => onInsert(sn)}>
+            <button className="vt-icon-btn text-(--t-text-secondary)" data-mobile-snippet-insert={sn.id} aria-label={t("mobile.snippets.insertAriaLabel")} onClick={() => onInsert(sn)}>
               <Icon icon="lucide:arrow-down-to-line" width={18} />
             </button>
-            <button className="p-2.5 text-(--t-accent)" data-mobile-snippet-execute={sn.id} aria-label={t("mobile.snippets.executeAriaLabel")} onClick={() => onExecute(sn)}>
+            <button className="vt-icon-btn text-(--t-accent)" data-mobile-snippet-execute={sn.id} aria-label={t("mobile.snippets.executeAriaLabel")} onClick={() => onExecute(sn)}>
               <Icon icon="lucide:play" width={18} />
             </button>
             {!currentSessionId && (
-              <button className="p-2.5 text-(--t-text-dim)" data-mobile-snippet-more={sn.id} aria-label={t("mobile.snippets.moreAriaLabel")}
+              <button className="vt-icon-btn text-(--t-text-dim)" data-mobile-snippet-more={sn.id} aria-label={t("mobile.snippets.moreAriaLabel")}
                 onClick={() => openSheet({ kind: "snippet-actions", snippetId: sn.id })}>
                 <Icon icon="lucide:ellipsis-vertical" width={18} />
               </button>
@@ -132,7 +144,7 @@ export default function MobileSnippetList({
       {foldersEnabled && folderSheet && (
         <FolderActionsSheet
           folder={folderSheet}
-          onRename={(name) => void updateFolder(folderSheet.id, { name, object_type: "snippet", parent_folder_id: folderSheet.parent_folder_id, vault_id: folderSheet.vault_id })}
+          onSave={(edit) => void updateFolder(folderSheet.id, { ...edit, object_type: "snippet" })}
           onDelete={() => { nav.onFolderDeleted(folderSheet.id); void deleteFolder(folderSheet.id); }}
           onClose={() => setFolderSheet(null)}
         />

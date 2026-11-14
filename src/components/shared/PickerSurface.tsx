@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import BottomSheet from "@/components/mobile/sheets/BottomSheet";
-import { useIsAndroid } from "@/utils/platform";
+import { useIsMobile } from "@/utils/platform";
+import { useAnchoredPopover } from "@/hooks/useAnchoredPopover";
 
 interface Pos { top?: number; bottom?: number; left?: number; right?: number; width?: number; maxHeight: number }
 
@@ -39,14 +40,14 @@ export function PickerSurface({
    *  hover-opened surface has no gap for the pointer to fall through. */
   gap?: number;
 }) {
-  const isAndroid = useIsAndroid();
-  const surfaceRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
+  const popover = useAnchoredPopover(open && !isMobile, onClose, anchorRef);
   const [pos, setPos] = useState<Pos>({ left: 0, width: 0, maxHeight });
 
   // Desktop: measure the anchor on open, and keep the float pinned to it while open as the
   // form panel scrolls or the window resizes (the fixed-position float doesn't move on its own).
   useEffect(() => {
-    if (!open || isAndroid) return;
+    if (!open || isMobile) return;
     const measure = () => {
       const el = anchorRef.current;
       if (!el) return;
@@ -71,33 +72,21 @@ export function PickerSurface({
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
-  }, [open, isAndroid, anchorRef, width, maxHeight, align, gap]);
+  }, [open, isMobile, anchorRef, width, maxHeight, align, gap]);
 
-  // Desktop: outside-mousedown dismiss (ignores the anchor so the trigger toggles cleanly).
-  useEffect(() => {
-    if (!open || isAndroid) return;
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node;
-      // A submenu portals to the body, so it is not a DOM descendant of the surface
-      // that opened it. Dismissing on it would unmount the row before its click fires.
-      if ((t as Element).closest?.("[data-menu-portal]")) return;
-      if (!anchorRef.current?.contains(t) && !surfaceRef.current?.contains(t)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open, isAndroid, anchorRef, onClose]);
-
-  if (!open) return null;
-
-  if (isAndroid) {
-    return <BottomSheet title={title} onClose={onClose}>{children}</BottomSheet>;
+  if (isMobile) {
+    return open ? <BottomSheet title={title} onClose={onClose}>{children}</BottomSheet> : null;
   }
+
+  if (!popover.mounted) return null;
 
   return createPortal(
     <div
-      ref={surfaceRef}
-      className={`${glass ? "surface-glass-solid rounded-[var(--r-md)] animate-fadeIn" : "surface-float"} fixed p-1.5 z-9999 flex flex-col overflow-y-auto`}
+      ref={popover.panelRef}
+      onMouseDownCapture={popover.onMouseDownCapture}
+      className={`${glass ? "surface-glass-solid rounded-[var(--r-md)]" : "surface-float"} ${popover.className} fixed p-1.5 z-9999 flex flex-col overflow-y-auto`}
       style={{
+        ...popover.style,
         top: pos.top, bottom: pos.bottom, left: pos.left, right: pos.right,
         width: pos.width, minWidth, maxHeight: pos.maxHeight,
       }}

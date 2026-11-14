@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { test, expect, vi, beforeEach } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 
@@ -99,5 +100,5 @@ test("checks VIEW_SECRETS against the object's own vault", async () => {
   load({ password: "password:c1" }, apply);
 
   await waitFor(() => expect(apply).toHaveBeenCalled());
-  expect(h.can).toHaveBeenCalledWith("VIEW_SECRETS", "team-1");
+  expect(h.can).toHaveBeenCalledWith("VIEW_SECRETS", "team-1", "c1");
 });

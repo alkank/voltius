@@ -13,7 +13,9 @@ export interface ConnectionMenuOptions {
   pingDisabled: boolean;
   connectShortcut?: string;
   duplicateShortcut?: string;
-  onConnect: () => void;
+  onConnect?: () => void;
+  /** Inserted right after Connect */
+  connectAs?: ContextMenuItem;
   onDuplicate?: () => void;
   onMoveToVault?: (vaultId: string) => void;
   onCopyToVault?: (vaultId: string) => void;
@@ -35,6 +37,7 @@ export function buildConnectionMenuItems({
   connectShortcut,
   duplicateShortcut,
   onConnect,
+  connectAs,
   onDuplicate,
   onMoveToVault,
   onCopyToVault,
@@ -45,13 +48,14 @@ export function buildConnectionMenuItems({
   t,
 }: ConnectionMenuOptions): ContextMenuItem[] {
   return [
-    { label: t("common.action.connect"), icon: "lucide:terminal", onClick: onConnect, shortcut: connectShortcut },
+    ...(onConnect ? [{ label: t("common.action.connect"), icon: "lucide:terminal", onClick: onConnect, shortcut: connectShortcut }] : []),
+    ...(onConnect && connectAs ? [connectAs] : []),
     ...(canEdit && onDuplicate ? [{ label: t("common.action.duplicate"), icon: "lucide:copy", onClick: onDuplicate, shortcut: duplicateShortcut }] : []),
     ...extras,
     ...contributions.map((a, i) => ({ ...a, divider: i === 0 })),
     ...vaultMenuItems(vaults, canEdit, onMoveToVault, onCopyToVault, t),
     {
-      label: isSynced ? t("hosts.card.disableCloudSync") : t("hosts.card.enableCloudSync"),
+      label: isSynced ? t("common.objectSync.disable") : t("common.objectSync.enable"),
       icon: isSynced ? "lucide:cloud-off" : "lucide:cloud",
       onClick: onToggleSync,
       divider: true,

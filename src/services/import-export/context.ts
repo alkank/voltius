@@ -7,6 +7,8 @@ import type {
   Snippet, SnippetFormData,
   SshKey, SshKeyFormData,
 } from "@/types";
+import { publicKeyBlob } from "@/services/sshPublicKey";
+import type { ConnectionExport, ExportBundle, IdentityExport, KeyExport, KeyRefExport, PortForwardingRuleExport, SnippetExport } from "./formats";
 
 // ─── Store slices ─────────────────────────────────────────────────────────────
 // All data the export/import system reads from Zustand, passed as plain objects
@@ -29,7 +31,6 @@ export interface ImportStores {
   saveKey(data: SshKeyFormData): Promise<SshKey>;
   saveIdentity(data: IdentityFormData): Promise<Identity>;
   saveConnection(data: ConnectionFormData): Promise<Connection>;
-  updateConnection(id: string, data: ConnectionFormData): Promise<void>;
   createSnippet(data: SnippetFormData): Promise<Snippet>;
   updateSnippet(id: string, data: SnippetFormData): Promise<void>;
   createPfRule(data: PortForwardingRuleFormData): Promise<PortForwardingRule>;
@@ -91,23 +92,24 @@ export function hasSelection(s: SelectionProps): boolean {
 // Handlers read allFolders/allIdentities/allKeys for cascade resolution
 // and write into the eid maps so later handlers can cross-reference.
 
+export type SecretGate = (object: { id: string; vault_id?: string }) => boolean;
+
 export interface ExportCtx {
-  /**
-   * Reads an object's stored secret, or resolves null when the caller's role in
-   * `vaultId` lacks VIEW_SECRETS. Every handler goes through this rather than
-   * `getSecret` so a bundle can never carry plaintext its builder is not
-   * allowed to see (issue #190).
-   */
-  readSecret: (vaultId: string | undefined) => (key: string) => Promise<string | null>;
+  /** Resolves null when the caller may not both view and copy this object's secrets. */
+  readSecret: (object: { id: string; vault_id?: string }) => (key: string) => Promise<string | null>;
   folderEidMap: Map<string, string>;
   snippetFolderEidMap: Map<string, string>;
   keyEidMap: Map<string, string>;
   identityEidMap: Map<string, string>;
   connectionEidMap: Map<string, string>;
+  snippetEidMap: Map<string, string>;
   allFolders: Folder[];
   allSnippetFolders: Folder[];
   allIdentities: Identity[];
   allKeys: SshKey[];
+  keyRefs: SshKey[];
+  identityRefs: Identity[];
+  publicKey: (key: SshKey) => Promise<string | null>;
 }
 
 // ─── Import context ───────────────────────────────────────────────────────────
@@ -118,21 +120,64 @@ export interface ImportCtx {
   vault_id: string;
   tag: string;
   skipDupes: boolean;
+  // Bundle items the caller chose to leave out; overrides `skipDupes`.
+  skipped?: ReadonlySet<object>;
   existingConnections: Connection[];
   existingKeys: SshKey[];
+  // Public halves of `existingKeys` by id; without it keys match by name alone.
+  existingPublicKeys?: ReadonlyMap<string, string>;
   existingIdentities: Identity[];
   existingSnippets: Snippet[];
   existingPfRules: PortForwardingRule[];
+  existingFolders: Folder[];
   folderEidMap: Map<string, string>;
   snippetFolderEidMap: Map<string, string>;
   keyEidMap: Map<string, string>;
   identityEidMap: Map<string, string>;
   connectionEidMap: Map<string, string>;
+  snippetEidMap: Map<string, string>;
   stores: ImportStores;
+}
+
+type EidMapKey = "folderEidMap" | "snippetFolderEidMap" | "keyEidMap" | "identityEidMap" | "connectionEidMap" | "snippetEidMap";
+
+export function newImportCtx(base: Omit<ImportCtx, EidMapKey>): ImportCtx {
+  return {
+    ...base,
+    folderEidMap: new Map(),
+    snippetFolderEidMap: new Map(),
+    keyEidMap: new Map(),
+    identityEidMap: new Map(),
+    connectionEidMap: new Map(),
+    snippetEidMap: new Map(),
+  };
 }
 
 export function existingConnectionsForVault<T extends { vault_id?: string }>(connections: T[], vault_id: string): T[] {
   return connections.filter((connection) => (connection.vault_id ?? "personal") === vault_id);
+}
+
+// A skipped item the vault already has still resolves references to that existing copy.
+export function skipItem(
+  ctx: ImportCtx,
+  item: { _eid?: string },
+  matchId: string | undefined,
+  eidMap?: Map<string, string>,
+): boolean {
+  const skip = ctx.skipped ? ctx.skipped.has(item) : ctx.skipDupes && matchId !== undefined;
+  if (skip && item._eid && matchId) eidMap?.set(item._eid, matchId);
+  return skip;
+}
+
+export function resolveRefs<T extends { _eid: string }>(
+  refs: T[] | undefined,
+  match: (ref: T) => string | undefined,
+  eidMap: Map<string, string>,
+): void {
+  for (const ref of refs ?? []) {
+    const id = match(ref);
+    if (id) eidMap.set(ref._eid, id);
+  }
 }
 
 // ─── Shared handler methods ───────────────────────────────────────────────────
@@ -150,13 +195,14 @@ export function inVaults<T extends VaultItem>(items: T[], vaultIds: string[]): T
 
 // The five selection/count methods every DataTypeHandler spells identically.
 // `labelKey` is the i18n suffix (only portForwarding differs from the handler
-// key) and `folderSet` picks which eid set the type's folders belong to.
+// key) and `folderType` is the `object_type` of the folders this type lives in.
 export function selectionMethods<T extends VaultItem>(
   key: string,
   labelKey: string,
   slice: (stores: StoreSlices) => T[],
-  folderSet: "main" | "snippet" = "main",
+  folderType: "connection" | "keychain" | "port_forwarding" | "snippet",
 ) {
+  const isSnippet = folderType === "snippet";
   return {
     isActive(s: SelectionProps) {
       return handlerActive(key, s);
@@ -173,8 +219,14 @@ export function selectionMethods<T extends VaultItem>(
       return inVaults(slice(stores), vaultIds).filter((i) => ids === null || ids.includes(i.id));
     },
     accumulateFolderIds(items: unknown[], main: Set<string>, snippet: Set<string>) {
-      const target = folderSet === "snippet" ? snippet : main;
+      const target = isSnippet ? snippet : main;
       for (const i of items as T[]) if (i.folder_id) target.add(i.folder_id);
+    },
+    accumulateVaultFolderIds(stores: StoreSlices, vaultIds: string[], main: Set<string>, snippet: Set<string>) {
+      const target = isSnippet ? snippet : main;
+      for (const f of inVaults(isSnippet ? stores.snippetFolders : stores.folders, vaultIds)) {
+        if (f.object_type === folderType) target.add(f.id);
+      }
     },
   };
 }
@@ -185,4 +237,83 @@ export function liveInVault<T extends { deleted_at?: string | null; vault_id?: s
   vault_id: string,
 ): T[] {
   return items.filter((i) => !i.deleted_at && (i.vault_id ?? "personal") === vault_id);
+}
+
+type ExistingItems = Pick<ImportCtx, "existingConnections" | "existingKeys" | "existingPublicKeys" | "existingIdentities" | "existingSnippets" | "existingPfRules">;
+
+const connectionKey = (c: { host?: string; port?: number | string; username?: string; connection_type?: string; serial_port?: string }) =>
+  c.connection_type === "serial" ? `serial:${c.serial_port ?? ""}` : `${c.host}:${Number(c.port)}:${c.username ?? ""}`;
+const identityKey = (i: { name?: string; username: string }) => i.name ? `${i.name}\0${i.username}` : undefined;
+
+function idsByKey<T extends { id: string }>(items: T[], key: (item: T) => string | undefined): Map<string, string> {
+  const ids = new Map<string, string>();
+  for (const item of items) {
+    const k = key(item);
+    if (k !== undefined && !ids.has(k)) ids.set(k, item.id);
+  }
+  return ids;
+}
+
+function uniqueIdsByKey<T extends { id: string }>(items: T[], key: (item: T) => string | undefined): Map<string, string> {
+  const ids = idsByKey(items, key);
+  const seen = new Set<string>();
+  for (const item of items) {
+    const k = key(item);
+    if (k === undefined) continue;
+    if (seen.has(k)) ids.delete(k);
+    seen.add(k);
+  }
+  return ids;
+}
+
+// The existing item each bundle item duplicates, if any: the one definition of a duplicate.
+export function findDupes(existing: ExistingItems, vault_id: string) {
+  const connections = idsByKey(existingConnectionsForVault(existing.existingConnections, vault_id), connectionKey);
+  const liveKeys = liveInVault(existing.existingKeys, vault_id);
+  const blobOf = (id: string) => publicKeyBlob(existing.existingPublicKeys?.get(id));
+  const keysByBlob = idsByKey(liveKeys, k => blobOf(k.id));
+  const keysByName = idsByKey(liveKeys, k => k.name || undefined);
+  const keysByUniqueName = uniqueIdsByKey(liveKeys, k => k.name || undefined);
+  const identities = idsByKey(liveInVault(existing.existingIdentities, vault_id), identityKey);
+  const snippets = idsByKey(liveInVault(existing.existingSnippets, vault_id), s => s.name);
+  const pfRules = idsByKey(liveInVault(existing.existingPfRules, vault_id), r => r.name);
+  const lookup = (ids: Map<string, string>, k: string | undefined) => k === undefined ? undefined : ids.get(k);
+  return {
+    connection: (c: ConnectionExport) => lookup(connections, connectionKey(c)),
+    key: (k: KeyExport) => {
+      const blob = publicKeyBlob(k.public_key);
+      const same = lookup(keysByBlob, blob);
+      if (same) return same;
+      const named = lookup(keysByName, k.name || undefined);
+      // A vault key with a known public half is that key only; no other key takes its name.
+      return named && blobOf(named) ? undefined : named;
+    },
+    keyRef: (r: KeyRefExport) => {
+      const blob = publicKeyBlob(r.public_key);
+      return blob ? lookup(keysByBlob, blob) : lookup(keysByUniqueName, r.name || undefined);
+    },
+    identity: (i: IdentityExport) => lookup(identities, identityKey(i)),
+    snippet: (s: SnippetExport) => lookup(snippets, s.name),
+    pfRule: (r: PortForwardingRuleExport) => lookup(pfRules, r.name),
+  };
+}
+
+export type Dupes = ReturnType<typeof findDupes>;
+
+const dupesByCtx = new WeakMap<ImportCtx, Dupes>();
+
+export function dupesOf(ctx: ImportCtx): Dupes {
+  let dupes = dupesByCtx.get(ctx);
+  if (!dupes) dupesByCtx.set(ctx, dupes = findDupes(ctx, ctx.vault_id));
+  return dupes;
+}
+
+export function dupeItems(bundle: ExportBundle, dupes: Dupes): Set<object> {
+  return new Set<object>([
+    ...bundle.connections.filter(c => dupes.connection(c)),
+    ...bundle.keys.filter(k => dupes.key(k)),
+    ...bundle.identities.filter(i => dupes.identity(i)),
+    ...bundle.snippets.filter(s => dupes.snippet(s)),
+    ...bundle.portForwardingRules.filter(r => dupes.pfRule(r)),
+  ]);
 }

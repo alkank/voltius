@@ -3,10 +3,12 @@ import { useAllIdentities } from "@/hooks/useAllIdentities";
 import { useAllKeys } from "@/hooks/useAllKeys";
 import { useAllSnippets } from "@/hooks/useAllSnippets";
 import { useAllPortForwardingRules } from "@/hooks/useAllPortForwardingRules";
+import { useVaultStore } from "@/stores/vaultStore";
+import { PORT_FORWARDING_ICON } from "@/lib/conceptIcons";
 
 export interface VaultObjectType {
+  /** Also names the count's label: common.contentCounts.<key>. */
   key: "connections" | "identities" | "keys" | "snippets" | "portForwardingRules";
-  label: string;
   icon: string;
   count: number;
 }
@@ -20,15 +22,17 @@ export function useVaultContents(vaultId?: string): VaultObjectType[] {
   const keys = useAllKeys();
   const snippets = useAllSnippets();
   const pfRules = useAllPortForwardingRules();
+  // A linked team vault is selected by its local id, but its objects carry the team id.
+  const teamId = useVaultStore((s) => (vaultId ? s.vaults.find((v) => v.id === vaultId)?.teamId : undefined));
 
   const filter = <T extends { vault_id?: string }>(items: T[]) =>
-    vaultId ? items.filter((i) => (i.vault_id ?? "personal") === vaultId) : items;
+    vaultId ? items.filter((i) => [vaultId, teamId].includes(i.vault_id ?? "personal")) : items;
 
   return [
-    { key: "connections",         label: "connections",              icon: "lucide:server",     count: filter(connections).length },
-    { key: "identities",          label: "identities",               icon: "lucide:id-card", count: filter(identities).length },
-    { key: "keys",                label: "keys",                     icon: "lucide:key-round",  count: filter(keys).length },
-    { key: "snippets",            label: "snippets",                 icon: "lucide:braces",     count: filter(snippets).length },
-    { key: "portForwardingRules", label: "port forwarding rules",    icon: "lucide:network",    count: filter(pfRules).length },
+    { key: "connections",         icon: "lucide:server",     count: filter(connections).length },
+    { key: "identities",          icon: "lucide:id-card",    count: filter(identities).length },
+    { key: "keys",                icon: "lucide:key-round",  count: filter(keys).length },
+    { key: "snippets",            icon: "lucide:braces",     count: filter(snippets).length },
+    { key: "portForwardingRules", icon: PORT_FORWARDING_ICON, count: filter(pfRules).length },
   ];
 }

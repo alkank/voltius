@@ -1,63 +1,78 @@
 import i18n from "i18next";
-import { initReactI18next } from "react-i18next";
-import { useLocaleStore } from "@/stores/localeStore";
+import { initReactI18next, useTranslation } from "react-i18next";
+import { localeSetting, timeFormatSetting } from "@/stores/localeStore";
+import { englishBundle, loadLocaleBundle } from "./bundles";
 
-// Bundled resources (no async backend), so i18n.changeLanguage() mutates
-// i18n.language synchronously. Non-component callers (e.g. getSettingsNav())
-// rely on that. Do NOT add an async/HTTP backend here.
-function assemble(glob: Record<string, { default: Record<string, unknown> }>) {
-  const out: Record<string, unknown> = {};
-  for (const mod of Object.values(glob)) {
-    for (const [k, v] of Object.entries(mod.default)) {
-      out[k] = { ...(out[k] as object), ...(v as object) };
-    }
-  }
-  return out;
-}
+// Formatted times are computed at render, so a format change re-renders like a language change.
+const TIME_FORMAT_CHANGED = "timeFormatChanged";
 
-const en = assemble(
-  import.meta.glob("./locales/en/*.json", { eager: true }) as Record<
-    string,
-    { default: Record<string, unknown> }
-  >,
-);
-const fr = assemble(
-  import.meta.glob("./locales/fr/*.json", { eager: true }) as Record<
-    string,
-    { default: Record<string, unknown> }
-  >,
-);
-const ru = assemble(
-  import.meta.glob("./locales/ru/*.json", { eager: true }) as Record<
-    string,
-    { default: Record<string, unknown> }
-  >,
-);
-const zh = assemble(
-  import.meta.glob("./locales/zh/*.json", { eager: true }) as Record<
-    string,
-    { default: Record<string, unknown> }
-  >,
-);
-const tr = assemble(
-  import.meta.glob("./locales/tr/*.json", { eager: true }) as Record<
-    string,
-    { default: Record<string, unknown> }
-  >,
-);
-
+// No async backend: i18n.changeLanguage() mutates i18n.language synchronously, which
+// non-component callers (e.g. getSettingsNav()) rely on. Only a locale not loaded yet switches late.
 i18n.use(initReactI18next).init({
-  resources: { en: { translation: en }, fr: { translation: fr }, ru: { translation: ru }, zh: { translation: zh }, tr: { translation: tr } },
-  lng: useLocaleStore.getState().locale,
-  fallbackLng: "en",
+  resources: { en: { translation: englishBundle } },
+  lng: localeSetting.get(),
+  fallbackLng: { "pt-BR": ["pt", "en"], "pt-PT": ["pt", "en"], default: ["en"] },
   interpolation: { escapeValue: false },
   returnNull: false,
+  react: { bindI18n: `languageChanged ${TIME_FORMAT_CHANGED}` },
 });
 
-useLocaleStore.subscribe((state) => {
-  if (i18n.language !== state.locale) i18n.changeLanguage(state.locale);
-  document.documentElement.lang = state.locale;
-});
-document.documentElement.lang = useLocaleStore.getState().locale;
+const loaded = new Set<string>(["en"]);
+const loading = new Map<string, Promise<void>>();
+
+/** Adds a locale's strings to i18n; English ships in the main bundle, the rest load on demand. */
+export function ensureLocale(locale: string): Promise<void> {
+  if (loaded.has(locale)) return Promise.resolve();
+  let pending = loading.get(locale);
+  if (!pending) {
+    pending = loadLocaleBundle(locale)
+      .then((bundle) => {
+        if (bundle) i18n.addResourceBundle(locale, "translation", bundle, true, false);
+        loaded.add(locale);
+      })
+      .catch(() => {})
+      .finally(() => loading.delete(locale));
+    loading.set(locale, pending);
+  }
+  return pending;
+}
+
+/** Resolves once the persisted locale's strings are in, so the first render is already translated. */
+export const i18nReady = ensureLocale(localeSetting.get());
+
+function followLocaleSetting() {
+  const locale = localeSetting.get();
+  if (i18n.language !== locale) i18n.changeLanguage(locale);
+  document.documentElement.lang = locale;
+}
+
+function followLocale(locale: string) {
+  if (loaded.has(locale)) followLocaleSetting();
+  else void ensureLocale(locale).then(followLocaleSetting);
+}
+
+localeSetting.subscribe(followLocale);
+timeFormatSetting.subscribe(() => i18n.emit(TIME_FORMAT_CHANGED));
+
+/** The language the UI strings are in; trails the locale setting while its strings load. */
+export function useUiLanguage(): string {
+  return (useTranslation().i18n ?? i18n).language;
+}
+document.documentElement.lang = localeSetting.get();
+
+/** A label that translates on every read, plus its English text for search. */
+export interface LazyLabel {
+  (): string;
+  en: () => string;
+}
+
+/** For UI definitions that live outside components (command lists,
+ *  registries): resolve the label at render, never at module load, so it
+ *  follows the app language. */
+export function lazyT(key: string, options?: Record<string, unknown>): LazyLabel {
+  return Object.assign(() => i18n.t(key, options), {
+    en: () => i18n.t(key, { ...options, lng: "en" }),
+  });
+}
 
 export default i18n;

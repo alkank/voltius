@@ -1,0 +1,183 @@
+{
+  "hosts": {
+    "toolbar": {
+      "filterPlaceholder": "Filtrovat hosty…",
+      "openSerialConsole": "Otevřít sériovou konzoli",
+      "serial": "Sériový port",
+      "terminal": "Terminál",
+      "importExport": "Import/export",
+      "import": "Importovat…",
+      "export": "Exportovat…",
+      "importFrom": "Importovat z",
+      "newHost": "Nový host",
+      "newSerialHost": "Nový sériový host",
+      "newFolder": "Nová složka",
+      "systemShell": "Výchozí systémový shell"
+    },
+    "card": {
+      "pin": "Připnout",
+      "unpin": "Odepnout",
+      "pinned": "Připnuto",
+      "pinnedByTeam": "Připnul(a) {{name}} pro tým",
+      "pinnedByTeamAndPersonal": "Připnul(a) {{name}} pro tým · vy jste si ho připnuli také",
+      "hiddenPinnedByTeam": "Skryto ve vašem pohledu · připnul(a) {{name}} pro tým",
+      "teamMemberFallback": "člen týmu",
+      "unpinForMe": "Odepnout pro mě",
+      "showInMyView": "Zobrazit v mém pohledu",
+      "hideForMe": "Skrýt pro mě",
+      "pinForMe": "Připnout pro mě",
+      "unpinForTeam": "Odepnout pro tým",
+      "pinForTeam": "Připnout pro tým",
+      "openInSftp": "Otevřít v SFTP",
+      "copyHostnameIp": "Kopírovat název hostu/IP",
+      "copiedHost": "Zkopírováno: {{host}}",
+      "executeSnippet": "Spustit úryvek",
+      "enableReachability": "Zapnout kontrolu dostupnosti",
+      "disableReachability": "Vypnout kontrolu dostupnosti",
+      "connectTitle": "Připojit (také dvojklikem)",
+      "openFilesTitle": "Otevřít soubory (také dvojklikem)",
+      "inUseBy": "Používá {{name}}",
+      "inUseByOverflow_one": "Používá {{name}} a {{count}} další",
+      "inUseByOverflow_few": "Používá {{name}} a {{count}} další",
+      "inUseByOverflow_many": "Používá {{name}} a {{count}} dalšího",
+      "inUseByOverflow_other": "Používá {{name}} a {{count}} dalších",
+      "filesSuffix": "soubory",
+      "knockProtected": "Chráněno klepáním na porty. Dostupnost se ověřuje jen poté, co Voltius odešle sekvenci klepání.",
+      "knockWindowOpen": "Přístup po klepnutí na porty je otevřený",
+      "knockProtectedShort": "chráněno klepáním na porty"
+    },
+    "page": {
+      "all": "Vše",
+      "folders": "Složky",
+      "new": "Nový",
+      "pinned": "Připnuté",
+      "noSearchResults": "Výrazu „{{search}}“ neodpovídá žádný host",
+      "ejectMoveTo": "Přesunout do {{name}}",
+      "ejectRemoveFromFolder": "Odebrat ze složky",
+      "emptyState": {
+        "title": "Zatím žádné hosty",
+        "subtitle": "Přidejte server a připojujte se k němu jedním kliknutím.",
+        "import": "Importovat hosty",
+        "quickConnect": "Připojit bez uložení"
+      },
+      "draft": {
+        "unsaved": "Neuloženo"
+      },
+      "vaultCascade": {
+        "moveDescription": "Přesunutím složky „{{folderName}}“ se do trezoru „{{targetVaultName}}“ přesunou také tyto položky:",
+        "copyDescription": "Zkopírováním složky „{{folderName}}“ se do trezoru „{{targetVaultName}}“ zkopírují také tyto položky:"
+      },
+      "bulk": {
+        "executeSnippetOn_one": "Spustit úryvek na {{count}} hostu",
+        "executeSnippetOn_few": "Spustit úryvek na {{count}} hostech",
+        "executeSnippetOn_many": "Spustit úryvek na {{count}} hostu",
+        "executeSnippetOn_other": "Spustit úryvek na {{count}} hostech",
+        "connectHosts": "Připojit hosty ({{count}})",
+        "duplicateHosts": "Duplikovat hosty ({{count}})",
+        "moveItemsTo_one": "Přesunout {{count}} položku do",
+        "moveItemsTo_few": "Přesunout {{count}} položky do",
+        "moveItemsTo_many": "Přesunout {{count}} položky do",
+        "moveItemsTo_other": "Přesunout {{count}} položek do",
+        "copyItemsTo_one": "Kopírovat {{count}} položku do",
+        "copyItemsTo_few": "Kopírovat {{count}} položky do",
+        "copyItemsTo_many": "Kopírovat {{count}} položky do",
+        "copyItemsTo_other": "Kopírovat {{count}} položek do",
+        "enableReachability": "Zapnout kontrolu dostupnosti ({{count}})",
+        "disableReachability": "Vypnout kontrolu dostupnosti ({{count}})",
+        "exportHosts": "Exportovat hosty ({{count}})",
+        "deleteItems_one": "Smazat {{count}} položku",
+        "deleteItems_few": "Smazat {{count}} položky",
+        "deleteItems_many": "Smazat {{count}} položky",
+        "deleteItems_other": "Smazat {{count}} položek"
+      },
+      "confirmDelete": {
+        "title_one": "Smazat {{count}} položku",
+        "title_few": "Smazat {{count}} položky",
+        "title_many": "Smazat {{count}} položky",
+        "title_other": "Smazat {{count}} položek",
+        "message_one": "Opravdu chcete smazat {{count}} položku? Tuto akci nelze vrátit zpět.",
+        "message_few": "Opravdu chcete smazat {{count}} položky? Tuto akci nelze vrátit zpět.",
+        "message_many": "Opravdu chcete smazat {{count}} položky? Tuto akci nelze vrátit zpět.",
+        "message_other": "Opravdu chcete smazat {{count}} položek? Tuto akci nelze vrátit zpět.",
+        "folderCascade_one": "Smazán bude také {{count}} host zařazený ve vybraných složkách.",
+        "folderCascade_few": "Smazány budou také {{count}} hosty zařazené ve vybraných složkách.",
+        "folderCascade_many": "Smazáno bude také {{count}} hostu zařazeného ve vybraných složkách.",
+        "folderCascade_other": "Smazáno bude také {{count}} hostů zařazených ve vybraných složkách."
+      },
+      "confirmDeleteFolder": {
+        "title": "Smazat složku",
+        "message_one": "Smaže se složka, její podsložky a {{count}} host uvnitř. Tuto akci nelze vrátit zpět.",
+        "message_few": "Smaže se složka, její podsložky a {{count}} hosty uvnitř. Tuto akci nelze vrátit zpět.",
+        "message_many": "Smaže se složka, její podsložky a {{count}} hostu uvnitř. Tuto akci nelze vrátit zpět.",
+        "message_other": "Smaže se složka, její podsložky a {{count}} hostů uvnitř. Tuto akci nelze vrátit zpět.",
+        "messageEmpty": "Smaže se složka a vše, co obsahuje. Tuto akci nelze vrátit zpět."
+      }
+    },
+    "remoteSessions": {
+      "title": "Aktivní na jiných zařízeních",
+      "kill": "Ukončit relaci",
+      "join": "Připojit se k relaci",
+      "killing": "Ukončování relace…",
+      "undo": "Zpět",
+      "killFailed": "Vzdálené ukončení se nezdařilo — otevřete relaci a ukončete ji",
+      "dismiss": "Zavřít",
+      "deviceActive": "{{device}} · aktivní {{age}}",
+      "unknownDevice": "Neznámé zařízení"
+    },
+    "teamSessions": {
+      "title": "Týmové relace",
+      "joinByCode": "Připojit se pomocí kódu",
+      "emptyHint": "Zde se zobrazí terminály, které sdílejí vaši kolegové. Máte odkaz nebo kód pozvánky? Použijte „Připojit se pomocí kódu“.",
+      "live": "ŽIVĚ",
+      "sharedBy": "Sdílí {{name}}",
+      "pasteInviteCode": "Vložte odkaz nebo kód pozvánky a připojte se k soukromé relaci:",
+      "inviteCodePlaceholder": "voltius://join?… nebo sessionId:token",
+      "join": "Připojit se",
+      "resume": "Pokračovat",
+      "invalidCodeFormat": "Neplatná pozvánka — vložte odkaz nebo kód, který vám hostitel poslal",
+      "failedToJoinSession": "Připojení k relaci se nezdařilo",
+      "sharedTerminalFallback": "Sdílený terminál"
+    },
+    "snippetPicker": {
+      "title": "Spustit úryvek",
+      "goToSnippets": "Přejít na úryvky",
+      "filterPlaceholder": "Filtrovat úryvky…",
+      "newSnippetTitle": "Nový úryvek",
+      "new": "Nový",
+      "noSnippetsYet": "Zatím žádné úryvky",
+      "createSnippet": "Vytvořit úryvek",
+      "noSnippetsMatch": "Žádný úryvek neodpovídá",
+      "recent": "Nedávné",
+      "allSnippets": "Všechny úryvky",
+      "hostsSelected_one": "Vybrán {{count}} host",
+      "hostsSelected_few": "Vybrány {{count}} hosty",
+      "hostsSelected_many": "Vybráno {{count}} hostu",
+      "hostsSelected_other": "Vybráno {{count}} hostů",
+      "insert": "Vložit",
+      "execute": "Spustit"
+    },
+    "hostCommand": {
+      "labelPre": "{{host}} — příkaz při otevření relace",
+      "labelPost": "{{host}} — příkaz při zavření karty",
+      "failed": "Příkaz hostu {{host}} selhal: {{error}}",
+      "missingSnippet": "Chybí úryvek příkazu hostu {{host}}",
+      "postPromptTimedOut": "Příkaz při zavření karty pro {{host}} byl přeskočen: odpověď nebyla zadána do 60 s"
+    },
+    "connectAs": {
+      "title": "Připojit jako",
+      "yours": "vaše",
+      "hostDefault": "výchozí pro host",
+      "vaultDefault": "Moje identita pro {{vault}}…",
+      "clearPick": "Zrušit moji volbu"
+    },
+    "managed": {
+      "badge": "ssh config",
+      "tooltip": "Spravováno z ~/.ssh/config · alias {{alias}}",
+      "bannerTitle": "Spravováno z ~/.ssh/config",
+      "bannerBodyBefore": "Alias ",
+      "bannerBodyAfter": ". Zamčená pole sledují soubor.",
+      "detach": "Odpojit",
+      "detachMenu": "Odpojit od ~/.ssh/config"
+    }
+  }
+}

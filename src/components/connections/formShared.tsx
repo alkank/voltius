@@ -1,23 +1,32 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import type { Connection } from "@/types";
+import type { Connection, NewObjectPlacement } from "@/types";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { clearRememberedVars } from "@/stores/hostCommandVarsStore";
+import type { HostFormSecrets } from "@/services/hostForm";
 import {
   useVaultObjectFormShell,
   type VaultObjectFormShell,
 } from "@/components/shared/vaultObjectForm";
+import { FormSection } from "@/components/shared/Panel";
+import { NotesFrame } from "@/components/notes/NotesChrome";
+import type { NotesMode } from "@/components/notes/NotesEditor";
+import { LazyNotesEditor as NotesEditor } from "@/components/notes/LazyNotesEditor";
 import EncodingSelector from "./EncodingSelector";
 import { HostCommandField } from "./HostCommandField";
+import { LockMark } from "@/components/sshConfig/ManagedHost";
+import { ListRowContext } from "@/components/shared/listRowContext";
+import { useIsMobile } from "@/utils/platform";
+import { ManagedNote, ManagedWhen } from "@/components/shared/ManagedNote";
+import { FormSelect, type FormSelectOption } from "@/components/shared/FormSelect";
 
 export interface ConnectionFormProps {
   initial?: Connection;
+  placement?: NewObjectPlacement;
   onSubmit: (
     data: import("@/types").ConnectionFormData,
-    password: string | null,
-    privateKey: string | null,
-    passphrase: string | null,
+    secrets: HostFormSecrets,
   ) => void | Promise<void>;
   onClose: () => void;
   onDuplicate?: () => void;
@@ -25,7 +34,6 @@ export interface ConnectionFormProps {
   onDelete?: () => void;
   /** Other vaults available for move/copy (excludes the connection's current vault) */
   vaults?: import("@/types").VaultOption[];
-  canEdit?: boolean;
   onMoveToVault?: (vaultId: string) => void;
   onCopyToVault?: (vaultId: string) => void;
 }
@@ -36,9 +44,9 @@ export interface ConnectionFormHandle {
 }
 
 /** The connection forms' shell: the shared chrome bound to the connection store. */
-export function useConnectionFormShell(initial?: Connection): VaultObjectFormShell {
+export function useConnectionFormShell(initial?: Connection, placement?: NewObjectPlacement): VaultObjectFormShell {
   const pinConnection = useConnectionStore((s) => s.pinConnection);
-  return useVaultObjectFormShell({ initial, folderType: "connection", objectType: "connection", pin: pinConnection });
+  return useVaultObjectFormShell({ initial, placement, folderType: "connection", objectType: "connection", pin: pinConnection });
 }
 
 interface AdvancedDisclosureProps {
@@ -57,6 +65,8 @@ export function AdvancedDisclosure({ open, onToggle, hasValues, children }: Adva
       <button
         type="button"
         onClick={onToggle}
+        data-advanced-toggle={open ? "open" : "closed"}
+        aria-expanded={open}
         className="flex items-center gap-1.5 text-xs text-(--t-text-dim) hover:text-(--t-text-primary) transition-colors w-full pt-1"
       >
         <span>{t("connections.common.advanced")}</span>
@@ -67,7 +77,8 @@ export function AdvancedDisclosure({ open, onToggle, hasValues, children }: Adva
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: open ? "1fr" : "0fr", marginTop: open ? undefined : 0 }}
       >
-        <div className="overflow-hidden">
+        {/* data-collapsed: the mobile IME "next" order skips the hidden fields (formKeyboard.ts). */}
+        <div className="overflow-hidden" data-collapsed={open ? undefined : ""}>
           <div className="space-y-3 mt-3">{children}</div>
         </div>
       </div>
@@ -96,19 +107,77 @@ export function SettingRow({
   icon,
   label,
   title,
+  note,
+  locked = false,
   children,
 }: {
   icon: string;
   label: string;
   title?: string;
+  note?: ReactNode;
+  /** An admin lock: the control is disabled and the managed note replaces `note`. */
+  locked?: boolean;
   children: ReactNode;
 }) {
-  return (
-    <div className="flex items-center gap-1.5 text-xs text-(--t-text-dim) w-full py-1" title={title}>
+  // Android (mobile edit screens): an M3 list row, its control trailing (ListRowContext)
+  // and a tap on the label forwarded to it (rowTapControl, MobileEditScreen).
+  const isMobile = useIsMobile();
+  const rowContext = useMemo(() => (isMobile ? { label } : null), [isMobile, label]);
+  const shownNote = locked ? <ManagedNote /> : note;
+  const row = (
+    <div data-setting-row={isMobile ? "" : undefined} data-form-setting-row className="flex items-center gap-1.5 text-xs text-(--t-text-dim) w-full py-1" title={title}>
       <Icon icon={icon} width={13} />
       <span>{label}</span>
-      <span className="ml-auto">{children}</span>
+      <ListRowContext.Provider value={rowContext}>
+        <span className="ml-auto">
+          <ManagedWhen locked={locked} note={false}>{children}</ManagedWhen>
+        </span>
+      </ListRowContext.Provider>
     </div>
+  );
+  if (!shownNote) return row;
+  return (
+    <div>
+      {row}
+      <div className="flex justify-end text-right pb-1">{shownNote}</div>
+    </div>
+  );
+}
+
+export function OverrideRow({ icon, label, locked, note, value, options, onChange }: {
+  icon: string;
+  label: string;
+  locked: boolean;
+  note?: ReactNode;
+  value: string;
+  options: FormSelectOption[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <SettingRow icon={icon} label={label} locked={locked} note={note}>
+      <FormSelect className="w-36" value={locked ? "" : value} title={label} options={options} onChange={onChange} />
+    </SettingRow>
+  );
+}
+
+export function DrillInRow({ icon, label, count, onClick, locked }: { icon: string; label: string; count: number; onClick: () => void; locked?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={locked}
+      data-form-drill-row
+      className="flex items-center gap-1.5 text-xs text-(--t-text-dim) hover:text-(--t-text-primary) transition-colors w-full py-1 disabled:cursor-not-allowed"
+    >
+      <Icon icon={icon} width={13} />
+      <span>{label}{locked && <LockMark />}</span>
+      {count > 0 && (
+        <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-(--t-accent) text-(--t-bg-card) text-[10px] font-bold leading-none">
+          {count}
+        </span>
+      )}
+      <Icon icon="lucide:chevron-right" width={12} className="ml-auto" />
+    </button>
   );
 }
 
@@ -131,6 +200,14 @@ export function hostCommandFieldsSet(f: HostCommandFieldsState): boolean {
   return !!(f.preCommand || f.postCommand || f.preSnippetId || f.postSnippetId || f.terminalEncoding);
 }
 
+export function SectionLabel({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <p className={`${className} text-[10px] font-semibold uppercase tracking-wide text-(--t-text-dim)`.trim()}>{children}</p>;
+}
+
+export function FormHint({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <p className={`${className} text-xs text-(--t-text-dim)`.trim()}>{children}</p>;
+}
+
 interface HostCommandFieldsProps {
   connectionId?: string;
   fields: HostCommandFieldsState;
@@ -142,6 +219,7 @@ export function HostCommandFields({ connectionId, fields, markDirty }: HostComma
   const { t } = useTranslation();
   return (
     <>
+      <SectionLabel className="pt-1">{t("connections.common.sessionCommands")}</SectionLabel>
       <HostCommandField
         slot="pre"
         text={fields.preCommand}
@@ -156,6 +234,7 @@ export function HostCommandFields({ connectionId, fields, markDirty }: HostComma
         onChangeText={(v) => { markDirty(); fields.setPostCommand(v); }}
         onChangeSnippetId={(v) => { markDirty(); fields.setPostSnippetId(v); }}
       />
+      <FormHint>{t("connections.common.sessionCommandsHint")}</FormHint>
       {(fields.preSnippetId || fields.postSnippetId) && (
         <label className="flex items-center gap-2 text-xs text-(--t-text-dim)">
           <input
@@ -175,5 +254,17 @@ export function HostCommandFields({ connectionId, fields, markDirty }: HostComma
         onChange={(v) => { markDirty(); fields.setTerminalEncoding(v); }}
       />
     </>
+  );
+}
+
+export function NotesSection({ value, onChange, readOnly }: { value: string; onChange: (value: string) => void; readOnly?: boolean }) {
+  const { t } = useTranslation();
+  const [mode, setMode] = useState<NotesMode>("edit");
+  return (
+    <FormSection label={t("connections.form.sectionNotes")}>
+      <NotesFrame className="h-56">
+        <NotesEditor value={value} onChange={onChange} readOnly={readOnly} mode={mode} onModeChange={setMode} />
+      </NotesFrame>
+    </FormSection>
   );
 }

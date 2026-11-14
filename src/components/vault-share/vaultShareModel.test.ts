@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { assignableRoles, leastPrivilegedRole, seatState, canManageShare, canMintLink } from "./vaultShareModel";
+import { assignableRoles, isOwnerRole, leastPrivilegedRole, canManageShare, canMintLink } from "./vaultShareModel";
 import type { TeamRole } from "@/stores/teamStore";
 
 const role = (name: string, position: number, is_builtin = true): TeamRole =>
@@ -8,6 +8,16 @@ const role = (name: string, position: number, is_builtin = true): TeamRole =>
 test("assignable roles drop owner and sort by position", () => {
   const roles = [role("member", 3), role("owner", 0), role("manager", 1), role("editor", 2)];
   expect(assignableRoles(roles).map((r) => r.name)).toEqual(["manager", "editor", "member"]);
+});
+
+test("invitations may offer owner, first in position order", () => {
+  const roles = [role("member", 3), role("owner", 0), role("manager", 1)];
+  expect(assignableRoles(roles, { withOwner: true }).map((r) => r.name)).toEqual(["owner", "manager", "member"]);
+});
+
+test("only the builtin owner is the Owner role", () => {
+  expect(isOwnerRole(role("owner", 0))).toBe(true);
+  expect(isOwnerRole(role("owner", 0, false))).toBe(false);
 });
 
 test("assignable roles keep custom roles", () => {
@@ -19,16 +29,6 @@ test("least privileged role is the highest-position assignable role, never owner
   const roles = [role("member", 3), role("owner", 0), role("manager", 1), role("connect-only", 4)];
   expect(leastPrivilegedRole(roles)?.name).toBe("connect-only");
   expect(leastPrivilegedRole([])).toBeNull();
-});
-
-test("seat state reports unknown instead of question marks", () => {
-  expect(seatState(undefined, undefined)).toEqual({ kind: "unknown" });
-  expect(seatState(0, null)).toEqual({ kind: "unknown" });
-});
-
-test("seat state computes availability when known", () => {
-  expect(seatState(2, 10)).toEqual({ kind: "known", used: 2, total: 10, available: 8, atLimit: false });
-  expect(seatState(10, 10)).toEqual({ kind: "known", used: 10, total: 10, available: 0, atLimit: true });
 });
 
 test("only owner and manager may manage sharing or mint links", () => {

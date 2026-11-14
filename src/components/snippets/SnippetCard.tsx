@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { BaseCard } from "@/components/shared/BaseCard";
+import { CardActionButton, CardMenuButton, CardPinButton } from "@/components/shared/CardActionButton";
 import { TagBadge } from "@/components/shared/TagBadge";
+import { OverflowTagList } from "@/components/shared/OverflowTagList";
 import { SessionPickerPanel } from "@/components/shared/SessionPickerPanel";
 import type { ContextMenuItem } from "@/components/shared/ContextMenu";
 import { vaultMenuItems } from "@/utils/vaultMenuItems";
@@ -11,7 +13,9 @@ import { getShortcutHint } from "@/stores/shortcutStore";
 import { clipboardMenuItems } from "@/utils/clipboardMenuItems";
 import type { Snippet, Folder, VaultOption } from "@/types";
 import { snippetSearchText } from "@/services/snippetSteps";
-import { useSnippetStore } from "@/stores/snippetStore";
+import { SnippetPreview } from "./HighlightedScript";
+import { useSnippetStore, snippetToFormData } from "@/stores/snippetStore";
+import { useInlineRename } from "@/hooks/useInlineRename";
 import { useTeamStore } from "@/stores/teamStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
@@ -35,7 +39,6 @@ interface Props {
   onExecute: (sessionIds: string[]) => void;
   onDuplicate: () => void;
   onDelete: () => void;
-  onToggleFavorite: () => void;
   bulkContextMenuItems?: ContextMenuItem[];
   vaults?: VaultOption[];
   canEdit?: boolean;
@@ -61,7 +64,6 @@ export function SnippetCard({
   onExecute,
   onDuplicate,
   onDelete,
-  onToggleFavorite,
   bulkContextMenuItems,
   vaults,
   canEdit,
@@ -80,6 +82,8 @@ export function SnippetCard({
   const effPinned = useEffectivePinned(snippet, "snippet");
   const pinSource = useEffectivePinSource(snippet, "snippet");
   const isTeamVault = useTeamStore((s) => s.teams.some((t) => t.id === snippet.vault_id));
+  const updateSnippet = useSnippetStore((s) => s.updateSnippet);
+  const rename = useInlineRename(snippet.id, !!canEdit, snippet.name, (name) => { void updateSnippet(snippet.id, { ...snippetToFormData(snippet), name }); });
   const handlePinClick = () => {
     if (!isTeamVault) {
       pinSnippet(snippet.id, !effPinned).catch(() => {});
@@ -94,20 +98,28 @@ export function SnippetCard({
       ? "var(--t-text-secondary)"
       : "var(--t-text-dim)";
   const pinAlwaysVisible = pinSource !== "none" && pinSource !== "team-hidden";
+  const pinLabel = isTeamVault
+    ? (pinSource === "personal" || pinSource === "team+personal")
+      ? t("snippets.card.unpinForMe")
+      : pinSource === "team-hidden"
+      ? t("snippets.card.showInMyView")
+      : pinSource === "team"
+      ? t("snippets.card.hideForMe")
+      : t("snippets.card.pinForMe")
+    : effPinned ? t("snippets.card.unpin") : t("snippets.card.pin");
+  const runButtons = (width: number) => (
+    <>
+      <CardActionButton icon="lucide:arrow-down-to-line" title={t("snippets.card.insert")} reveal={false} width={width} onClick={() => setPanelMode("insert")} />
+      <CardActionButton icon="lucide:play" title={t("snippets.card.execute")} reveal={false} width={width} onClick={() => setPanelMode("execute")} />
+    </>
+  );
 
   const contextMenuItems: ContextMenuItem[] = [
     { label: t("common.action.edit"), icon: "lucide:pencil",  onClick: onEdit, shortcut: "E" },
+    ...rename.menuItems,
     { label: t("snippets.card.duplicate"), icon: "lucide:copy",    onClick: onDuplicate, shortcut: "D" },
     {
-      label: isTeamVault
-        ? (pinSource === "personal" || pinSource === "team+personal")
-          ? t("snippets.card.unpinForMe")
-          : pinSource === "team-hidden"
-          ? t("snippets.card.showInMyView")
-          : pinSource === "team"
-          ? t("snippets.card.hideForMe")
-          : t("snippets.card.pinForMe")
-        : effPinned ? t("snippets.card.unpin") : t("snippets.card.pin"),
+      label: pinLabel,
       icon: (pinSource === "personal" || pinSource === "team+personal" || (!isTeamVault && effPinned))
         ? "lucide:pin-off"
         : "lucide:pin",
@@ -120,7 +132,7 @@ export function SnippetCard({
       onClick: () => pinSnippetForTeam(snippet.id, !snippet.favorite).catch(() => {}),
     }] : []),
     ...(onToggleSync ? [{
-      label: syncEnabled ? t("snippets.card.disableCloudSync") : t("snippets.card.enableCloudSync"),
+      label: syncEnabled ? t("common.objectSync.disable") : t("common.objectSync.enable"),
       icon: syncEnabled ? "lucide:cloud-off" : "lucide:cloud",
       onClick: onToggleSync,
     }] : []),
@@ -140,26 +152,24 @@ export function SnippetCard({
     { label: t("common.action.delete"), icon: "lucide:trash-2", onClick: onDelete, danger: true as const, divider: true as const, shortcut: getShortcutHint("delete") },
   ];
 
+  const cardProps = {
+    isEditing,
+    isSelected,
+    isFocused,
+    "data-selectable-id": snippet.id,
+    "data-card": snippet.id,
+    onPointerDown,
+    onClick: (e: React.MouseEvent<HTMLDivElement>) => { if (onSelect) onSelect(snippet.id, e); else onEdit(); },
+    onDoubleClick: onEdit,
+    contextMenuItems,
+    bulkContextMenuItems,
+    style: { opacity: dimmed ? 0.45 : 1 },
+  };
+
   if (!isList) {
     return (
       <>
-        <BaseCard
-          isList={false}
-          glass
-          isEditing={isEditing}
-          isSelected={isSelected}
-          isFocused={isFocused}
-          data-selectable-id={snippet.id}
-          data-card={snippet.id}
-          onPointerDown={onPointerDown}
-          onClick={(e) => {
-            if (onSelect) onSelect(snippet.id, e);
-            else onEdit();
-          }}
-          contextMenuItems={contextMenuItems}
-          bulkContextMenuItems={bulkContextMenuItems}
-          style={{ opacity: dimmed ? 0.45 : 1 }}
-        >
+        <BaseCard isList={false} glass {...cardProps}>
           {/* self-start overrides BaseCard's items-center so content is top-left aligned */}
           <div className="flex-1 min-w-0 self-start flex flex-col gap-2.5">
             {/* Header: avatar + name/fav/tags + description */}
@@ -169,16 +179,9 @@ export function SnippetCard({
                 {/* Name + favorite (pin position) + tags */}
                 <div className="flex items-center gap-2 min-w-0">
                   <p className="text-sm font-bold truncate text-(--t-text-bright) flex-1 min-w-0">
-                    {snippet.name}
+                    {rename.editor ?? snippet.name}
                   </p>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-                    className={`shrink-0 flex items-center transition-colors ${pinAlwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100 hover:text-(--t-text-bright)"}`}
-                    style={{ color: pinColor }}
-                    title={effPinned ? t("snippets.card.unstar") : t("snippets.card.star")}
-                  >
-                    <Icon icon="lucide:star" width={14} />
-                  </button>
+                  {pinAlwaysVisible && <CardPinButton color={pinColor} title={pinLabel} onClick={handlePinClick} />}
                   {snippet.tags.slice(0, 2).map((tag) => (
                     <TagBadge key={tag} tag={tag} className="rounded-md shrink-0 py-0 text-[10px]" />
                   ))}
@@ -216,7 +219,8 @@ export function SnippetCard({
                   overflow: "hidden",
                 }}
               >
-                {`> ${snippetSearchText(snippet) || t("snippets.card.noContent")}`}
+                {"> "}
+                {snippetSearchText(snippet) ? <SnippetPreview snippet={snippet} /> : t("snippets.card.noContent")}
               </p>
             </div>
 
@@ -231,24 +235,8 @@ export function SnippetCard({
                 )}
               </div>
               <div className="flex items-center gap-0.5">
-                <button
-                  title={t("snippets.card.insert")}
-                  onClick={(e) => { e.stopPropagation(); setPanelMode("insert"); }}
-                  className="p-1.5 rounded-lg transition-colors text-(--t-text-secondary)"
-                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t-text-bright)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t-text-secondary)")}
-                >
-                  <Icon icon="lucide:arrow-down-to-line" width={15} />
-                </button>
-                <button
-                  title={t("snippets.card.execute")}
-                  onClick={(e) => { e.stopPropagation(); setPanelMode("execute"); }}
-                  className="p-1.5 rounded-lg transition-colors text-(--t-text-secondary)"
-                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t-text-bright)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t-text-secondary)")}
-                >
-                  <Icon icon="lucide:play" width={15} />
-                </button>
+                {runButtons(15)}
+                <CardMenuButton width={15} />
               </div>
             </div>
           </div>
@@ -270,87 +258,24 @@ export function SnippetCard({
 
   return (
     <>
-      <BaseCard
-        isList
-        isEditing={isEditing}
-        isSelected={isSelected}
-        isFocused={isFocused}
-        data-selectable-id={snippet.id}
-        data-card={snippet.id}
-        onPointerDown={onPointerDown}
-        onClick={(e) => {
-          if (onSelect) onSelect(snippet.id, e);
-          else onEdit();
-        }}
-        contextMenuItems={contextMenuItems}
-        bulkContextMenuItems={bulkContextMenuItems}
-        style={{ opacity: dimmed ? 0.45 : 1 }}
-      >
-        {/* Icon */}
-        <AvatarTile icon="lucide:braces" iconSize={14} className="w-8 h-8 rounded-lg" />
+      <BaseCard isList {...cardProps}>
+        <AvatarTile icon="lucide:braces" iconSize={14} className="w-7 h-7 rounded-lg" />
+        <p className="text-sm font-medium-bold truncate w-52 shrink-0 text-(--t-text-bright)">{rename.editor ?? snippet.name}</p>
+        <p className={`text-xs truncate flex-1 min-w-0 text-(--t-text-secondary) ${snippet.description ? "" : "font-mono"}`}>
+          {snippet.description || <SnippetPreview snippet={snippet} />}
+        </p>
+        {folder && (
+          <span className="flex items-center gap-1 text-xs text-(--t-text-dim) shrink-0">
+            <Icon icon="lucide:folder" width={10} />
+            {folder.name}
+          </span>
+        )}
+        {snippet.tags.length > 0 && <OverflowTagList tags={snippet.tags} className="max-w-32 flex-1" />}
 
-        {/* Body */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-semibold text-(--t-text-bright) truncate flex-1 min-w-0">
-              {snippet.name}
-            </span>
-            {effPinned && (
-              <Icon icon="lucide:star" width={11} className="shrink-0" style={{ color: pinColor }} />
-            )}
-            {folder && (
-              <span className="flex items-center gap-1 text-xs text-(--t-text-dim) shrink-0">
-                <Icon icon="lucide:folder" width={10} />
-                {folder.name}
-              </span>
-            )}
-          </div>
-          {snippet.description ? (
-            <p className="mt-0.5 text-xs text-(--t-text-muted) truncate">{snippet.description}</p>
-          ) : (
-            <p className="mt-0.5 text-xs font-mono text-(--t-text-muted) truncate">{snippetSearchText(snippet)}</p>
-          )}
-          {snippet.tags.length > 0 && (
-            <div className="flex items-center gap-1 mt-1 flex-wrap">
-              {snippet.tags.slice(0, 5).map((tag) => <TagBadge key={tag} tag={tag} className="rounded-md" />)}
-              {snippet.tags.length > 5 && (
-                <span className="text-xs text-(--t-text-dim)">+{snippet.tags.length - 5}</span>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Actions */}
         <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            title={effPinned ? t("snippets.card.unstar") : t("snippets.card.star")}
-            onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-            className={`p-1.5 rounded-lg transition-colors ${pinAlwaysVisible ? "flex" : "hidden group-hover:flex"}`}
-            style={{ color: pinColor }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--t-accent)"; e.currentTarget.style.background = "color-mix(in srgb, #ffffff 10%, transparent)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = pinColor; e.currentTarget.style.background = "transparent"; }}
-          >
-            <Icon icon="lucide:star" width={16} />
-          </button>
-
-          <button
-            title={t("snippets.card.insert")}
-            onClick={(e) => { e.stopPropagation(); setPanelMode("insert"); }}
-            className="p-1.5 flex rounded-lg transition-colors text-(--t-text-secondary)"
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--t-text-primary)"; e.currentTarget.style.background = "color-mix(in srgb, #ffffff 10%, transparent)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--t-text-secondary)"; e.currentTarget.style.background = "transparent"; }}
-          >
-            <Icon icon="lucide:arrow-down-to-line" width={16} />
-          </button>
-          <button
-            title={t("snippets.card.execute")}
-            onClick={(e) => { e.stopPropagation(); setPanelMode("execute"); }}
-            className="p-1.5 flex rounded-lg transition-colors text-(--t-text-secondary)"
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--t-text-primary)"; e.currentTarget.style.background = "color-mix(in srgb, #ffffff 10%, transparent)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--t-text-secondary)"; e.currentTarget.style.background = "transparent"; }}
-          >
-            <Icon icon="lucide:play" width={16} />
-          </button>
+          {pinAlwaysVisible && <span className="px-1.5 flex"><CardPinButton color={pinColor} title={pinLabel} onClick={handlePinClick} width={16} /></span>}
+          {runButtons(16)}
+          <CardMenuButton width={16} />
         </div>
       </BaseCard>
 

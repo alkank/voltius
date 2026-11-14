@@ -1,8 +1,9 @@
-import { useNotificationStore } from "@/stores/notificationStore";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
 
 export interface TeamActionFeedbackOptions<T> {
   pending: string;
   success: string | ((result: T) => string);
+  warning?: (result: T) => string | null;
   error?: string | ((error: Error) => string);
   run: () => Promise<T>;
 }
@@ -11,11 +12,12 @@ export async function runTeamAction<T>({
   pending,
   success,
   error,
+  warning,
   run,
 }: TeamActionFeedbackOptions<T>): Promise<T> {
   const store = useNotificationStore.getState();
   const toastId = store.addToast({
-    source: { kind: "plugin", id: "system", name: "Voltius" },
+    source: APP_SOURCE,
     type: "progress",
     message: pending,
     severity: "info",
@@ -24,13 +26,14 @@ export async function runTeamAction<T>({
 
   try {
     const result = await run();
+    const warned = warning?.(result);
     store.updateToast(toastId, {
       type: "toast",
-      message: typeof success === "function" ? success(result) : success,
-      severity: "success",
-      duration: 3500,
+      message: warned ?? (typeof success === "function" ? success(result) : success),
+      severity: warned ? "warning" : "success",
+      duration: warned ? 7000 : 3500,
       finished: true,
-      finishedSeverity: "success",
+      finishedSeverity: warned ? "warning" : "success",
     });
     return result;
   } catch (e) {

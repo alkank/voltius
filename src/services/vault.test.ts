@@ -2,9 +2,9 @@ import { test, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
-  unlockError: null as Error | null,
-  getError: null as Error | null,
-  verifyError: null as Error | null,
+  unlockError: null as unknown,
+  getError: null as unknown,
+  verifyError: null as unknown,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: h.invoke }));
@@ -13,16 +13,24 @@ vi.mock("@/stores/persistedAccountUiState", () => ({ clearPersistedAccountUiStat
 
 import {
   setVaultKey,
-  getSecret,
+  getLocalSecret,
+  purgeLocalSecrets,
   quarantineVault,
+  resetVault,
   unlockVaultIfNeeded,
   verifyVaultKey,
-  SECRETS_LOCKED_MESSAGE,
+  wipeLocalConfig,
+  swapAccountProfile,
+  dropAccountProfile,
 } from "./vault";
 import { VaultLockedError, VaultUnreadableError, vaultErrorCode } from "./vaultErrors";
+import { lockedValue } from "@/stores/policyStore";
+import { withTeamPolicy } from "@/test/policy";
 
 const KEY = [1, 2, 3];
-const WRONG_KEY = new Error("Decryption failed — wrong key or corrupted file");
+// What secrets.rs sends over IPC (its `a_wrong_key_sends_…`/`a_locked_store_sends_…` tests).
+const WRONG_KEY = { code: "vault-unreadable", message: "Decryption failed — wrong key or corrupted file" };
+const LOCKED = { code: "vault-locked", message: "Secrets store is locked" };
 
 function routeInvoke() {
   h.invoke.mockImplementation(async (cmd: string) => {
@@ -58,7 +66,7 @@ beforeEach(() => {
 test("an unreadable vault raises VaultUnreadableError instead of destroying the file", async () => {
   // #134's second half: the file was readable with another key and got deleted.
   h.unlockError = WRONG_KEY;
-  await expect(getSecret("password:c1")).rejects.toThrow(VaultUnreadableError);
+  await expect(getLocalSecret("password:c1")).rejects.toThrow(VaultUnreadableError);
   expect(invoked("secrets_wipe")).toBe(false);
   expect(invoked("secrets_quarantine")).toBe(false);
 });
@@ -72,19 +80,19 @@ test("a key mismatch in server mode is not self-healed", async () => {
 
 test("unlock failures other than a key mismatch propagate unchanged", async () => {
   h.unlockError = new Error("Read failed: permission denied");
-  await expect(getSecret("password:c1")).rejects.toThrow("permission denied");
+  await expect(getLocalSecret("password:c1")).rejects.toThrow("permission denied");
 });
 
 test("no vault key installed reports the vault as locked", async () => {
   setVaultKey(null as unknown as number[]);
-  await expect(getSecret("password:c1")).rejects.toThrow("common.error.vaultLocked");
+  await expect(getLocalSecret("password:c1")).rejects.toThrow("common.error.vaultLocked");
 });
 
-// Rust answers a locked store with a bare string. Without a code it reaches the
-// generic error panel instead of the one offering to unlock.
+// Without a VaultLockedError, Rust's locked store reaches the generic error panel
+// instead of the one offering to unlock.
 test("a locked store reported by Rust carries the vault-locked code", async () => {
-  h.getError = new Error(SECRETS_LOCKED_MESSAGE);
-  await expect(getSecret("password:c1")).rejects.toSatisfy(
+  h.getError = LOCKED;
+  await expect(getLocalSecret("password:c1")).rejects.toSatisfy(
     (e: unknown) => vaultErrorCode(e) === "vault-locked",
   );
 });
@@ -92,11 +100,11 @@ test("a locked store reported by Rust carries the vault-locked code", async () =
 // The store can only answer "locked" while the module thinks it is unlocked, so
 // that flag has drifted and must not be trusted again.
 test("a locked store clears the unlocked flag so the next read unlocks again", async () => {
-  h.getError = new Error(SECRETS_LOCKED_MESSAGE);
-  await expect(getSecret("password:c1")).rejects.toThrow(VaultLockedError);
+  h.getError = LOCKED;
+  await expect(getLocalSecret("password:c1")).rejects.toThrow(VaultLockedError);
 
   h.getError = null;
-  await expect(getSecret("password:c1")).resolves.toBe("value");
+  await expect(getLocalSecret("password:c1")).resolves.toBe("value");
   expect(h.invoke.mock.calls.filter(([c]) => c === "secrets_unlock")).toHaveLength(2);
 });
 
@@ -117,5 +125,105 @@ test("quarantining sets the file aside and leaves the store ready to unlock agai
   expect(await quarantineVault()).toBe("secrets.enc.1700000000.bak");
 
   h.unlockError = null;
-  await expect(getSecret("password:c1")).resolves.toBe("value");
+  await expect(getLocalSecret("password:c1")).resolves.toBe("value");
+});
+
+test("purgeLocalSecrets sends every key in one call, and none when there are none", async () => {
+  h.invoke.mockImplementation(async (cmd: string) => (cmd === "secrets_purge" ? ["password:c1"] : undefined));
+  await expect(purgeLocalSecrets(["password:c1", "key:c2"])).resolves.toEqual(["password:c1"]);
+  expect(h.invoke).toHaveBeenCalledWith("secrets_purge", { keys: ["password:c1", "key:c2"] });
+
+  h.invoke.mockClear();
+  await expect(purgeLocalSecrets([])).resolves.toEqual([]);
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+test("secrets carried through a wipe land in the next vault on its first unlock, once", async () => {
+  const keychain: Record<string, string> = {};
+  const vault: Record<string, string> = {};
+  h.invoke.mockImplementation(async (cmd: string, args?: Record<string, string>) => {
+    if (cmd === "keychain_set") keychain[args!.key] = args!.value;
+    if (cmd === "keychain_get") return keychain[args!.key] ?? null;
+    if (cmd === "keychain_delete") delete keychain[args!.key];
+    if (cmd === "secrets_set") vault[args!.key] = args!.value;
+    return undefined;
+  });
+
+  await wipeLocalConfig({ "proxy_password:__global__": "proxy-pw" });
+  expect(invoked("config_wipe")).toBe(true);
+  setVaultKey([9, 9, 9]);
+  await unlockVaultIfNeeded();
+
+  expect(vault).toEqual({ "proxy_password:__global__": "proxy-pw" });
+  expect(keychain).toEqual({});
+});
+
+test("a wipe with nothing to carry leaves the keychain alone", async () => {
+  await wipeLocalConfig();
+  expect(invoked("keychain_set")).toBe(false);
+  expect(invoked("config_wipe")).toBe(true);
+});
+
+test("swapping profiles hands both ids to the backend and reports whether one was restored", async () => {
+  h.invoke.mockImplementation(async (cmd: string) => (cmd === "account_profile_swap" ? true : undefined));
+
+  await expect(swapAccountProfile({ parkAs: "a", restore: "b" })).resolves.toBe(true);
+
+  expect(h.invoke).toHaveBeenCalledWith("account_profile_swap", { parkAs: "a", restore: "b" });
+  expect(invoked("keychain_set")).toBe(false);
+});
+
+test("a swap carries device secrets the same way a wipe does", async () => {
+  const carry = { "proxy_password:__global__": "proxy-pw" };
+
+  await swapAccountProfile({ parkAs: null, restore: "b", carry });
+
+  expect(h.invoke).toHaveBeenCalledWith("keychain_set", {
+    key: "carried_device_secrets",
+    value: JSON.stringify(carry),
+  });
+});
+
+test("a failed swap leaves the key installed, so the next read unlocks again", async () => {
+  await getLocalSecret("k");
+  h.invoke.mockImplementationOnce(async () => {
+    throw new Error("Failed to switch account data");
+  });
+
+  await expect(swapAccountProfile({ parkAs: "a", restore: "b" })).rejects.toThrow("Failed to switch account data");
+
+  h.invoke.mockClear();
+  await expect(getLocalSecret("k")).resolves.toBe("value");
+  expect(invoked("secrets_unlock")).toBe(true);
+});
+
+test("a secret read while a swap is running does not reopen the store", async () => {
+  await getLocalSecret("k");
+  h.invoke.mockClear();
+  let finish!: (restored: boolean) => void;
+  h.invoke.mockImplementation(async (cmd: string) => {
+    if (cmd === "account_profile_swap") return new Promise<boolean>((resolve) => { finish = resolve; });
+    if (cmd === "secrets_get") throw LOCKED;
+    return undefined;
+  });
+
+  const swapping = swapAccountProfile({ parkAs: "a", restore: "b" });
+  await expect(getLocalSecret("k")).rejects.toBeInstanceOf(VaultLockedError);
+  await expect(getLocalSecret("k")).rejects.toBeInstanceOf(VaultLockedError);
+  finish(true);
+  await swapping;
+
+  expect(invoked("secrets_unlock")).toBe(false);
+});
+
+test("dropping a profile names the account to the backend", async () => {
+  await dropAccountProfile("b");
+
+  expect(h.invoke).toHaveBeenCalledWith("account_profile_drop", { accountId: "b" });
+});
+
+test("resetVault drops the team lock policy held in memory", async () => {
+  withTeamPolicy({ "security.lockAction": "vault" });
+  await resetVault();
+  expect(lockedValue("security.lockAction").locked).toBe(false);
 });

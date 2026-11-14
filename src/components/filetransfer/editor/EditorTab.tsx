@@ -4,12 +4,15 @@ import CodeMirror from "@uiw/react-codemirror";
 import { readEditorFile, writeEditorFile, type EditorReadError } from "@/services/sftp";
 import { useSftpSettingsStore } from "@/stores/sftpSettingsStore";
 import { useEditorStore, type EditorDoc } from "@/stores/editorStore";
-import { useThemeStore } from "@/stores/themeStore";
 import { languageForPath } from "./languageForPath";
 import { shouldHandleSaveKey } from "./editorSaveKey";
-import { cmTheme } from "./cmTheme";
+import { useCmTheme } from "./useCmTheme";
 import { IconBtn } from "@/components/filetransfer/FilePane";
 import { Toggle } from "@/components/shared/Toggle";
+import { ImageView } from "./ImageView";
+import { useReadOnlyTip } from "@/services/deviceReadOnly";
+import { ReadOnlyBadge } from "@/components/shared/ReadOnlyBadge";
+import { looksLikeImage } from "./tabIcon";
 
 export function createDebouncedSaver(
   save: (content: string) => Promise<void>,
@@ -54,16 +57,11 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
   const [error, setError] = useState<EditorReadError | string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [asImage, setAsImage] = useState(() => doc.image === true || looksLikeImage(doc.path));
   const lastSaved = useRef<string>("");
 
-  const activeThemeId = useThemeStore((s) => s.activeThemeId);
-  const customThemes = useThemeStore((s) => s.customThemes);
-  const getActiveTheme = useThemeStore((s) => s.getActiveTheme);
-  const themeExt = useMemo(
-    () => cmTheme(getActiveTheme()),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeThemeId, customThemes],
-  );
+  const readOnlyTip = useReadOnlyTip(doc.readOnly, doc.hostLabel);
+  const themeExt = useCmTheme();
 
   const ext = languageForPath(doc.path);
   const extensions = useMemo(
@@ -88,6 +86,7 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
   const saverRef = useRef(createDebouncedSaver(doSave, 1000));
 
   useEffect(() => {
+    if (asImage) return;
     let cancelled = false;
     setError(null);
     setSaveError(null);
@@ -101,7 +100,8 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
       })
       .catch((e: EditorReadError) => {
         if (cancelled) return;
-        setError(e);
+        if (e.kind === "image") setAsImage(true);
+        else setError(e);
         setLoading(false);
       });
     const saver = saverRef.current;
@@ -110,7 +110,7 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
       saver.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.id]);
+  }, [doc.id, asImage]);
 
   const onChange = (next: string) => {
     setContent(next);
@@ -119,6 +119,8 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
   };
 
   useEffect(() => {
+    // Without loaded text the buffer is empty, and saving it would wipe the file.
+    if (asImage || loading || error || doc.readOnly) return;
     const onKey = (e: KeyboardEvent) => {
       // Every mounted EditorTab shares the window; only the active tab saves.
       const isActive = useEditorStore.getState().activeTabId === doc.id;
@@ -131,8 +133,9 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content]);
+  }, [content, asImage, loading, error, doc.readOnly]);
 
+  if (asImage) return <ImageView doc={doc} onNotImage={() => setAsImage(false)} />;
   if (error) return <EditorError error={error} sftpId={doc.sftpId} path={doc.path} />;
   if (loading) return <div className="p-4 text-sm" style={{ color: "var(--t-text-dim)" }}>{t("common.state.loading")}</div>;
 
@@ -149,18 +152,20 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
         {doc.dirty && (
           <span className="shrink-0" style={{ color: "var(--t-accent-warn, #f59e0b)" }}>●</span>
         )}
+        {readOnlyTip && <ReadOnlyBadge tip={readOnlyTip} className="ml-auto" />}
         {/* Auto-save toggle */}
-        <div
+        {!readOnlyTip && <div
           className="ml-auto flex items-center gap-2 shrink-0 select-none"
           style={{ color: "var(--t-text-secondary)" }}
         >
           <span>{t("fileTransfer.editor.tab.autoSave")}</span>
           <Toggle checked={doc.autoSave} onChange={(v) => setDocAutoSave(doc.id, v)} />
-        </div>
+        </div>}
         {/* Save button — styled like FilePane toolbar buttons */}
         <IconBtn
           icon={saving ? "lucide:loader-circle" : "lucide:save"}
-          title={saving ? t("common.state.saving") : t("fileTransfer.editor.common.saveCtrlS")}
+          title={readOnlyTip ?? (saving ? t("common.state.saving") : t("fileTransfer.editor.common.saveCtrlS"))}
+          disabled={!!readOnlyTip}
           onClick={() => { if (!saving) void doSave(content); }}
         />
       </div>
@@ -198,6 +203,7 @@ export function EditorTab({ doc }: { doc: EditorDoc }) {
           value={content}
           extensions={extensions}
           onChange={onChange}
+          readOnly={!!readOnlyTip}
           height="100%"
           theme="none"
         />

@@ -1,0 +1,196 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const secrets: Record<string, string> = {};
+vi.mock("@/services/vault", () => ({ getSecret: async (k: string) => secrets[k] ?? null }));
+
+import { DEFAULT_PROXY_PORT, firstHopProxy, resolveDirectHop, resolveFirstHop, resolveProxy } from "./proxy";
+import { useConnectivitySettingsStore } from "@/stores/connectivitySettingsStore";
+import { useConnectionStore } from "@/stores/connectionStore";
+import { usePolicyStore } from "@/stores/policyStore";
+import type { Connection, JumpHost } from "@/types";
+
+const TYPED_PW = ["typed", "pw"].join("-");
+
+const setGlobal = (proxy: object) => useConnectivitySettingsStore.setState({ proxy } as never);
+
+describe("resolveProxy", () => {
+  beforeEach(() => {
+    for (const k of Object.keys(secrets)) delete secrets[k];
+    setGlobal({ mode: "none" });
+  });
+
+  it("global none + no override → null (direct, unchanged behaviour)", async () => {
+    expect(await resolveProxy({ id: "c" })).toBeNull();
+  });
+
+  it("inherits the global socks5 with the global password", async () => {
+    setGlobal({ mode: "socks5", host: "g", port: 1080, username: "gu" });
+    secrets["proxy_password:__global__"] = "gp";
+    expect(await resolveProxy({ id: "c" })).toEqual({ kind: "socks5", host: "g", port: 1080, username: "gu", password: "gp" });
+  });
+
+  it("override direct beats global socks5", async () => {
+    setGlobal({ mode: "socks5", host: "g", port: 1080 });
+    expect(await resolveProxy({ id: "c", proxy: { mode: "direct" } })).toEqual({ kind: "direct" });
+  });
+
+  it("per-host http uses the per-host password", async () => {
+    secrets["proxy_password:c"] = "hp";
+    expect(await resolveProxy({ id: "c", proxy: { mode: "http", host: "h", port: 3128, username: "hu" } }))
+      .toEqual({ kind: "http", host: "h", port: 3128, username: "hu", password: "hp" });
+  });
+
+  it("system passes through without credentials", async () => {
+    setGlobal({ mode: "system" });
+    expect(await resolveProxy({ id: "c" })).toEqual({ kind: "system" });
+  });
+
+  it("custom mode with no host throws instead of silently connecting direct", async () => {
+    await expect(resolveProxy({ id: "c", proxy: { mode: "socks5", port: 1080 } })).rejects.toThrow(/SOCKS5/);
+    await expect(resolveProxy({ id: "c", proxy: { mode: "http", host: "  " } })).rejects.toThrow(/HTTP/);
+    setGlobal({ mode: "socks5" });
+    await expect(resolveProxy({ id: "c" })).rejects.toThrow();
+  });
+
+  it.each([
+    ["socks5", 1080],
+    ["http", 8080],
+    ["https", 443],
+  ] as const)("%s with an empty port uses the default port", async (mode, port) => {
+    expect(await resolveProxy({ id: "c", proxy: { mode, host: "h" } })).toEqual({ kind: mode, host: "h", port });
+    expect(DEFAULT_PROXY_PORT[mode]).toBe(port);
+  });
+
+  it("form overrides win over the saved values", async () => {
+    secrets["proxy_password:c"] = "saved";
+    const spec = await resolveProxy(
+      { id: "c", proxy: { mode: "direct" } },
+      { proxy: { mode: "socks5", host: "typed", port: 9 }, password: TYPED_PW },
+    );
+    expect(spec).toEqual({ kind: "socks5", host: "typed", port: 9, password: TYPED_PW });
+  });
+});
+
+const conn = (id: string, over: Partial<Connection> = {}) =>
+  ({ id, host: `${id}.example`, port: 22, username: "root", auth_type: "password", tags: [], ...over }) as Connection;
+const via = (connection_id: string, over: Partial<JumpHost> = {}): JumpHost => ({ id: `j-${connection_id}`, connection_id, ...over });
+
+describe("resolveFirstHop", () => {
+  beforeEach(() => {
+    for (const k of Object.keys(secrets)) delete secrets[k];
+    setGlobal({ mode: "http", host: "global", port: 3128 });
+    useConnectionStore.setState({ connections: [], teamConnections: {} });
+  });
+
+  it("dials the first bastion through its own override when the target inherits", async () => {
+    secrets[["proxy_password", "bastion"].join(":")] = "bp";
+    useConnectionStore.setState({
+      connections: [conn("bastion", { proxy: { mode: "socks5", host: "bastion-proxy", port: 1080, username: "bu" } })],
+    });
+    expect((await resolveFirstHop(conn("target", { jump_hosts: [via("bastion")] }))).proxy)
+      .toEqual({ kind: "socks5", host: "bastion-proxy", port: 1080, username: "bu", password: "bp" });
+  });
+
+  it("uses the target's override when the bastion inherits", async () => {
+    useConnectionStore.setState({ connections: [conn("bastion")] });
+    const target = conn("target", { proxy: { mode: "direct" }, jump_hosts: [via("bastion")] });
+    expect((await resolveFirstHop(target)).proxy).toEqual({ kind: "direct" });
+  });
+
+  it("matches resolveProxy when there are no jump hosts", async () => {
+    const target = conn("target", { proxy: { mode: "socks5", host: "t", port: 9 } });
+    expect((await resolveFirstHop(target)).proxy).toEqual(await resolveProxy(target));
+    expect((await resolveFirstHop(conn("plain"))).proxy).toEqual({ kind: "http", host: "global", port: 3128 });
+  });
+
+  it("an inline jump host with no managed connection uses the target's resolution", async () => {
+    const target = conn("target", { proxy: { mode: "system" }, jump_hosts: [via("gone", { host: "b", port: 22 })] });
+    expect((await resolveFirstHop(target)).proxy).toEqual({ kind: "system" });
+  });
+
+  it("only the first jump decides the first hop", async () => {
+    useConnectionStore.setState({
+      connections: [conn("first"), conn("second", { proxy: { mode: "socks5", host: "second-proxy" } })],
+    });
+    const target = conn("target", { jump_hosts: [via("first"), via("second")] });
+    expect((await resolveFirstHop(target)).proxy).toEqual({ kind: "http", host: "global", port: 3128 });
+  });
+});
+
+describe("resolveFirstHop knock", () => {
+  beforeEach(() => {
+    for (const k of Object.keys(secrets)) delete secrets[k];
+    setGlobal({ mode: "none" });
+    useConnectionStore.setState({ connections: [], teamConnections: {} });
+  });
+
+  it("knocks the target when it is dialed directly", async () => {
+    secrets["knock_sequence:t"] = "666/tcp";
+    const route = await resolveFirstHop(conn("t", { port_knock: { enabled: true } }));
+    expect(route.knock).toEqual({ steps: [{ port: 666, protocol: "tcp" }], delay_ms: 200, settle_ms: 500 });
+  });
+
+  it("with jump hosts, knocks the saved bastion and ignores the target's knock", async () => {
+    secrets["knock_sequence:b"] = "1/udp";
+    secrets["knock_sequence:t"] = "2/tcp";
+    useConnectionStore.setState({ connections: [conn("b", { port_knock: { enabled: true, delay_ms: 50 } })] });
+    const route = await resolveFirstHop(conn("t", { port_knock: { enabled: true }, jump_hosts: [via("b")] }));
+    expect(route.knock).toEqual({ steps: [{ port: 1, protocol: "udp" }], delay_ms: 50, settle_ms: 500 });
+  });
+
+  it("an inline bastion gets no knock", async () => {
+    const route = await resolveFirstHop(conn("t", { port_knock: { enabled: true }, jump_hosts: [via("gone")] }));
+    expect(route.knock).toBeNull();
+  });
+
+  it("disabled knock sends nothing", async () => {
+    secrets["knock_sequence:t"] = "666/tcp";
+    expect((await resolveFirstHop(conn("t", { port_knock: { enabled: false } }))).knock).toBeNull();
+  });
+
+  it("enabled knock without its secret refuses to connect", async () => {
+    await expect(resolveFirstHop(conn("t", { port_knock: { enabled: true } }))).rejects.toThrow(/knock/i);
+  });
+
+  it("firstHopProxy resolves the proxy of a gated host whose sequence is missing", async () => {
+    const target = conn("t", { port_knock: { enabled: true }, proxy: { mode: "system" } });
+    expect(await firstHopProxy(target)).toEqual({ kind: "system" });
+  });
+
+  it("form overrides win: an unsaved sequence and settings are used for detection", async () => {
+    secrets["knock_sequence:t"] = "1/tcp";
+    const route = await resolveDirectHop(conn("t"), { knock: { settings: { enabled: true, settle_ms: 0 }, sequence: "9/tcp" } });
+    expect(route.knock).toEqual({ steps: [{ port: 9, protocol: "tcp" }], delay_ms: 200, settle_ms: 0 });
+  });
+});
+
+describe("resolveProxy under a proxy lock", () => {
+  const lockProxy = (proxy: object) =>
+    usePolicyStore.setState({ machine: { policy: { "appSettings.proxy": proxy }, defaults: {} }, server: { policy: {}, defaults: {} } });
+  beforeEach(() => {
+    for (const k of Object.keys(secrets)) delete secrets[k];
+    setGlobal({ mode: "none" });
+  });
+  afterEach(() => usePolicyStore.setState({ machine: { policy: {}, defaults: {} }, server: { policy: {}, defaults: {} } }));
+
+  it("host proxy cannot bypass a locked proxy", async () => {
+    lockProxy({ mode: "http", host: "p", port: 3128 });
+    expect(await resolveProxy({ id: "c", proxy: { mode: "direct" } })).toEqual({ kind: "http", host: "p", port: 3128 });
+  });
+
+  it("locked proxy keeps the user's username and global password", async () => {
+    lockProxy({ mode: "http", host: "p", port: 3128 });
+    setGlobal({ mode: "none", username: "alice" });
+    secrets["proxy_password:__global__"] = "gp";
+    expect(await resolveProxy({ id: "c", proxy: { mode: "socks5", host: "h" } })).toEqual({
+      kind: "http", host: "p", port: 3128, username: "alice", password: "gp",
+    });
+  });
+
+  it("a typed per-host password is not sent to the locked proxy", async () => {
+    lockProxy({ mode: "http", host: "p", port: 3128 });
+    secrets["proxy_password:__global__"] = "gp";
+    expect(await resolveProxy({ id: "c" }, { password: "x" })).toEqual({ kind: "http", host: "p", port: 3128, password: "gp" });
+  });
+});

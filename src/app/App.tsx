@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import DesktopShell from "@/components/layout/DesktopShell";
-import MobileShell from "@/components/mobile/MobileShell";
-import { usePlatform } from "@/utils/platform";
+import { lazyNamed } from "@/utils/lazyNamed";
+import { isMobilePlatform, usePlatform } from "@/utils/platform";
 import SplashScreen from "@/components/layout/SplashScreen";
+import AppLockOverlay from "@/components/layout/AppLockOverlay";
 import SettingsModal from "@/components/settings/SettingsModal";
 import { ImportExportModal } from "@/components/import-export/ImportExportModal";
 import { SnippetVariableModal } from "@/components/terminal/SnippetVariableModal";
@@ -25,23 +26,40 @@ import { useUpdaterPrefStore } from "@/stores/updaterPrefStore";
 import { restoreWorkspaceOnLaunch } from "@/stores/workspaceRestore";
 import { startLiveSessionPublisher } from "@/services/liveSessionPublisher";
 import { startCrossDeviceSessions } from "@/services/crossDeviceSessions";
+import { startNetworkWatch } from "@/stores/reconnectBackoff";
+import { startIdentityPickRefresh } from "@/services/teamDataManager";
 import { startTeamInbox } from "@/services/teamInbox";
+import { startTeamVaultNames } from "@/services/teamVaultNames";
+import { startTeamDataScrub } from "@/services/teamDataScrub";
 import { startDeepLinks } from "@/services/deepLink";
 import { NotificationToastContainer } from "@/components/notifications/NotificationToastContainer";
 import ThemeCreator from "@/components/theme-creator/ThemeCreator";
 import { TrialExpiredModal } from "@/components/shared/TrialExpiredModal";
 import CloudAuthModal from "@/components/layout/CloudAuthModal";
+import EnrollModal from "@/components/enrollment/EnrollModal";
 import WhatsNewModal from "@/components/changelog/WhatsNewModal";
 import { EmailVerificationRequiredModal } from "@/components/notifications/EmailVerificationRequiredModal";
 import { DeepLinkConfirmModal } from "@/components/terminal/DeepLinkConfirmModal";
+import { FileAccessRequestModal } from "@/components/shared/FileAccessRequestModal";
+import { LanSyncIntroModal } from "@/components/shared/LanSyncIntroModal";
+import { PairDeviceDialog } from "@/components/shared/PairDeviceDialog";
 import { useDeepLinkStore } from "@/stores/deepLinkStore";
 import { GlobalTransferQueue } from "@/components/filetransfer/GlobalTransferQueue";
+import { RuleSetPromptHost } from "@/components/permissions/RuleSetPromptHost";
+import { VaultIdentityDialogHost } from "@/components/connections/VaultIdentityDialog";
+import { setRuleSetMoveConfirmer } from "@/services/teamObjectPersistence";
+import { confirmRuleSetMove } from "@/services/ruleSetMoveGuard";
+import { startSshConfigOnboarding } from "@/services/sshConfig/onboarding";
+
+const MobileShell = lazyNamed(() => import("@/components/mobile/MobileShell"), "default");
+
+setRuleSetMoveConfirmer(confirmRuleSetMove);
 
 function App() {
   const [ready, setReady] = useState(false);
   useKeyboard();
   useInputUndo();
-  useSessionExpiration();
+  useSessionExpiration(ready);
   useApplyTheme();
   useThemeAutomation();
   useApplyUiScale();
@@ -52,7 +70,11 @@ function App() {
   useChangelogAutoOpen();
   useEffect(() => { initUpdaterListener(); useUpdaterPrefStore.getState().load(); }, []);
   useEffect(() => startTeamInbox(), []);
+  useEffect(() => startTeamVaultNames(), []);
+  useEffect(() => startTeamDataScrub(), []);
   useEffect(() => startDeepLinks(), []);
+  useEffect(() => startNetworkWatch(), []);
+  useEffect(() => startIdentityPickRefresh(), []);
   useEffect(() => {
     if (ready) {
       useDeepLinkStore.getState().setReady(true);
@@ -62,6 +84,7 @@ function App() {
       });
     }
   }, [ready]);
+  useEffect(() => (ready ? startSshConfigOnboarding() : undefined), [ready]);
   const platform = usePlatform();
   const globalPendingInject = useSnippetStore((s) => s.globalPendingInject);
   const setGlobalPendingInject = useSnippetStore((s) => s.setGlobalPendingInject);
@@ -71,7 +94,7 @@ function App() {
   }
 
   if (platform === null) return null;
-  const isMobileShell = platform === "android";
+  const isMobileShell = isMobilePlatform(platform);
 
   return (
     <div className="chrome-frame h-full w-full flex flex-col overflow-hidden animate-fadeIn">
@@ -80,12 +103,18 @@ function App() {
       <ImportExportModal />
 
       <NotificationToastContainer />
+      {!isMobileShell && <FileAccessRequestModal />}
       <ThemeCreator />
       <TrialExpiredModal />
       <CloudAuthModal />
+      <EnrollModal />
       <WhatsNewModal />
       <EmailVerificationRequiredModal />
       <DeepLinkConfirmModal />
+      <LanSyncIntroModal />
+      <PairDeviceDialog />
+      <RuleSetPromptHost />
+      <VaultIdentityDialogHost />
       <GlobalTransferQueue />
 
       {/* Global snippet variable modal — triggered from OmniSearch, the
@@ -106,6 +135,7 @@ function App() {
 
       {/* Global snippet sequence variable modal */}
       <PendingSequenceModal />
+      <AppLockOverlay />
     </div>
   );
 }

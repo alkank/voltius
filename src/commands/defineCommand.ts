@@ -1,11 +1,22 @@
 import type { OmniCommand } from "@/plugins/api";
 import { useUIStore, type NavItem } from "@/stores/uiStore";
+import { lazyT } from "@/i18n";
 
-type CommandDef = Omit<OmniCommand, "section"> & { section?: string };
+/** Checked before a palette run: `proceed: false` only reports, `proceed: true` asks for a second Enter. */
+export interface CommandGuard { message: string; proceed: boolean }
+export type CoreCommand = OmniCommand & { guard?: () => CommandGuard | undefined };
+
+export function commandGuard(cmd: OmniCommand): (() => CommandGuard | undefined) | undefined {
+  return (cmd as CoreCommand).guard;
+}
+
+type CommandDef = Omit<CoreCommand, "section"> & { section?: OmniCommand["section"] };
+
+const actionsSection = lazyT("omni.sections.actions");
 
 /** Wrap a command, defaulting it into the "Actions" section. */
-export function defineCommand(def: CommandDef): OmniCommand {
-  return { section: "Actions", ...def };
+export function defineCommand(def: CommandDef): CoreCommand {
+  return { section: actionsSection, ...def };
 }
 
 type NavCommandDef = Omit<CommandDef, "execute"> & { nav: NavItem };

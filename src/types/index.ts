@@ -1,7 +1,14 @@
 import type { KeepalivePreset } from "@/utils/keepalive";
-import type { VaultErrorCode } from "@/services/vaultErrors";
+import type { BackendErrorCode } from "@/services/backendErrors";
+import type { IdentityPickIssue } from "@/services/credentialPlan";
 
 export type AuthType = "password" | "key";
+
+/** Where a new vault object starts: a folder and the vault that holds it. */
+export interface NewObjectPlacement {
+  folderId: string;
+  vaultId: string;
+}
 
 export interface Folder {
   id: string;
@@ -10,7 +17,6 @@ export interface Folder {
   parent_folder_id?: string;
   object_type: string;
   vault_id: string;
-  // Snippet folders only; the backend Folder struct has no color/icon.
   color?: string;
   icon?: string;
   pinned?: boolean;
@@ -24,7 +30,6 @@ export interface FolderFormData {
   parent_folder_id?: string;
   object_type: string;
   vault_id?: string;
-  // Snippet folders only; the backend Folder struct has no color/icon.
   color?: string;
   icon?: string;
   pinned?: boolean;
@@ -98,6 +103,25 @@ export interface EnvVar {
   value: string;
 }
 
+export type CustomProxyMode = "socks5" | "http" | "https";
+export type ProxyMode = "direct" | "system" | CustomProxyMode;
+
+export interface PortKnockSettings {
+  enabled: boolean;
+  delay_ms?: number;
+  settle_ms?: number;
+  window_secs?: number;
+}
+
+export interface ProxyOverride {
+  mode: ProxyMode;
+  host?: string;
+  port?: number;
+  username?: string;
+}
+
+export type ConnectionType = "ssh" | "serial" | "ftp" | "webdav";
+
 export interface Connection {
   id: string;
   name?: string;
@@ -129,8 +153,11 @@ export interface Connection {
   shell_integration?: boolean;
   keepalive_preset?: KeepalivePreset;
   persist_session?: boolean;
-  connection_type?: "ssh" | "serial" | "ftp";
+  proxy?: ProxyOverride;
+  connection_type?: ConnectionType;
   ftp_secure?: boolean;
+  webdav_url?: string;
+  port_knock?: PortKnockSettings;
   notes?: string;
   serial_port?: string;
   serial_baud?: number;
@@ -172,8 +199,11 @@ export interface ConnectionFormData {
   shell_integration?: boolean;
   keepalive_preset?: KeepalivePreset;
   persist_session?: boolean;
-  connection_type?: "ssh" | "serial" | "ftp";
+  proxy?: ProxyOverride;
+  connection_type?: ConnectionType;
   ftp_secure?: boolean;
+  webdav_url?: string;
+  port_knock?: PortKnockSettings;
   notes?: string;
   serial_port?: string;
   serial_baud?: number;
@@ -207,6 +237,23 @@ export interface SerialConnectParams {
   flowControl?: string;
 }
 
+export type SerialLine = "dtr" | "rts";
+
+export type SerialLines = Record<SerialLine, boolean>;
+
+export type IdentitySaveAs = "pick" | "vault-default";
+
+/** Overlay-supplied auth; a field left undefined resolves from the host's stored config. */
+export interface ConnectRetryOverride {
+  username?: string;
+  identityId?: string | null;
+  keyId?: string | null;
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+  saveAs?: IdentitySaveAs;
+}
+
 export interface TerminalSession {
   id: string;
   connectionId: string;
@@ -224,21 +271,29 @@ export interface TerminalSession {
   errorMessage?: string;
   /** Set when the failure was the vault itself, so the overlay can offer to unlock
    * rather than ask for credentials. The message is translated and cannot be matched. */
-  errorCode?: VaultErrorCode;
+  errorCode?: BackendErrorCode;
+  identityPick?: IdentityPickIssue;
+  skipIdentityPick?: boolean;
+  connectedUsername?: string;
   /** Why the auto-reconnect loop is holding off: no network, or past its fast retries. */
   reconnectWait?: "offline" | "slow";
   encoding?: string;
   localShell?: string;
   serialConfig?: SerialConnectParams;
+  /** Serial only: DTR/RTS as last set on the currently open port. */
+  serialLines?: SerialLines;
   /** Serial only, ephemeral sessions: the auto-reconnect preference has no
    * connection to live on, so it is held here for the session's lifetime. */
   autoReconnect?: boolean;
   /** Serial only: port typed at quick-connect time, prefilled into the config overlay. */
   initialSerialPort?: string;
-  containerExec?:
-    | { kind: "docker"; containerId: string; parentSessionId: string }
-    | { kind: "lxc"; vmid: number; parentSessionId: string };
+  containerExec?: ContainerExec;
+  locked?: boolean;
 }
+
+export type ContainerExec =
+  | { kind: "docker"; containerId: string; parentSessionId: string }
+  | { kind: "lxc"; vmid: number; parentSessionId: string };
 
 /** A vault option for context menu move/copy actions. id is the stored team ID or "personal". */
 export interface VaultOption {

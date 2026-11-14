@@ -5,7 +5,11 @@ import type { PendingInvitation, TeamRole } from "@/services/teamService";
 import { inviteByEmailAddress, revokeInvitation } from "@/services/vaultShare";
 import { MiniAvatar } from "@/components/shared/AvatarStack";
 import { BaseCard } from "@/components/shared/BaseCard";
-import { ROLE_META } from "@/components/members/roleChips";
+import { ROLE_META, roleLabel } from "@/components/members/roleChips";
+import { RoleChip } from "@/components/members/roleBadges";
+import { useTeamStore } from "@/stores/teamStore";
+import { inviterLabel } from "@/services/memberLabel";
+import { formatDate, MONTH_DAY } from "@/utils/localeFormat";
 
 const DAY_MS = 86_400_000;
 
@@ -19,6 +23,7 @@ export function PendingInviteCard({
   onResent?: () => void;
 }) {
   const { t } = useTranslation();
+  const roster = useTeamStore((s) => s.membersByTeam[teamId]);
   const [revoking, setRevoking] = useState(false);
   const [resending, setResending] = useState(false);
 
@@ -44,22 +49,25 @@ export function PendingInviteCard({
       // Upserts the existing row and pushes expires_at out another seven days
       // (server teams.rs), so resending needs no dedicated endpoint.
       // inviteByEmailAddress runs its own toast — do not wrap it in another.
-      await inviteByEmailAddress({ teamId, email: inv.display_name, roleName: inv.role });
+      await inviteByEmailAddress({ teamId, email: inv.display_name, roleName: inv.role, roleIds: inv.role_ids });
       onResent?.();
     } catch { /* toast already reports the failure */ }
     finally { setResending(false); }
   };
 
-  const matchedRole = roles.find((r) => r.name === inv.role);
+  const invitedRoles = (inv.role_ids?.length ? inv.role_ids : [])
+    .map((id) => roles.find((r) => r.id === id))
+    .filter((r): r is TeamRole => !!r)
+    .sort((a, b) => a.position - b.position);
   const meta = ROLE_META[inv.role] ?? ROLE_META.member;
-  const chipColor = matchedRole?.color ?? meta.color;
+  const chipColor = roles.find((r) => r.name === inv.role)?.color ?? meta.color;
   const chipBg = meta.bg ?? `${chipColor}1a`;
 
   // The badge already says "Expired", so this line carries the date instead of
   // repeating the word.
   const expiryLabel = isExpired
     ? t("members.invite.expiredOn", {
-        date: new Date(inv.expires_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+        date: formatDate(inv.expires_at, MONTH_DAY),
       })
     : daysLeft <= 0
       ? t("members.invite.expiresToday")
@@ -67,14 +75,13 @@ export function PendingInviteCard({
 
   return (
     <BaseCard isList>
-      <MiniAvatar name={inv.display_name} size={32} />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate text-(--t-text-bright)">{inv.display_name}</p>
-        <p className="text-[10px] truncate" style={{ color: isExpired ? "var(--t-status-error)" : "var(--t-text-dim)" }}>
-          {expiryLabel}
-          {inv.invited_by_display_name && <> · {t("members.invitedBy")} {inv.invited_by_display_name}</>}
-        </p>
-      </div>
+      <MiniAvatar name={inv.member_name ?? inv.display_name} size={28} />
+      <p className="text-sm font-medium-bold truncate w-52 shrink-0 text-(--t-text-bright)">{inv.member_name ?? inv.display_name}</p>
+      <p className="text-xs truncate flex-1 min-w-0 text-(--t-text-secondary)">
+        {inv.member_name && <><span>{inv.display_name}</span> · </>}
+        <span style={{ color: isExpired ? "var(--t-status-error)" : undefined }}>{expiryLabel}</span>
+        {inv.invited_by_display_name && <> · {t("members.invitedBy")} {inviterLabel(inv.invited_by_display_name, roster)}</>}
+      </p>
 
       <span
         className="text-[10px] px-2 py-0.5 rounded-full shrink-0"
@@ -85,9 +92,13 @@ export function PendingInviteCard({
       >
         {isExpired ? t("members.invite.expired") : t("members.pendingBadge")}
       </span>
-      <span className="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ color: chipColor, background: chipBg }}>
-        {inv.role}
-      </span>
+      {invitedRoles.length > 0
+        ? <div className="flex flex-wrap justify-end gap-1">{invitedRoles.map((r) => <RoleChip key={r.id} role={r} />)}</div>
+        : (
+          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ color: chipColor, background: chipBg }}>
+            {roleLabel(t, inv.role)}
+          </span>
+        )}
 
       <button
         title={t("members.invite.resendTitle")}

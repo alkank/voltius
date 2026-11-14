@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import i18n from "@/i18n";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
+import { describeError } from "@/services/backendErrors";
 
 export interface HistoryEntry {
   label: string;
@@ -28,6 +29,7 @@ interface HistoryStore {
   withoutHistory: <T>(fn: () => Promise<T>) => Promise<T>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
+  clear: () => void;
 }
 
 const MAX_HISTORY = 50;
@@ -76,9 +78,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         future: s.future.slice(1),
       }));
       useNotificationStore.getState().addToast({
-        source: { kind: "plugin", id: "core:history", name: "Voltius" },
+        source: APP_SOURCE,
         type: "toast",
-        message: i18n.t("common.toast.undoFailed", { error: err instanceof Error ? err.message : String(err) }),
+        message: i18n.t("common.toast.undoFailed", { error: describeError(err, i18n.t) }),
         severity: "error",
         duration: 4000,
       });
@@ -106,9 +108,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         future: [entry, ...s.future],
       }));
       useNotificationStore.getState().addToast({
-        source: { kind: "plugin", id: "core:history", name: "Voltius" },
+        source: APP_SOURCE,
         type: "toast",
-        message: i18n.t("common.toast.redoFailed", { error: err instanceof Error ? err.message : String(err) }),
+        message: i18n.t("common.toast.redoFailed", { error: describeError(err, i18n.t) }),
         severity: "error",
         duration: 4000,
       });
@@ -120,4 +122,6 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       }));
     }
   },
+
+  clear: () => set({ past: [], future: [], canUndo: false, canRedo: false }),
 }));

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
-import { Checkbox } from "@/components/import-export/shared";
+import { Checkbox } from "@/components/shared/Checkbox";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import type { CatalogEntry } from "@/services/snippetCatalog";
 import { resolveSelection } from "@/services/snippetCatalogSelection";
@@ -120,7 +120,7 @@ export function EntryDetail({ entry, onBack, onInstalled }: {
         onClick={handleInstall}
         disabled={installing || selected.length === 0}
         className="self-start px-4 py-2 rounded-lg text-sm font-semibold transition-opacity disabled:opacity-40"
-        style={{ background: "var(--t-accent)", color: "var(--t-accent-fg)" }}
+        style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
       >
         {installing
           ? t("snippets.community.installing")

@@ -1,4 +1,6 @@
-import { describe, test, expect, beforeEach } from "vitest";
+// @vitest-environment jsdom
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { usePolicyStore } from "@/stores/policyStore";
 import { useSyncPrefsStore, SYNC_SETTING_DOMAINS } from "./syncPrefsStore";
 import { USER_DATA_HANDLERS } from "@/services/user-data/registry";
 
@@ -39,7 +41,11 @@ describe("per-setting overrides", () => {
   );
 
   test("an ordinary key syncs by default", () => {
-    expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.locale")).toBe(true);
+    expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.keepalivePreset")).toBe(true);
+  });
+
+  test("the UI language stays on the device by default", () => {
+    expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.locale")).toBe(false);
   });
 
   test("a device-scoped key does not sync by default", () => {
@@ -49,9 +55,9 @@ describe("per-setting overrides", () => {
   test("an explicit override beats the registry default in both directions", () => {
     const s = useSyncPrefsStore.getState();
     s.setSettingSync("appSettings.terminal.preferredShell", true);
-    s.setSettingSync("appSettings.locale", false);
+    s.setSettingSync("appSettings.keepalivePreset", false);
     expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.terminal.preferredShell")).toBe(true);
-    expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.locale")).toBe(false);
+    expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.keepalivePreset")).toBe(false);
   });
 
   test("a switched-off domain overrides an opted-in key", () => {
@@ -67,6 +73,51 @@ describe("per-setting overrides", () => {
 
   test("a missing or undefined override map does not break the read path", () => {
     useSyncPrefsStore.setState({ settingSyncOverrides: undefined as unknown as Record<string, boolean> });
-    expect(() => useSyncPrefsStore.getState().isSettingSynced("appSettings.locale")).not.toThrow();
+    expect(() => useSyncPrefsStore.getState().isSettingSynced("appSettings.keepalivePreset")).not.toThrow();
+  });
+});
+
+describe("policy locks", () => {
+  const lock = (policy: Record<string, unknown>) =>
+    usePolicyStore.setState({ machine: { policy, defaults: {} }, server: { policy: {}, defaults: {} } });
+  beforeEach(() => {
+    useSyncPrefsStore.setState({ syncSettingDomains: {}, syncTypes: {}, settingSyncOverrides: {} });
+    lock({});
+  });
+  afterEach(() => lock({}));
+
+  test("a locked-off domain overrides the user's on", () => {
+    lock({ "sync.domains.themes": false });
+    expect(useSyncPrefsStore.getState().isDomainSynced("themes")).toBe(false);
+  });
+
+  test("a locked-on domain overrides the user's off", () => {
+    useSyncPrefsStore.setState({ syncSettingDomains: { themes: false } });
+    lock({ "sync.domains.themes": true });
+    expect(useSyncPrefsStore.getState().isDomainSynced("themes")).toBe(true);
+  });
+
+  test("a locked-off type stops object sync", () => {
+    lock({ "sync.types.hosts": false });
+    expect(useSyncPrefsStore.getState().isTypeSynced("hosts")).toBe(false);
+    expect(useSyncPrefsStore.getState().isObjectSynced("x", "hosts")).toBe(false);
+  });
+
+  test("setters are ignored for locked keys", () => {
+    lock({ "sync.domains.themes": false, "sync.types.hosts": false, "sync.settings.appSettings.locale": false });
+    const s = useSyncPrefsStore.getState();
+    s.setSyncSettingDomain("themes", true);
+    s.setSyncType("hosts", true);
+    s.setSettingSync("appSettings.locale", true);
+    expect(useSyncPrefsStore.getState().syncSettingDomains).toEqual({});
+    expect(useSyncPrefsStore.getState().syncTypes).toEqual({});
+    expect(useSyncPrefsStore.getState().settingSyncOverrides).toEqual({});
+  });
+
+  test("a locked per-setting value wins, but a locked-off domain still forces false", () => {
+    lock({ "sync.settings.appSettings.locale": true });
+    expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.locale")).toBe(true);
+    lock({ "sync.settings.appSettings.locale": true, "sync.domains.appSettings": false });
+    expect(useSyncPrefsStore.getState().isSettingSynced("appSettings.locale")).toBe(false);
   });
 });

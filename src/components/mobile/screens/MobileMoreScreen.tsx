@@ -6,13 +6,18 @@ import MobileHeader from "../MobileHeader";
 import { useMobileNavStore } from "@/stores/mobileNavStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
+import { usePlanDisplay } from "@/services/planDisplay";
 import { getCurrentUserEmail } from "@/services/account";
 import type { MorePage } from "@/stores/mobileNavCore";
+import { useVaultStore } from "@/stores/vaultStore";
+import { useTeamStore } from "@/stores/teamStore";
+import { resolveVaultAdminTarget } from "@/components/vault-admin/vaultAdminTarget";
+import { PORT_FORWARDING_ICON } from "@/lib/conceptIcons";
 
 function getPages(t: TFunction): { page: MorePage; label: string; icon: string }[] {
   return [
     { page: "keychain",        label: t("mobile.morePages.keychain"),        icon: "lucide:key-round" },
-    { page: "port-forwarding", label: t("mobile.morePages.portForwarding"),  icon: "lucide:arrow-left-right" },
+    { page: "port-forwarding", label: t("mobile.morePages.portForwarding"),  icon: PORT_FORWARDING_ICON },
     { page: "known-hosts",     label: t("mobile.morePages.knownHosts"),      icon: "lucide:fingerprint-pattern" },
     { page: "members",         label: t("mobile.morePages.members"),         icon: "lucide:users-round" },
     { page: "logs",            label: t("mobile.morePages.logs"),            icon: "lucide:scroll-text" },
@@ -22,18 +27,15 @@ function getPages(t: TFunction): { page: MorePage; label: string; icon: string }
 export default function MobileMoreScreen() {
   const { t } = useTranslation();
   const PAGES = getPages(t);
-  const TIER_LABEL: Record<string, string> = {
-    free: t("mobile.account.tier.free"),
-    pro: t("mobile.account.tier.pro"),
-    teams: t("mobile.account.tier.teams"),
-    business: t("mobile.account.tier.business"),
-  };
   const push = useMobileNavStore((s) => s.push);
   const openSettings = useUIStore((s) => s.openSettings);
   const openCloudAuth = useUIStore((s) => s.openCloudAuth);
   const accountMode = useSubscriptionStore((s) => s.accountMode);
-  const tier = useSubscriptionStore((s) => s.tier);
+  const plan = usePlanDisplay();
   const [email, setEmail] = useState<string | null>(null);
+
+  const activeVaultId = useVaultStore((s) => s.selectedVaultIds[0]);
+  const activeVault = resolveVaultAdminTarget(activeVaultId, useVaultStore((s) => s.vaults), useTeamStore((s) => s.teams));
 
   const signedIn = accountMode === "server";
   useEffect(() => { if (signedIn) void getCurrentUserEmail().then(setEmail); }, [signedIn]);
@@ -42,6 +44,20 @@ export default function MobileMoreScreen() {
     <div className="flex-1 flex flex-col overflow-hidden">
       <MobileHeader />
       <div className="flex-1 overflow-y-auto py-2">
+        {activeVault && (
+          <button
+            data-more-page="vault-settings"
+            className="w-full flex items-center gap-3 px-4 py-3 mb-1 text-left active:bg-(--t-bg-card)"
+            onClick={() => push({ kind: "vault-settings", vaultId: activeVaultId! })}
+          >
+            <Icon icon="lucide:vault" width={20} className="text-(--t-text-dim)" />
+            <span className="flex flex-col min-w-0 flex-1">
+              <span className="text-sm font-medium text-(--t-text-primary)">{t("mobile.vaultSettings.title")}</span>
+              <span className="text-xs text-(--t-text-dim) truncate">{activeVault.name}</span>
+            </span>
+            <Icon icon="lucide:chevron-right" width={16} className="text-(--t-text-dim)" />
+          </button>
+        )}
         {/* Account block */}
         {signedIn ? (
           <button
@@ -54,7 +70,7 @@ export default function MobileMoreScreen() {
             </div>
             <span className="flex flex-col min-w-0 flex-1">
               <span className="text-sm font-medium text-(--t-text-primary) truncate">{email ?? t("mobile.account.title")}</span>
-              <span className="text-xs text-(--t-text-dim)">{t("mobile.more.planLabel", { tier: TIER_LABEL[tier] ?? tier })}</span>
+              <span data-more-plan className="text-xs text-(--t-text-dim) truncate">{plan.line}</span>
             </span>
             <Icon icon="lucide:chevron-right" width={16} className="text-(--t-text-dim)" />
           </button>
@@ -83,6 +99,12 @@ export default function MobileMoreScreen() {
           </button>
         ))}
         <div className="mx-4 my-2 border-t" style={{ borderColor: "var(--t-border)" }} />
+        <button data-more-page="import-export"
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-(--t-bg-card)"
+          onClick={() => useUIStore.getState().openImportExport("import")}>
+          <Icon icon="lucide:arrow-up-down" width={20} className="text-(--t-text-dim)" />
+          <span className="flex-1 text-sm font-medium text-(--t-text-primary)">{t("hosts.toolbar.importExport")}</span>
+        </button>
         <button data-more-page="settings"
           className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-(--t-bg-card)"
           onClick={() => openSettings()}>

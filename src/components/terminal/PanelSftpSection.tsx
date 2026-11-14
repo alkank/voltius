@@ -2,28 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { useSessionStore } from "@/stores/sessionStore";
 import { usePanelSftpStore } from "@/stores/panelSftpStore";
 import { useTerminalCwdStore } from "@/stores/terminalCwdStore";
 import { useTransferQueueStore } from "@/stores/transferQueueStore";
-import { useEditorStore } from "@/stores/editorStore";
+import { openEditorFile } from "@/components/filetransfer/editor/openEditorFile";
 import { useUIStore } from "@/stores/uiStore";
-import { useSftpSettingsStore } from "@/stores/sftpSettingsStore";
-import { tarUsable } from "@/components/filetransfer/tarSupport";
 import {
-  pickLocalPath, pickLocalPaths,
-  sftpDownload, sftpDownloadDir, sftpDownloadDirTar, sftpDownloadBatchTar,
+  pickLocalPaths,
   sftpRename, sftpDelete, sftpExists, fsRename, fsDelete, fsExists,
 } from "@/services/sftp";
 import { FilePane } from "@/components/filetransfer/FilePane";
 import { TransferQueue } from "@/components/filetransfer/TransferQueue";
 import { runIntraPaneMove } from "@/components/filetransfer/moveService";
-import { triggerOsDrop, triggerUpload } from "@/components/filetransfer/osDropPipeline";
+import { triggerOsDrop, triggerUpload, downloadToPickedFolder } from "@/components/filetransfer/osDropPipeline";
 import { hitTestDropTarget, setExternalDragHover, clearExternalDragHover } from "@/components/filetransfer/internalDrag";
 import { useFileClipboardStore, type FileEndpoint } from "@/stores/fileClipboardStore";
 import { buildPasteDeps, executePaste } from "@/components/filetransfer/pasteService";
 import type { FileEntry, VisibleCols } from "@/components/filetransfer/SFTPTypes";
+import { SFTP_ICON } from "@/lib/conceptIcons";
 
 const PANEL_VISIBLE_COLS: VisibleCols = { size: false, modified: false, permissions: false };
 
@@ -169,34 +167,8 @@ export default function PanelSftpSection() {
   const canDownload = panelState?.tag === "connected" && !panelState.isLocal && selected.length > 0;
   const downloadFiles = useCallback(async (files: FileEntry[]) => {
     if (files.length === 0 || panelState?.tag !== "connected" || panelState.isLocal || !panelState.sftpId) return;
-    const dstDir = await pickLocalPath({ directory: true, title: t("terminal.sftp.downloadDialogTitle") });
-    if (!dstDir) return;
-    const sftpId = panelState.sftpId;
-    const base = dstDir.replace(/[\\/]$/, "");
-    const label = files.length === 1 ? files[0].name : `${files.length} items`;
-    // Archives remotely + extracts locally, so both ends need tar.
-    const useTar = await tarUsable([sftpId], true);
-
-    if (useTar && files.length > 1) {
-      await runTransfer(label, "←", (tid) =>
-        sftpDownloadBatchTar({ sftpId, remotePaths: files.map((f) => f.path), localDir: base, transferId: tid }),
-        undefined, true,
-      );
-      return;
-    }
-
-    for (const file of files) {
-      const sep = /[\\/]/.test(base) && /\\/.test(base) ? "\\" : "/";
-      const localPath = `${base}${sep}${file.name}`;
-      await runTransfer(file.name, "←", (tid) => file.isDir
-        ? (useTar
-            ? sftpDownloadDirTar({ sftpId, remotePath: file.path, localPath, transferId: tid })
-            : sftpDownloadDir({ sftpId, remotePath: file.path, localPath, transferId: tid }))
-        : sftpDownload({ sftpId, remotePath: file.path, localPath, transferId: tid }),
-        undefined, file.isDir && useTar,
-      );
-    }
-  }, [panelState, runTransfer]);
+    await downloadToPickedFolder(files, panelState.sftpId);
+  }, [panelState]);
   const handleDownload = useCallback(() => { void downloadFiles(selected); }, [downloadFiles, selected]);
 
   const moveWithin = useCallback(async (files: FileEntry[], targetDir: string) => {
@@ -232,12 +204,7 @@ export default function PanelSftpSection() {
 
   const handleEdit = useCallback((path: string) => {
     if (panelState?.tag !== "connected") return;
-    useEditorStore.getState().openDoc({
-      sftpId: panelState.isLocal ? null : panelState.sftpId,
-      path,
-      hostLabel: panelHostLabel,
-      autoSave: useSftpSettingsStore.getState().editorAutoSave,
-    });
+    openEditorFile({ sftpId: panelState.isLocal ? null : panelState.sftpId, path, hostLabel: panelHostLabel });
     useUIStore.getState().setSftpPanelOpen(true);
   }, [panelState, panelHostLabel]);
 
@@ -318,7 +285,7 @@ export default function PanelSftpSection() {
             ) : panelState?.tag === "connecting" ? (
               <Icon icon="lucide:loader-circle" width={16} className="animate-spin text-(--t-text-dim)" />
             ) : (
-              <Icon icon="lucide:folder-tree" width={20} className="text-(--t-text-dim)" />
+              <Icon icon={SFTP_ICON} width={20} className="text-(--t-text-dim)" />
             )}
             <p className={`text-xs ${panelState?.tag === "error" ? "text-(--t-status-error)" : "text-(--t-text-dim)"}`}>{headerStatus}</p>
           </div>
@@ -329,6 +296,7 @@ export default function PanelSftpSection() {
             sftpId={panelState.sftpId}
             isLocal={panelState.isLocal}
             cwd={panelState.cwd}
+            homeCwd={panelState.homeCwd}
             hostLabel={panelHostLabel}
             onNavigate={handleNavigate}
             onSelect={setSelected}

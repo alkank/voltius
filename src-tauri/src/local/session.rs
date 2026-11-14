@@ -1,69 +1,79 @@
-use crate::local::gate::OutputGate;
+use crate::local::flatpak;
 use crate::shell_integration;
+use crate::terminal_output::{emit_closed, emit_output, TerminalOutputs};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::AppHandle;
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager};
 use tokio::sync;
 
 pub struct LocalSession {
     pub input_tx: std::sync::mpsc::SyncSender<Vec<u8>>,
-    pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
-    pub child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    pub master: SharedMaster,
+    pub child: SharedChild,
     pub tempfiles: Vec<PathBuf>,
+}
+
+type SharedChild = Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>;
+type SharedMaster = Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>;
+
+const EXIT_REAP_WAIT: Duration = Duration::from_secs(2);
+
+// The pty can hit EOF just before the child is reaped; an unknown status counts
+// as unclean so the tab stays open with whatever the shell printed.
+pub(crate) fn exited_cleanly(child: &SharedChild, wait: Duration) -> bool {
+    let deadline = Instant::now() + wait;
+    loop {
+        match child.lock().unwrap().try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => {}
+            _ => return false,
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+// ConPTY keeps the output pipe open after the shell exits, so the reader never
+// sees EOF until the pseudoconsole is closed by dropping the master.
+#[cfg(windows)]
+fn close_console_on_exit(child: &SharedChild, master: SharedMaster) {
+    use std::os::windows::io::{AsRawHandle, BorrowedHandle};
+    use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+    let Some(raw) = child.lock().unwrap().as_raw_handle() else {
+        return;
+    };
+    let Ok(process) = unsafe { BorrowedHandle::borrow_raw(raw) }.try_clone_to_owned() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        unsafe { WaitForSingleObject(process.as_raw_handle() as _, INFINITE) };
+        master.lock().unwrap().take();
+    });
 }
 
 pub struct LocalSessionManager {
     sessions: Arc<sync::Mutex<HashMap<String, LocalSession>>>,
-    /// Startup-output gates, keyed by session id. Created by whichever of
-    /// `spawn` and `mark_ready` runs first — the frontend registers its
-    /// listeners concurrently with the spawn, so either order happens.
-    gates: Mutex<HashMap<String, Arc<OutputGate>>>,
 }
 
-/// Boot the default WSL distro synchronously so an interactive session doesn't
-/// race its cold start. Runs hidden (no console window) and ignores failures.
+/// Boot the default WSL distro before attaching so an interactive session doesn't
+/// race its cold start. Runs hidden (no console window) and ignores failures and hangs.
 #[cfg(windows)]
-fn prewarm_wsl(wsl_path: &str) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ = std::process::Command::new(wsl_path)
-        .args(["--", "true"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
+async fn prewarm_wsl(wsl_path: &str) {
+    use crate::commands::{win_proc, wsl};
+    let mut cmd = tokio::process::Command::new(wsl_path);
+    cmd.args(["--", "true"]);
+    win_proc::prevent_visible_child_window(&mut cmd);
+    wsl::output_within(cmd, wsl::BOOT_TIMEOUT).await;
 }
 
 impl LocalSessionManager {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(sync::Mutex::new(HashMap::new())),
-            gates: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// The gate for a session id, creating it on first use. Both event names
-    /// are derived here so the spawn and the readiness ack can never disagree.
-    fn gate(&self, session_id: &str) -> Arc<OutputGate> {
-        Arc::clone(
-            self.gates
-                .lock()
-                .unwrap()
-                .entry(session_id.to_string())
-                .or_insert_with(|| {
-                    Arc::new(OutputGate::new(
-                        format!("local-output-{}", session_id),
-                        format!("local-closed-{}", session_id),
-                    ))
-                }),
-        )
-    }
-
-    /// The frontend has registered its output listeners: replay whatever the
-    /// shell wrote before that and go live.
-    pub fn mark_ready(&self, app: &AppHandle, session_id: &str) {
-        self.gate(session_id).release(app);
     }
 
     pub async fn spawn(
@@ -93,7 +103,11 @@ impl LocalSessionManager {
             }
             #[cfg(not(windows))]
             {
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+                flatpak::spawns_on_host()
+                    .then(flatpak::host_login_shell)
+                    .flatten()
+                    .or_else(|| std::env::var("SHELL").ok())
+                    .unwrap_or_else(|| "/bin/bash".to_string())
             }
         });
 
@@ -111,8 +125,7 @@ impl LocalSessionManager {
                 .map(|s| s.eq_ignore_ascii_case("wsl"))
                 .unwrap_or(false);
             if is_wsl {
-                let wsl = shell.clone();
-                let _ = tokio::task::spawn_blocking(move || prewarm_wsl(&wsl)).await;
+                prewarm_wsl(&shell).await;
             }
         }
 
@@ -126,24 +139,27 @@ impl LocalSessionManager {
             None
         };
 
-        let mut cmd = if let Some(ref info) = integration {
-            let mut c = CommandBuilder::new(&info.program);
-            for arg in &info.args {
-                c.arg(arg);
-            }
-            for (k, v) in &info.env {
+        let (program, args, mut env) = match integration {
+            Some(ref info) => (info.program.clone(), info.args.clone(), info.env.clone()),
+            None => (shell, Vec::new(), Vec::new()),
+        };
+        env.push(("TERM".into(), "xterm-256color".into()));
+
+        let cmd = if flatpak::spawns_on_host() {
+            flatpak::host_command(&program, &args, &env, cwd.as_deref())
+        } else {
+            let mut c = CommandBuilder::new(&program);
+            c.args(&args);
+            for (k, v) in &env {
                 c.env(k, v);
             }
+            // A directory that has since been removed would fail the spawn outright;
+            // starting in the default one beats not starting at all.
+            if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
+                c.cwd(dir);
+            }
             c
-        } else {
-            CommandBuilder::new(&shell)
         };
-        cmd.env("TERM", "xterm-256color");
-        // A directory that has since been removed would fail the spawn outright;
-        // starting in the default one beats not starting at all.
-        if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
-            cmd.cwd(dir);
-        }
 
         let child = pair
             .slave
@@ -163,26 +179,27 @@ impl LocalSessionManager {
             .take_writer()
             .map_err(|e| format!("Failed to take PTY writer: {e}"))?;
 
-        let master = Arc::new(Mutex::new(pair.master));
+        let master = Arc::new(Mutex::new(Some(pair.master)));
         let child = Arc::new(Mutex::new(child));
+        #[cfg(windows)]
+        close_console_on_exit(&child, Arc::clone(&master));
 
         let (input_tx, input_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(256);
 
-        // Reader thread — PTY output → Tauri event, through the startup gate so
-        // the banner and first prompt survive a listener that isn't up yet.
-        let gate = self.gate(&session_id);
+        // The banner and first prompt arrive before the terminal has subscribed.
+        app.state::<TerminalOutputs>().gate(&session_id);
         let app_r = app.clone();
+        let id_r = session_id.clone();
+        let child_r = Arc::clone(&child);
         std::thread::spawn(move || {
             let mut buf = vec![0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => {
-                        gate.closed(&app_r);
+                        emit_closed(&app_r, &id_r, exited_cleanly(&child_r, EXIT_REAP_WAIT));
                         break;
                     }
-                    Ok(n) => {
-                        gate.output(&app_r, &buf[..n]);
-                    }
+                    Ok(n) => emit_output(&app_r, &id_r, &buf[..n]),
                 }
             }
         });
@@ -221,29 +238,65 @@ impl LocalSessionManager {
             let session = sessions.get(id).ok_or("Session not found")?;
             Arc::clone(&session.master)
         };
-        let result = master
-            .lock()
-            .unwrap()
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string());
-        result
+        let guard = master.lock().unwrap();
+        let Some(pty) = guard.as_ref() else {
+            return Ok(());
+        };
+        pty.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())
     }
 
-    pub async fn disconnect(&self, id: &str) -> Result<(), String> {
+    pub async fn disconnect(&self, app: &AppHandle, id: &str) -> Result<(), String> {
         let removed = {
             let mut sessions = self.sessions.lock().await;
             sessions.remove(id)
         };
-        self.gates.lock().unwrap().remove(id);
+        app.state::<TerminalOutputs>().remove(id);
         if let Some(s) = removed {
             let _ = s.child.lock().unwrap().kill();
             shell_integration::cleanup(&s.tempfiles);
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    // The master is returned so it outlives the child: dropping it hangs the
+    // pty up and the child dies of SIGHUP before running its script.
+    fn spawn_sh(script: &str) -> (Box<dyn portable_pty::MasterPty + Send>, SharedChild) {
+        let pair = native_pty_system()
+            .openpty(PtySize::default())
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", script]);
+        let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+        (pair.master, Arc::new(Mutex::new(child)))
+    }
+
+    #[test]
+    fn a_zero_exit_is_clean() {
+        let (_master, child) = spawn_sh("exit 0");
+        assert!(exited_cleanly(&child, Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_failing_shell_is_not_clean() {
+        let (_master, child) = spawn_sh("exit 3");
+        assert!(!exited_cleanly(&child, Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_child_still_running_when_the_wait_ends_is_not_clean() {
+        let (_master, child) = spawn_sh("sleep 5");
+        assert!(!exited_cleanly(&child, Duration::from_millis(100)));
+        let _ = child.lock().unwrap().kill();
     }
 }

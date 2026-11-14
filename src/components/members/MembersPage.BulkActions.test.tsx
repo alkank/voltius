@@ -14,10 +14,12 @@ const h = vi.hoisted(() => ({
   removeMemberRole: vi.fn(),
   removeMember: vi.fn(),
   push: vi.fn(),
+  teams: [] as { id: string; name: string; owner_id: string; owner_tier: string; created_at: string; role_ids: string[] }[],
   teamRoles: [
     { id: "r-owner", team_id: "t1", name: "owner", is_builtin: true, permissions: 0, position: 0, created_at: "" },
     { id: "r-mem", team_id: "t1", name: "member", is_builtin: true, permissions: 0, position: 1, created_at: "" },
     { id: "r-ed", team_id: "t1", name: "editor", is_builtin: false, permissions: 0, position: 2, created_at: "" },
+    { id: "r-view", team_id: "t1", name: "connect-only", is_builtin: true, permissions: 0, position: 3, created_at: "" },
   ],
   members: [
     { team_id: "t1", user_id: "me", invited_by_display_name: null, joined_at: "2024-01-01T00:00:00Z", handle: "merry-quartz-2597", public_key: "pk", role_ids: ["r-mem"] },
@@ -31,6 +33,7 @@ vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: () => {} },
 }));
 vi.mock("@iconify/react", () => ({ Icon: () => null }));
+vi.mock("@/components/members/cards/JoinRequests", () => ({ JoinRequestsSection: () => null }));
 vi.mock("@/components/shared/StatusDot", () => ({ StatusDot: () => null }));
 vi.mock("@/components/shared/Panel", () => ({
   PanelShell: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -46,7 +49,11 @@ vi.mock("@/components/shared/SidePanelLayout", () => ({
 vi.mock("@/components/shared/DragSelectSurface", () => ({
   DragSelectSurface: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
-vi.mock("@/components/shared/ToolbarViewControls", () => ({ ToolbarViewControls: () => null }));
+vi.mock("@/components/shared/ToolbarViewControls", () => ({
+  ToolbarViewControls: ({ search, onSearchChange }: { search: string; onSearchChange: (v: string) => void }) => (
+    <input value={search} onChange={(e) => onSearchChange(e.target.value)} />
+  ),
+}));
 
 // Exposes each card's onClick (selection) and flattens context-menu / bulk-menu
 // items into clickable leaf buttons so their handlers can be invoked directly.
@@ -75,6 +82,7 @@ vi.mock("@/components/shared/BaseCard", () => ({
         >
           {id}
         </button>
+        <div data-testid={`body-${id}`}>{props.children as React.ReactNode}</div>
         {renderMenu(props.contextMenuItems as ContextMenuItem[] | undefined, `ctx-${id}`)}
         {renderMenu(props.bulkContextMenuItems as ContextMenuItem[] | undefined, `bulk-${id}`)}
       </div>
@@ -124,7 +132,7 @@ vi.mock("@/stores/vaultStore", () => {
 
 vi.mock("@/stores/teamStore", () => {
   const state = {
-    teams: [],
+    teams: h.teams,
     loadTeams: h.loadTeams,
     membersByTeam: { t1: h.members },
     loadMembers: h.loadMembers,
@@ -145,7 +153,7 @@ vi.mock("@/stores/teamStore", () => {
   return { useTeamStore };
 });
 vi.mock("@/stores/subscriptionStore", () => {
-  const state = { isTeams: true, accountMode: "server", usedSeats: 1, totalSeats: 5, load: vi.fn() };
+  const state = { isTeams: true, ownsTeamsPlan: true, accountMode: "server", usedSeats: 1, totalSeats: 5, load: vi.fn() };
   const useSubscriptionStore = Object.assign(
     (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state),
     { getState: () => state },
@@ -158,8 +166,8 @@ vi.mock("@/stores/uiStore", () => {
     membersSortMode: "name-asc",
     setMembersLayoutMode: vi.fn(),
     setMembersSortMode: vi.fn(),
-    membersInvitePending: false,
-    clearMembersInvitePending: vi.fn(),
+    membersPanelPending: null,
+    clearMembersPanelPending: vi.fn(),
     openSettings: vi.fn(),
     openCloudAuth: vi.fn(),
   };
@@ -204,7 +212,7 @@ beforeEach(() => {
   h.removeMemberRole.mockResolvedValue(undefined);
   h.removeMember.mockResolvedValue(undefined);
 });
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); h.teams.length = 0; h.members.length = 3; });
 
 async function renderPage() {
   render(<MembersPage />);
@@ -264,22 +272,65 @@ test("cancelling the bulk confirmation removes nobody", async () => {
   expect(h.push).not.toHaveBeenCalled();
 });
 
-test("bulk assign role: assignMemberRole(editor) for both, push assignRoleBulk", async () => {
+test("bulk assign role: assignMemberRole(editor) only for members lacking it, push assignRoleBulk", async () => {
   await renderPage();
   selectU1U2();
-  fireEvent.click(screen.getByTestId("bulk-u1::members.contextMenu.assignRoleBulk::editor"));
+  fireEvent.click(screen.getByTestId("bulk-u1::members.contextMenu.assignRoleBulk::members.roleName.editor"));
 
   await waitFor(() => expect(h.push).toHaveBeenCalled());
-  expect(h.assignMemberRole).toHaveBeenCalledWith("t1", "u1", "r-ed");
   expect(h.assignMemberRole).toHaveBeenCalledWith("t1", "u2", "r-ed");
-  expect(h.assignMemberRole).toHaveBeenCalledTimes(2);
+  expect(h.assignMemberRole).toHaveBeenCalledTimes(1);
   expect(h.push).toHaveBeenCalledWith(expect.objectContaining({ label: "members.history.assignRoleBulk" }));
+});
+
+type HistoryEntry = { undo: () => Promise<void>; redo: () => Promise<void> };
+const pushedEntry = () => h.push.mock.calls[0][0] as HistoryEntry;
+
+test("bulk assign role undo keeps the role on members who already had it (#808)", async () => {
+  await renderPage();
+  selectU1U2();
+  fireEvent.click(screen.getByTestId("bulk-u1::members.contextMenu.assignRoleBulk::members.roleName.editor"));
+  await waitFor(() => expect(h.push).toHaveBeenCalled());
+
+  await act(() => pushedEntry().undo());
+  expect(h.removeMemberRole).toHaveBeenCalledWith("t1", "u2", "r-ed");
+  expect(h.removeMemberRole).toHaveBeenCalledTimes(1);
+
+  h.assignMemberRole.mockClear();
+  await act(() => pushedEntry().redo());
+  expect(h.assignMemberRole).toHaveBeenCalledWith("t1", "u2", "r-ed");
+  expect(h.assignMemberRole).toHaveBeenCalledTimes(1);
+});
+
+test("bulk remove role undo gives the role back only to members who had it", async () => {
+  await renderPage();
+  selectU1U2();
+  fireEvent.click(screen.getByTestId("bulk-u1::members.contextMenu.removeRoleBulk::members.roleName.editor"));
+  await waitFor(() => expect(h.push).toHaveBeenCalled());
+
+  await act(() => pushedEntry().undo());
+  expect(h.assignMemberRole).toHaveBeenCalledWith("t1", "u1", "r-ed");
+  expect(h.assignMemberRole).toHaveBeenCalledTimes(1);
+
+  h.removeMemberRole.mockClear();
+  await act(() => pushedEntry().redo());
+  expect(h.removeMemberRole).toHaveBeenCalledWith("t1", "u1", "r-ed");
+  expect(h.removeMemberRole).toHaveBeenCalledTimes(1);
+});
+
+test("a refused bulk remove role is reported, not left unhandled", async () => {
+  h.removeMemberRole.mockRejectedValue(new Error("forbidden"));
+  await renderPage();
+  selectU1U2();
+  fireEvent.click(screen.getByTestId("bulk-u1::members.contextMenu.removeRoleBulk::members.roleName.editor"));
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  expect(h.push).not.toHaveBeenCalled();
 });
 
 test("bulk remove role: removeMemberRole only for members who have that role", async () => {
   await renderPage();
   selectU1U2();
-  fireEvent.click(screen.getByTestId("bulk-u1::members.contextMenu.removeRoleBulk::editor"));
+  fireEvent.click(screen.getByTestId("bulk-u1::members.contextMenu.removeRoleBulk::members.roleName.editor"));
 
   await waitFor(() => expect(h.push).toHaveBeenCalled());
   // only u1 has r-ed; u2 does not -> exactly one removeMemberRole
@@ -306,7 +357,7 @@ test("single-member context menu kick: confirms, then removeMember + push remove
 test("single-member context menu assign unassigned role: assignMemberRole + push assignRole", async () => {
   await renderPage();
   // u2 lacks editor -> editor appears as an unassigned toggle under Roles
-  fireEvent.click(screen.getByTestId("ctx-u2::members.roles::editor"));
+  fireEvent.click(screen.getByTestId("ctx-u2::members.roles::members.roleName.editor"));
 
   await waitFor(() => expect(h.push).toHaveBeenCalled());
   expect(h.assignMemberRole).toHaveBeenCalledWith("t1", "u2", "r-ed");
@@ -316,9 +367,71 @@ test("single-member context menu assign unassigned role: assignMemberRole + push
 test("single-member context menu remove assigned role: removeMemberRole + push removeRole", async () => {
   await renderPage();
   // u1 has editor -> editor appears as an assigned toggle under Roles
-  fireEvent.click(screen.getByTestId("ctx-u1::members.roles::editor"));
+  fireEvent.click(screen.getByTestId("ctx-u1::members.roles::members.roleName.editor"));
 
   await waitFor(() => expect(h.push).toHaveBeenCalled());
   expect(h.removeMemberRole).toHaveBeenCalledWith("t1", "u1", "r-ed");
   expect(h.push).toHaveBeenCalledWith(expect.objectContaining({ label: "members.history.removeRole" }));
+});
+
+const lockTeam = () => h.teams.push({ id: "t1", name: "T", owner_id: "someone", owner_tier: "teams", created_at: "", role_ids: [] });
+
+test("locked team: the per-member Roles menu omits unassigned custom roles, keeps builtin and assigned ones", async () => {
+  lockTeam();
+  await renderPage();
+  expect(screen.queryByTestId("ctx-u2::members.roles::members.roleName.editor")).toBeNull();
+  expect(screen.getByTestId("ctx-u2::members.roles::members.roleName.connect-only")).toBeTruthy();
+  expect(screen.getByTestId("ctx-u1::members.roles::members.roleName.editor")).toBeTruthy();
+});
+
+test("locked team: bulk Assign role omits a custom role not held by everyone, keeps builtin", async () => {
+  lockTeam();
+  await renderPage();
+  selectU1U2();
+  const base = "bulk-u1::members.contextMenu.assignRoleBulk::";
+  expect(screen.queryByTestId(`${base}members.roleName.editor`)).toBeNull();
+  expect(screen.getByTestId(`${base}members.roleName.connect-only`)).toBeTruthy();
+  expect(screen.getByTestId("bulk-u1::members.contextMenu.removeRoleBulk::members.roleName.editor")).toBeTruthy();
+});
+
+test("a refused assign from the per-member menu is reported, not left unhandled", async () => {
+  h.assignMemberRole.mockRejectedValue(new Error("plan required"));
+  await renderPage();
+  fireEvent.click(screen.getByTestId("ctx-u2::members.roles::members.roleName.editor"));
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  expect(h.push).not.toHaveBeenCalled();
+});
+
+const namedMember = (user_id: string, handle: string, member_name: string | null) => ({
+  team_id: "t1", user_id, invited_by_display_name: null, joined_at: "2024-01-05T00:00:00Z", handle, member_name, public_key: "pk", role_ids: ["r-mem"],
+});
+
+test("roster shows member names with their handles", async () => {
+  h.members.push(namedMember("u3", "swift-otter-1", "Jan Novák"));
+  await renderPage();
+  expect(screen.getByText("Jan Novák")).toBeTruthy();
+  expect(screen.getByText("@swift-otter-1")).toBeTruthy();
+});
+
+test("search matches a member name", async () => {
+  h.members.push(namedMember("u3", "swift-otter-1", "Jan Novák"));
+  await renderPage();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "novák" } });
+  expect(screen.queryByTestId("card-u1")).toBeNull();
+  expect(screen.getByTestId("card-u3")).toBeTruthy();
+});
+
+test("names and handles sort together alphabetically", async () => {
+  h.members.push(namedMember("u3", "zed-1", "Jan"), namedMember("u4", "zzz-9", "Aaron"));
+  await renderPage();
+  const ids = screen.getAllByTestId(/^card-/).map((c) => c.getAttribute("data-testid"));
+  expect(ids).toEqual(["card-u4", "card-u1", "card-u2", "card-u3", "card-me"]);
+});
+
+test("a refused remove from the per-member menu is reported, not left unhandled", async () => {
+  h.removeMemberRole.mockRejectedValue(new Error("forbidden"));
+  await renderPage();
+  fireEvent.click(screen.getByTestId("ctx-u1::members.roles::members.roleName.editor"));
+  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+  expect(h.push).not.toHaveBeenCalled();
 });

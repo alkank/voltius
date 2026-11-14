@@ -1,13 +1,34 @@
 {
   "shared": {
+    "signOutConfirm": {
+      "title": "Sign out and erase this device's data?",
+      "noServerCopy": "This account's hosts, keys and snippets are stored only on this device. Signing out erases them and they cannot be recovered.",
+      "unsynced": "Sync is paused or could not reach the server, so recent changes on this device may not be saved there. Signing out erases this device's copy.",
+      "confirm": "Erase and sign out"
+    },
+    "deleteAccount": {
+      "action": "Delete account",
+      "actionSub": "Permanently delete your Voltius cloud account and its data",
+      "title": "Delete your Voltius account?",
+      "message": "This permanently deletes your cloud account, your encrypted vault and all cloud sync data from the Voltius server. You also leave any team you are a member of. This cannot be undone.",
+      "deviceNote": "This device is then signed out and its local copy of your hosts, keys and snippets is erased, as with Sign out. Copies on your other devices are not removed remotely.",
+      "subscriptionNote": "Your subscription is cancelled along with your account: it will not renew and you will not be charged again.",
+      "typeToConfirm": "Type {{target}} to confirm",
+      "confirm": "Delete account",
+      "deleting": "Deleting…",
+      "deletedTitle": "Account deleted",
+      "deleted": "Your Voltius account has been deleted.",
+      "failed": "Could not delete your account (error {{status}}). Try again later, or contact support.",
+      "ownsTeamWithMembers": "You are the only Owner of a team that still has other members ({{teams}}). Make another member an Owner, remove the members or delete the team, then try again.",
+      "subscriptionCancelFailed": "Your subscription could not be cancelled, so your account was not deleted. Try again in a few minutes, or contact support."
+    },
     "errorBanner": {
       "dismiss": "dismiss"
     },
     "trialExpiredModal": {
       "title": "Your Pro trial has ended",
       "subtitle": "These three stop working today:",
-      "freeNote": "Local vault, audit logs and GitHub Gist sync stay free, forever.",
-      "teamsPrompt": "Working with others? Teams adds shared vaults and seats.",
+      "teamsPrompt": "Working with others? Try Teams free for {{days}} days (card required).",
       "upgradeButton": "Upgrade to Pro",
       "laterButton": "Maybe later"
     },
@@ -63,7 +84,8 @@
       "memberBadge": "member"
     },
     "pickers": {
-      "thisComputer": "This computer"
+      "thisComputer": "This computer",
+      "recent": "Recent"
     },
     "sessionPicker": {
       "insertTitle": "Insert to...",
@@ -86,7 +108,8 @@
       "localMachineName": "Local Machine",
       "wslSub": "WSL",
       "noHostsConfigured": "No hosts configured",
-      "noHostsMatch": "No hosts match"
+      "noHostsMatch": "No hosts match",
+      "allVaults": "All vaults"
     },
     "sort": {
       "nameAsc": "A → Z",
@@ -110,9 +133,6 @@
     "vaultUnavailable": {
       "note": "The vault could not be read, so stored secrets are not shown here. Leave a field empty to keep what is saved; typing a new value replaces it."
     },
-    "storedSecrets": {
-      "forbidden": "Your role in this vault cannot see stored secrets, so these fields are left blank. Connecting still works — the saved credential is used without being shown."
-    },
     "teamCredentials": {
       "unavailable": "Stored credentials for this team vault could not be loaded, so hosts that need a saved password, key, or passphrase will fail to connect. Ask a vault administrator to grant your role access to the vault's secrets."
     },
@@ -130,6 +150,51 @@
     },
     "tunnelStatus": {
       "noRemoteListener": "Nothing is listening on the remote port"
-    }
+    },
+    "permissions": {
+      "everyone": "@everyone",
+      "moveWarning": {
+        "title": "Permissions will change",
+        "body": "Moving here applies this folder's permissions:",
+        "bodyUnknown": "Moving here applies this folder's permissions.",
+        "line": "{{subject}} · {{permission}}: {{before}} → {{after}}",
+        "confirm": "Move",
+        "cancelled": "Move cancelled"
+      },
+      "section": {
+        "title": "Permissions",
+        "titleKey": "Who can use this key",
+        "titleIdentity": "Who can use this identity",
+        "adminNote": "Owners and admins can always use every key.",
+        "syncedWith": "Synced with {{folder}}",
+        "syncedTeam": "Uses the team's permissions",
+        "notSynced": "Not synced",
+        "syncNow": "Sync now",
+        "ownPermissions": "Own permissions",
+        "useTeams": "Use team's",
+        "addSubject": "Add role or member",
+        "searchSubjects": "Search roles and members…",
+        "noSubjectsLeft": "Every role and member is already listed",
+        "use": "Use",
+        "requiresConnect": "Needs {{connect}}",
+        "roleCount_one": "{{count}} role",
+        "roleCount_other": "{{count}} roles",
+        "loadFailed": "Could not load permissions"
+      }
+    },
+    "businessLock": {
+      "title": "Business plan feature",
+      "upgrade": "Upgrade to Business",
+      "ownerOnly": "Only the team owner can upgrade.",
+      "removeRules": "Remove rules",
+      "confirmClear": "Click again to remove",
+      "rolesBody": "Custom roles need the team's Business plan.",
+      "memberLapsed": "Business plan lapsed: permissions granted to {{name}} are off; restrictions still apply.",
+      "objectLapsed": "Business plan lapsed: allow rules are off; deny rules still apply.",
+      "memberLine": "Per-member permissions need Business.",
+      "objectLine": "Per-object permissions need Business.",
+      "removeOverrides": "Remove overrides"
+    },
+    "availableWith": "Available with {{plan}}"
   }
 }

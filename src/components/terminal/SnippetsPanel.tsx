@@ -2,11 +2,12 @@ import { readClipboard } from "../../utils/clipboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
-import { useSnippetStore } from "@/stores/snippetStore";
+import { FolderGlyph } from "@/components/folders/folderAppearance";
+import { useSnippetStore, type SnippetDraft } from "@/stores/snippetStore";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useConnectionStore } from "@/stores/connectionStore";
-import { broadcastSnippetInject } from "@/services/snippets";
+import { broadcastSnippetInject } from "@/services/snippetInject";
 import {
   parseVariables,
   needsUserInput,
@@ -17,15 +18,19 @@ import {
   type DynamicContext,
 } from "@/services/snippetParser";
 import { buildDynamicContext } from "@/services/snippetRunCore";
+import { SectionHeader } from "@/components/shared/SectionHeader";
 import { PickerSurface } from "@/components/shared/PickerSurface";
 import { MenuItemList, type ContextMenuItem } from "@/components/shared/ContextMenu";
 import { runSnippetSequence, reportSequenceResult } from "@/services/snippetSequence";
-import { snippetScriptText, snippetSearchText } from "@/services/snippetSteps";
+import { snippetMatcher, snippetScriptText } from "@/services/snippetSteps";
+import { SnippetPreview } from "@/components/snippets/HighlightedScript";
 import { SnippetVariableModal } from "@/components/terminal/SnippetVariableModal";
 import { SnippetForm } from "@/components/snippets/SnippetForm";
 import { useSyncedFormKey } from "@/hooks/useSyncedFormKey";
+import { useCloseWhenGone } from "@/hooks/useCloseWhenGone";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { itemsInFolderSubtree } from "@/utils/folderTree";
+import { copyingRulesOf } from "@/services/ruleSetIntent";
 import type { Snippet, Folder, SnippetFormData, FolderFormData } from "@/types";
 import type { Connection } from "@/types";
 
@@ -159,11 +164,11 @@ function SnippetRow({
               {snippet.name}
             </p>
             {snippet.favorite && (
-              <Icon icon="lucide:star" width={10} style={{ color: "var(--t-accent)", flexShrink: 0 }} />
+              <Icon icon="lucide:pin" width={10} style={{ color: "var(--t-accent)", flexShrink: 0 }} />
             )}
           </div>
           <p className="text-[11px] font-mono truncate mt-0.5 leading-tight" style={{ color: "var(--t-text-muted)" }}>
-            {snippetSearchText(snippet)}
+            <SnippetPreview snippet={snippet} />
           </p>
           {snippet.tags.length > 0 && (
             <div className="flex gap-1 mt-1 flex-wrap">
@@ -183,7 +188,7 @@ function SnippetRow({
             style={{ color: snippet.favorite ? "var(--t-accent)" : "var(--t-text-muted)" }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t-accent)")}
             onMouseLeave={(e) => (e.currentTarget.style.color = snippet.favorite ? "var(--t-accent)" : "var(--t-text-muted)")}>
-            <Icon icon={snippet.favorite ? "lucide:star" : "lucide:star"} width={12} />
+            <Icon icon="lucide:pin" width={12} />
           </button>
 
           <button onClick={onInsert} disabled={!canInject} title={canInject ? t("terminal.shared.insert") : t("terminal.shared.noActiveSession")}
@@ -226,31 +231,6 @@ function SnippetRow({
         </div>
       </div>
     </div>
-  );
-}
-
-// ─── Section header ───────────────────────────────────────────────────────────
-
-function SectionHeader({ label, count, collapsible, collapsed, onToggle }: {
-  label: string; count: number; collapsible?: boolean; collapsed?: boolean; onToggle?: () => void;
-}) {
-  return (
-    <button
-      className="w-full flex items-center justify-between px-3 py-1.5 text-left"
-      onClick={collapsible ? onToggle : undefined}
-      style={{ cursor: collapsible ? "pointer" : "default" }}
-    >
-      <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--t-text-muted)" }}>
-        {label}
-      </span>
-      <div className="flex items-center gap-1.5">
-        <span className="text-[10px]" style={{ color: "var(--t-text-muted)" }}>{count}</span>
-        {collapsible && (
-          <Icon icon={collapsed ? "lucide:chevron-right" : "lucide:chevron-down"}
-            width={11} style={{ color: "var(--t-text-muted)" }} />
-        )}
-      </div>
-    </button>
   );
 }
 
@@ -297,6 +277,9 @@ export function SnippetsPanel() {
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 
+  const [draft, setDraft] = useState<SnippetDraft | null>(null);
+  const pendingDraft = useSnippetStore((s) => s.snippetDraft);
+
   const openSnippetEditor = useCallback((item: Snippet | "new") => {
     snippetIsDirtyRef.current = false;
     formSessionKeyRef.current = item === "new" ? `new-${Date.now()}` : item.id;
@@ -307,7 +290,20 @@ export function SnippetsPanel() {
   const closeSnippetEditor = useCallback(() => {
     setEditingSnippetId(null);
     setCreatedSnippetId(null);
+    setDraft(null);
   }, []);
+
+  useEffect(() => {
+    if (!pendingDraft) return;
+    useSnippetStore.getState().setSnippetDraft(null);
+    openSnippetEditor("new");
+    setDraft(pendingDraft);
+  }, [pendingDraft, openSnippetEditor]);
+
+  const shownSnippetId = editingSnippetId === "new" ? createdSnippetId : editingSnippetId;
+  useCloseWhenGone(shownSnippetId, snippets.some((s) => s.id === shownSnippetId), closeSnippetEditor);
+  const shownFolderId = editingFolder && editingFolder !== "new" ? editingFolder.id : null;
+  useCloseWhenGone(shownFolderId, folders.some((f) => f.id === shownFolderId), () => setEditingFolder(null));
 
   const handleSnippetFormSubmit = useCallback(async (data: SnippetFormData) => {
     if (editingSnippetId === "new") {
@@ -335,13 +331,7 @@ export function SnippetsPanel() {
 
   const canInject = !!activeSession && activeSession.type !== "multiplayer";
 
-  const allFiltered = snippets.filter(
-    (s) =>
-      !query ||
-      s.name.toLowerCase().includes(query.toLowerCase()) ||
-      snippetSearchText(s).toLowerCase().includes(query.toLowerCase()) ||
-      s.tags.some((t) => t.toLowerCase().includes(query.toLowerCase())),
-  );
+  const allFiltered = snippets.filter(snippetMatcher(query));
 
   async function buildContext(): Promise<DynamicContext> {
     let clipboard = "";
@@ -351,8 +341,8 @@ export function SnippetsPanel() {
 
   async function inject(text: string, execute: boolean) {
     if (!activeSession || activeSession.type === "multiplayer") return;
-    try { await broadcastSnippetInject(activeSession.id, activeSession.type, text, execute); }
-    catch (e) { console.error("snippet_inject failed:", e); }
+    try { await broadcastSnippetInject([activeSession], text, execute); }
+    catch (e) { console.error("snippet inject failed:", e); }
   }
 
   async function handleTrigger(snippet: Snippet, execute: boolean) {
@@ -414,7 +404,7 @@ export function SnippetsPanel() {
   }
 
   async function handleDuplicate(snippet: Snippet) {
-    await createSnippet({
+    await createSnippet(copyingRulesOf({
       name: `${snippet.name} (copy)`,
       steps: snippet.steps,
       description: snippet.description,
@@ -424,7 +414,7 @@ export function SnippetsPanel() {
       only_for_connection_tags: [...snippet.only_for_connection_tags],
       only_for_distros: [...snippet.only_for_distros],
       vault_id: snippet.vault_id,
-    });
+    }, snippet.id));
   }
 
   function toggleFolderCollapse(id: string) {
@@ -489,6 +479,7 @@ export function SnippetsPanel() {
       <SnippetForm
         key={`${formSessionKeyRef.current}-${snippetFormVersion}`}
         initial={liveEditingSnippet ?? undefined}
+        draft={draft ?? undefined}
         onSubmit={handleSnippetFormSubmit}
         onClose={closeSnippetEditor}
         onDuplicate={liveEditingSnippet ? () => { void handleDuplicate(liveEditingSnippet); closeSnippetEditor(); } : undefined}
@@ -548,8 +539,8 @@ export function SnippetsPanel() {
         {/* Favorites section */}
         {!hasQuery && favorites.length > 0 && (
           <>
-            <SectionHeader label={t("terminal.snippets.favorites")} count={favorites.length}
-              collapsible collapsed={collapsedSections.has("favorites")}
+            <SectionHeader compact label={t("terminal.snippets.favorites")} count={favorites.length}
+              collapsed={collapsedSections.has("favorites")}
               onToggle={() => toggleSection("favorites")} />
             {!collapsedSections.has("favorites") && favorites.map(renderSnippetRow)}
           </>
@@ -558,8 +549,8 @@ export function SnippetsPanel() {
         {/* Recent section */}
         {!hasQuery && recentSnippets.length > 0 && (
           <>
-            <SectionHeader label={t("terminal.snippets.recent")} count={recentSnippets.length}
-              collapsible collapsed={collapsedSections.has("recent")}
+            <SectionHeader compact label={t("terminal.snippets.recent")} count={recentSnippets.length}
+              collapsed={collapsedSections.has("recent")}
               onToggle={() => toggleSection("recent")} />
             {!collapsedSections.has("recent") && recentSnippets.map(renderSnippetRow)}
           </>
@@ -567,10 +558,8 @@ export function SnippetsPanel() {
 
         {/* Folder sections */}
         {folders.map((folder) => {
-          const folderSnippets = hasQuery
-            ? allFiltered.filter((s) => s.folder_id === folder.id)
-            : byFolder.get(folder.id) ?? [];
-          if (folderSnippets.length === 0 && !hasQuery) return null;
+          const folderSnippets = byFolder.get(folder.id) ?? [];
+          if (folderSnippets.length === 0) return null;
           const isCollapsed = collapsedFolders.has(folder.id);
           return (
             <div key={folder.id}>
@@ -581,8 +570,7 @@ export function SnippetsPanel() {
                   onClick={() => toggleFolderCollapse(folder.id)}>
                   <Icon icon={isCollapsed ? "lucide:chevron-right" : "lucide:chevron-down"}
                     width={11} style={{ color: "var(--t-text-muted)" }} />
-                  <Icon icon="lucide:folder" width={13}
-                    style={{ color: folder.color ?? "var(--t-text-muted)" }} />
+                  <FolderGlyph folder={folder} width={13} />
                   <span className="text-[11px] font-medium" style={{ color: "var(--t-text-primary)" }}>
                     {folder.name}
                   </span>
@@ -616,8 +604,8 @@ export function SnippetsPanel() {
         {unfiled.length > 0 && (
           <>
             {(folders.length > 0 || recentSnippets.length > 0 || favorites.length > 0) && !hasQuery && (
-              <SectionHeader label={t("terminal.snippets.unfiled")} count={unfiled.length}
-                collapsible collapsed={collapsedSections.has("unfiled")}
+              <SectionHeader compact label={t("terminal.snippets.unfiled")} count={unfiled.length}
+                collapsed={collapsedSections.has("unfiled")}
                 onToggle={() => toggleSection("unfiled")} />
             )}
             {(!collapsedSections.has("unfiled") || hasQuery) && unfiled.map(renderSnippetRow)}

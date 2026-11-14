@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import type { Folder, FolderFormData } from "@/types";
 import * as api from "@/services/snippets";
-import { scheduleSync } from "@/services/sync";
-import { isServerMode } from "@/services/account";
+import { syncAfterEdit } from "@/stores/syncAfterEdit";
 import { removeTeamVaultObject, saveTeamVaultObject } from "@/services/teamObjectPersistence";
+import { rulesSourceOf } from "@/services/ruleSetIntent";
 import { classifyVaultTransition, migrateVaultObject } from "@/services/teamVaultMigration";
 import { isTeamVaultId, findTeamEntry, setTeamMapEntry, clearTeamMapEntry, upsertInTeamMap, applyVaultTransition, saveStampedTeamObject } from "@/stores/teamVaultMap";
 import { useTeamObjectPrefsStore } from "@/stores/teamObjectPrefsStore";
 import { useSnippetStore } from "@/stores/snippetStore";
-import { folderSubtreeIds } from "@/utils/folderTree";
+import { folderSubtreeIds, overStoredFolder } from "@/utils/folderTree";
 
 interface SnippetFolderStore {
   folders: Folder[];
@@ -51,12 +51,14 @@ export const useSnippetFolderStore = create<SnippetFolderStore>((set, get) => ({
         object_type: data.object_type,
         parent_folder_id: data.parent_folder_id,
         vault_id: data.vault_id,
+        color: data.color,
+        icon: data.icon,
         created_at: now,
         updated_at: now,
         clocks: { created_at: now, updated_at: now },
       };
       const vaultId = data.vault_id;
-      await saveTeamVaultObject(vaultId, "snippet_folder", folder);
+      await saveTeamVaultObject(vaultId, "snippet_folder", folder, { rulesFrom: rulesSourceOf(data) });
       set((s) => ({ teamSnippetFolders: upsertInTeamMap(s.teamSnippetFolders, vaultId, folder) }));
       return folder;
     }
@@ -64,12 +66,13 @@ export const useSnippetFolderStore = create<SnippetFolderStore>((set, get) => ({
     const folder = await api.createSnippetFolder(data);
     const folders = await api.listSnippetFolders();
     set({ folders });
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
     return folder;
   },
 
-  updateFolder: async (id, data) => {
+  updateFolder: async (id, input) => {
     const teamEntry = findTeamEntry(get().teamSnippetFolders, id);
+    const data = overStoredFolder(teamEntry?.item ?? get().folders.find((f) => f.id === id), input);
     if (teamEntry) {
       const { teamId, item: prev } = teamEntry;
       const now = new Date().toISOString();
@@ -79,6 +82,8 @@ export const useSnippetFolderStore = create<SnippetFolderStore>((set, get) => ({
         object_type: data.object_type,
         parent_folder_id: data.parent_folder_id,
         vault_id: data.vault_id ?? prev.vault_id,
+        color: data.color,
+        icon: data.icon,
         updated_at: now,
         clocks: { ...prev.clocks, updated_at: now },
       };
@@ -125,7 +130,7 @@ export const useSnippetFolderStore = create<SnippetFolderStore>((set, get) => ({
         ? applyVaultTransition(s.teamSnippetFolders, classifyVaultTransition(prev.vault_id, updatedLocal.vault_id, isTeamVaultId), id, updatedLocal)
         : s.teamSnippetFolders,
     }));
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
   },
 
   // Cascade: the folder, its subfolders, and every snippet filed in them —
@@ -162,7 +167,7 @@ export const useSnippetFolderStore = create<SnippetFolderStore>((set, get) => ({
     const folders = await api.listSnippetFolders();
     set({ folders });
     await useSnippetStore.getState().loadSnippets();
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
   },
 
   moveFolder: async (id, parentFolderId) => {
@@ -185,7 +190,7 @@ export const useSnippetFolderStore = create<SnippetFolderStore>((set, get) => ({
     });
     const folders = await api.listSnippetFolders();
     set({ folders });
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
   },
 
   pinSnippetFolder: async (id, pinned) => {
@@ -205,7 +210,7 @@ export const useSnippetFolderStore = create<SnippetFolderStore>((set, get) => ({
       pinned: nextPinned,
     });
     set((s) => ({ folders: s.folders.map((f) => f.id === id ? { ...f, pinned: nextPinned } : f) }));
-    isServerMode().then((s) => { if (s) scheduleSync(); });
+    syncAfterEdit();
   },
 
   pinSnippetFolderForTeam: async (id, pinned) => {

@@ -29,7 +29,9 @@ export function useStoredSecrets<K extends string>(
   apply: (values: Partial<Record<K, string>>) => void,
 ): StoredSecretsState {
   const can = usePermissions();
-  const mayView = can("VIEW_SECRETS", vaultId || "personal");
+  const mayView = can("VIEW_SECRETS", vaultId || "personal", id);
+  // An object created in this form only holds secrets its author just typed.
+  const [createdHere] = useState(!id);
   const [unavailable, setUnavailable] = useState(false);
   const applyRef = useRef(apply);
   applyRef.current = apply;
@@ -65,6 +67,6 @@ export function useStoredSecrets<K extends string>(
     };
   }, [id, spec, mayView]);
 
-  if (!mayView) return "forbidden";
+  if (!mayView) return createdHere ? "ok" : "forbidden";
   return unavailable ? "unavailable" : "ok";
 }

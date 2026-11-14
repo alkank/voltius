@@ -46,21 +46,21 @@ assertEqual(initialMobileNavState.tab, "hosts", "initial tab is hosts");
 
 // panel kinds push + pop like any other screen, carrying sessionId
 {
-  const s: MobileNavState = { tab: "terminal", stack: [{ kind: "panel-docker", sessionId: "sess-1" }], sheet: null };
+  const s: MobileNavState = { tab: "terminal", stack: [{ kind: "panel", section: "plugin:docker:docker", sessionId: "sess-1" }], sheet: null };
   const r = handleBack(s);
-  assertEqual(r.handled, true, "panel-docker back pops stack");
-  assertEqual(r.state.stack.length, 0, "panel-docker stack popped");
+  assertEqual(r.handled, true, "panel back pops stack");
+  assertEqual(r.state.stack.length, 0, "panel stack popped");
 }
 {
   const s: MobileNavState = {
     tab: "terminal",
-    stack: [{ kind: "panel-metrics", sessionId: "sess-1" }, { kind: "panel-docker", sessionId: "sess-1" }],
+    stack: [{ kind: "panel", section: "plugin:monitoring:monitoring", sessionId: "sess-1" }, { kind: "panel", section: "plugin:docker:docker", sessionId: "sess-1" }],
     sheet: null,
   };
   const r = handleBack(s);
   assertEqual(r.handled, true, "nested panel back handled");
   assertEqual(r.state.stack.length, 1, "only top panel popped");
-  assertEqual((r.state.stack[0] as { kind: string }).kind, "panel-metrics", "panel-metrics remains under");
+  assertEqual((r.state.stack[0] as { section: string }).section, "plugin:monitoring:monitoring", "lower panel remains under");
 }
 
 // more-page stacks: back pops top, root remains
@@ -101,5 +101,19 @@ assertEqual(initialMobileNavState.tab, "hosts", "initial tab is hosts");
   const r = handleBack(s);
   assertEqual(r.handled, true, "back handled for snippet-target sheet");
   assertEqual(r.state.sheet, null, "snippet-target sheet cleared on back");
+}
+
+// vault settings: Back walks a sub-page, then the page, like any pushed page
+{
+  const s: MobileNavState = {
+    tab: "more",
+    stack: [{ kind: "vault-settings", vaultId: "v2" }, { kind: "vault-settings", vaultId: "v2", page: "roles" }],
+    sheet: null,
+  };
+  const r1 = handleBack(s);
+  assertEqual(r1.state.stack, [{ kind: "vault-settings", vaultId: "v2" }], "sub-page popped first");
+  const r2 = handleBack(r1.state);
+  assertEqual(r2.state.stack, [], "then the vault settings page");
+  assertEqual(r2.state.tab, "more", "the tab stays");
 }
 });

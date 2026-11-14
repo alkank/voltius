@@ -1,19 +1,35 @@
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import type { TeamRole } from "@/services/teamService";
+import type { TeamMember, TeamRole } from "@/services/teamService";
 // Both from the service, not the hook: @/hooks/usePermission pulls teamService
 // and i18n in at runtime, which every consumer of this leaf module would then
 // have to mock.
-import { PERM_BITS, PERM_META, type Permission } from "@/services/permissions";
+import { PERM_BITS, PERM_META, type Permission, type RuleSubject } from "@/services/permissions";
+import { memberLabel } from "@/services/memberLabel";
 
-export const ROLE_META: Record<string, { label: string; color: string; bg: string }> = {
-  owner:          { label: "Owner",        color: "#a78bfa", bg: "rgba(167,139,250,0.12)" },
-  manager:        { label: "Manager",      color: "#60a5fa", bg: "rgba(96,165,250,0.12)"  },
-  editor:         { label: "Editor",       color: "#34d399", bg: "rgba(52,211,153,0.12)"  },
-  member:         { label: "Member",       color: "var(--t-text-secondary)", bg: "var(--t-bg-elevated)" },
-  "connect-only": { label: "Connect-Only", color: "#f59e0b", bg: "rgba(245,158,11,0.12)"  },
+export const ROLE_META: Record<string, { color: string; bg: string }> = {
+  owner:          { color: "#a78bfa", bg: "rgba(167,139,250,0.12)" },
+  manager:        { color: "#60a5fa", bg: "rgba(96,165,250,0.12)"  },
+  editor:         { color: "#34d399", bg: "rgba(52,211,153,0.12)"  },
+  member:         { color: "var(--t-text-secondary)", bg: "var(--t-bg-elevated)" },
+  "connect-only": { color: "#f59e0b", bg: "rgba(245,158,11,0.12)"  },
 };
+
+/**
+ * A role's display name. The built-in roles arrive from the server as fixed
+ * English ids ("owner", "connect-only") and are translated; a custom role's
+ * name is the team's own words and is shown as written.
+ */
+export function roleLabel(t: TFunction, name: string): string {
+  return Object.prototype.hasOwnProperty.call(ROLE_META, name) ? t(`members.roleName.${name}`) : name;
+}
+
+export function ruleSubjectLabel(t: TFunction, s: RuleSubject, roles: TeamRole[], members: TeamMember[]): string {
+  if (s.type === "everyone") return t("shared.permissions.everyone");
+  if (s.type === "role") return roleLabel(t, roles.find((r) => r.id === s.id)?.name ?? "?");
+  return memberLabel(members.find((m) => m.user_id === s.id));
+}
 
 /**
  * Chip colours for a role: its own colour wins, then the built-in palette,
@@ -51,7 +67,7 @@ export function RolePermissionTooltip({ role, color }: { role: TeamRole; color: 
         color: "var(--t-text-primary)",
       }}
     >
-      <p className="font-semibold mb-1 capitalize">{role.name}</p>
+      <p className="font-semibold mb-1 capitalize">{roleLabel(t, role.name)}</p>
       <ul className="space-y-0.5">
         {permLabels.slice(0, 8).map((l) => (
           <li key={l} className="flex items-center gap-1" style={{ color: "var(--t-text-dim)" }}>
@@ -94,6 +110,7 @@ interface RoleToggleChipProps {
   color?: string | null;
   fallbackColor?: string;
   disabled?: boolean;
+  disabledReason?: string;
   /**
    * Show the plain-language `members.roleBlurb.*` line under an active chip —
    * for the surfaces where a role is being *granted*, not merely displayed.
@@ -103,15 +120,17 @@ interface RoleToggleChipProps {
 }
 
 export function RoleToggleChip({
-  name, active, onClick, variant = "chip", color: override, fallbackColor, disabled, blurb,
+  name, active, onClick, variant = "chip", color: override, fallbackColor, disabled, disabledReason, blurb,
 }: RoleToggleChipProps) {
+  const { t } = useTranslation();
   const { color, bg } = roleChipColors(name, override, fallbackColor);
 
   const button = (
     <button
       onClick={onClick}
-      disabled={disabled}
-      className={VARIANT_CLASS[variant]}
+      disabled={disabled || !!disabledReason}
+      title={disabledReason}
+      className={`${VARIANT_CLASS[variant]} disabled:opacity-50 disabled:cursor-not-allowed`}
       style={{
         background: active ? bg : "var(--t-bg-elevated)",
         color: active ? color : "var(--t-text-dim)",
@@ -119,7 +138,7 @@ export function RoleToggleChip({
       }}
     >
       {variant !== "pill" && active && <Icon icon="lucide:check" width={9} />}
-      {name}
+      {roleLabel(t, name)}
     </button>
   );
 

@@ -1,3 +1,4 @@
+import { createSerialQueue } from "@/lib/serialQueue";
 import type { NavItem } from "@/stores/uiStore";
 import type { VaultClipboard, VaultClipboardKind } from "@/stores/vaultClipboardStore";
 import { useHistoryStore } from "@/stores/historyStore";
@@ -86,7 +87,7 @@ export interface ClipboardAdapter {
   deleteItems: (ids: string[]) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
   setSelection: (ids: string[]) => void;
-  can: (permission: string, vaultId: string) => boolean;
+  can: (permission: string, vaultId: string, objectId?: string) => boolean;
 }
 
 /**
@@ -132,6 +133,7 @@ interface VaultMove {
   destinationVaultId: string | null;
   /** A move also deletes from the source, so the source must authorize too. */
   removesFromSource: boolean;
+  objectId?: string;
 }
 
 const itemPermissions = (kind: string): string[] => [EDIT_PERMISSION[kind] ?? "EDIT_CONNECTIONS"];
@@ -164,7 +166,7 @@ function blockedForMoves(adapter: ClipboardAdapter, moves: VaultMove[]): string[
     if (destination === null || source === destination) continue;
     for (const permission of move.permissions) {
       if (!adapter.can(permission, destination)) blocked.add(permission);
-      if (move.removesFromSource && source !== null && !adapter.can(permission, source)) {
+      if (move.removesFromSource && source !== null && !adapter.can(permission, source, move.objectId)) {
         blocked.add(permission);
       }
     }
@@ -182,7 +184,7 @@ function blockedForDeletes(
     if (!adapter.exists(target.id)) continue;
     const vaultId = adapter.vaultIdOf(target.id);
     for (const permission of target.permissions) {
-      if (!adapter.can(permission, vaultId)) blocked.add(permission);
+      if (!adapter.can(permission, vaultId, target.id)) blocked.add(permission);
     }
   }
   return [...blocked];
@@ -224,12 +226,14 @@ function pasteMoves(
       sourceVaultId: adapter.vaultIdOf(item.id),
       destinationVaultId,
       removesFromSource,
+      objectId: item.id,
     })),
     ...liveFolders.map((id) => ({
       permissions: folderPermissions(adapter, id),
       sourceVaultId: adapter.vaultIdOf(id),
       destinationVaultId,
       removesFromSource,
+      objectId: id,
     })),
   ];
 }
@@ -261,15 +265,7 @@ function strandsAtRoot(
 // api.objects alike: `pasteFromClipboard` registers its undo entry inside a
 // `withoutHistory` window, which is a depth counter, so an overlapping paste
 // holds that window open and the other one's history entry is silently dropped.
-let pasteChain: Promise<unknown> = Promise.resolve();
-
-/** Queues `fn` behind every other paste. Rejections propagate to the caller but
- *  never poison the chain. */
-export function runPaste<T>(fn: () => Promise<T>): Promise<T> {
-  const run = pasteChain.then(fn);
-  pasteChain = run.catch(() => {});
-  return run;
-}
+export const runPaste = createSerialQueue();
 
 export async function pasteFromClipboard(
   clipboard: VaultClipboard,
@@ -353,12 +349,14 @@ export async function pasteFromClipboard(
         sourceVaultId: adapter.vaultIdOf(id),
         destinationVaultId: destination(id),
         removesFromSource: true,
+        objectId: id,
       })),
       ...folderIds.map((id) => ({
         permissions: folderPermissions(adapter, id),
         sourceVaultId: adapter.vaultIdOf(id),
         destinationVaultId: destination(id),
         removesFromSource: true,
+        objectId: id,
       })),
     ];
 
@@ -376,7 +374,7 @@ export async function pasteFromClipboard(
     adapter.setSelection([...itemIds, ...folderIds]);
 
     useHistoryStore.getState().push({
-      label: `Moved ${moved} item${moved === 1 ? "" : "s"}`,
+      label: i18n.t("common.history.movedItems", { count: moved }),
       undo: async () => {
         refuse(blockedForMoves(adapter, movesTo((id) => originOf(id).vaultId)));
         // One call per origin: moveItems takes a single destination folder+vault.
@@ -419,7 +417,7 @@ export async function pasteFromClipboard(
   adapter.setSelection([...createdItemIds, ...createdFolderIds]);
 
   useHistoryStore.getState().push({
-    label: `Pasted ${created} item${created === 1 ? "" : "s"}`,
+    label: i18n.t("common.history.pastedItems", { count: created }),
     undo: async () => {
       refuse(
         blockedForDeletes(adapter, [

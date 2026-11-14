@@ -11,6 +11,7 @@
       "description": "打包为一个归档文件并在另一端解压——比逐个文件传输少得多的往返次数。",
       "howItWorks": "工作原理"
     },
+    "perFileBadge": { "reason": "逐个文件：此主机无法以流方式传输 tar" },
     "conflict": {
       "title": "文件已存在",
       "conflictOf": "冲突 {{number}} / {{total}}",
@@ -36,6 +37,7 @@
         "fileName": "文件名称"
       },
       "emptyDirectory": "空目录",
+      "refreshFailed": "刷新失败：{{reason}}",
       "selection": {
         "selected": "已选择 {{count}} 项",
         "clear": "清除"
@@ -56,6 +58,7 @@
         "delete_other": "删除 {{count}} 个项目",
         "copyPath_one": "复制路径",
         "copyPath_other": "复制 {{count}} 个路径",
+        "permissions": "权限…",
         "compress": "压缩为 .tar.gz",
         "extractHere": "解压到此处",
         "openInTerminal": "在终端中打开",
@@ -75,6 +78,29 @@
         "modified": "修改时间",
         "permissions": "权限"
       }
+    },
+    "permissions": {
+      "items_one": "{{count}} 个项目",
+      "items_other": "{{count}} 个项目",
+      "bit": "{{who}}: {{what}}",
+      "read": "读取",
+      "write": "写入",
+      "execute": "执行",
+      "owner": "所有者",
+      "group": "组",
+      "others": "其他人",
+      "octal": "八进制模式",
+      "uid": "uid {{id}}",
+      "gid": "gid {{id}}",
+      "mixed": "混合",
+      "noShell": "更改所有者或文件夹内容需要主机上有 POSIX shell。",
+      "recurse": "递归",
+      "scopeAll": "全部",
+      "scopeFiles": "文件",
+      "scopeDirs": "文件夹",
+      "apply": "应用",
+      "applyItems_one": "应用到 {{count}} 项",
+      "applyItems_other": "应用到 {{count}} 项"
     },
     "side": {
       "chooseHost": "选择主机…",
@@ -105,26 +131,31 @@
       "compareHint": "在每侧各选择一个文件进行比较",
       "selectFilesToUpload": "选择要上传的文件",
       "downloadToFolder": "下载到文件夹",
-      "connectionLost": "连接已断开"
+      "connectionLost": "连接已断开",
+      "moveSourceNotDeleted": "已复制，但无法删除 {{names}} 的原始文件：{{error}}"
     },
     "queue": {
       "title": "传输",
       "transferCount_one": "{{count}} 个传输",
       "transferCount_other": "{{count}} 个传输",
-      "activeSuffix_one": " · {{count}} 个进行中",
-      "activeSuffix_other": " · {{count}} 个进行中",
       "combinedThroughput": "合计吞吐量",
       "cancelAll": "取消所有传输",
       "clearFinished": "清除已完成的传输",
       "cancelTransfer": "取消传输",
       "retryTransfer": "重试传输",
+      "waiting": "正在等待连接…",
+      "resumedAt": "从 {{size}} 处继续",
+      "resumedTooltip": "已从中断的位置继续传输",
+      "skipped_one": "已跳过 {{count}} 个本系统无法保存的名称：",
+      "skipped_other": "已跳过 {{count}} 个本系统无法保存的名称：",
       "mcpTooltip": "由 {{client}} 启动",
       "mcpTooltipUnknown": "由 MCP 客户端启动",
       "status": {
         "done": "完成",
         "error": "错误",
         "cancelled": "已取消"
-      }
+      },
+      "transferCountActive_other": "{{transfers}} · {{count}} 个进行中"
     },
     "editor": {
       "common": {
@@ -139,7 +170,9 @@
         "loading": "正在加载差异…",
         "previousChange": "上一个更改",
         "nextChange": "下一个更改",
-        "saveErrorLine": "{{label}}: {{msg}}"
+        "saveErrorLine": "{{label}}: {{msg}}",
+        "applyToRight": "应用到右侧 (→)",
+        "applyToLeft": "应用到左侧 (←)"
       },
       "tab": {
         "autoSave": "自动保存",
@@ -150,15 +183,41 @@
           "binary": "二进制文件——无法编辑。请改为下载。"
         }
       },
+      "image": {
+        "fit": "适应",
+        "toggleFit": "适应标签页或显示实际大小（0 / 1）",
+        "zoomIn": "放大 (+)",
+        "zoomOut": "缩小 (−)",
+        "copy": "复制图片",
+        "copied": "图片已复制到剪贴板",
+        "copyFailed": "无法复制图片：{{error}}",
+        "download": "下载",
+        "tooLarge": "此图片大小为 {{size}}，超过 {{limit}} 的预览上限。",
+        "previewAnyway": "仍然预览"
+      },
       "tabStrip": {
         "filesTab": "文件",
         "pendingNameFallback": "此文件",
         "pendingNameDiffFallback": "此差异",
-        "diffTitlePrefix": "差异：{{name}}",
         "discardTitle": "放弃未保存的更改？",
         "discardMessage": "\"{{name}}\" 有未保存的更改。关闭此标签页将放弃这些更改。",
-        "discard": "放弃"
+        "discard": "放弃",
+        "diffTitle": "差异：{{name}}"
       }
+    },
+    "myDevices": {
+      "title": "我的设备",
+      "fileAccessOff": "此设备已关闭文件访问",
+      "needsAccount": "在您的设备之间访问文件需要 Voltius 账户。",
+      "offlineSeen": "离线 · 上次在线 {{ago}}",
+      "offline": "离线",
+      "routeChip": "{{route}} · {{ms}} 毫秒",
+      "readOnlyBadge": "只读",
+      "readOnlyShare": "{{name}} 以只读方式共享这些文件夹。"
+    },
+    "connect": {
+      "deviceDialing": "正在连接…",
+      "deviceApproval": "正在等待 {{name}} 上的批准…"
     }
   }
 }

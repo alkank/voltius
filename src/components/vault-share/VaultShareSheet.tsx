@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
+import { memberLabel } from "@/services/memberLabel";
 import { useVaultStore } from "@/stores/vaultStore";
 import { useTeamStore } from "@/stores/teamStore";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
-import { displaySeatCap } from "@/services/seatMath";
+import { useSeatReadout } from "@/hooks/useSeatReadout";
 import { getMyUserId, getVaultKeyHolders } from "@/services/teamService";
 import { ConvertToTeamGate } from "./ConvertToTeamGate";
 import { InviteControl } from "./InviteControl";
@@ -23,11 +24,13 @@ type Tab = "people" | "invite" | "links";
 
 interface Props {
   vaultId: string;
-  variant: "popover" | "full";
+  /** `page`: a full-screen mobile page that already shows the title in its app bar. */
+  variant: "popover" | "full" | "page";
   onRequestFull?: () => void;
+  initialTab?: Tab;
 }
 
-export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
+export function VaultShareSheet({ vaultId, variant, onRequestFull, initialTab = "people" }: Props) {
   const { t } = useTranslation();
   const vault = useVaultStore((s) => s.vaults.find((v) => v.id === vaultId));
   const teams = useTeamStore((s) => s.teams);
@@ -39,11 +42,9 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
   const membersByTeam = useTeamStore((s) => s.membersByTeam);
   const rolesByTeam = useTeamStore((s) => s.rolesByTeam);
   const pendingInvitationsByTeam = useTeamStore((s) => s.pendingInvitationsByTeam);
-  const usedSeats = useSubscriptionStore((s) => s.usedSeats);
-  const effectiveSeats = useSubscriptionStore((s) => s.effectiveSeats);
-  const totalSeats = useSubscriptionStore((s) => s.totalSeats);
+  const seats = useSeatReadout();
 
-  const [tab, setTab] = useState<Tab>("people");
+  const [tab, setTab] = useState<Tab>(initialTab);
   // Owned by the sheet, never by a tab: the bug this component replaces was an
   // error written to a panel the same handler had just unmounted.
   const [error, setError] = useState("");
@@ -91,7 +92,7 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
     const roleName = (id: string) => roles.find((r) => r.id === id)?.name ?? "";
     const members: Person[] = (membersByTeam[teamId] ?? []).map((m) => ({
       userId: m.user_id,
-      handle: m.handle ?? "?",
+      label: memberLabel(m),
       roleNames: m.role_ids.map(roleName).filter(Boolean),
       online: !!m.is_online,
       state: keyHolders && !keyHolders.has(m.user_id) ? "awaiting_key" : "member",
@@ -99,7 +100,7 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
     }));
     const pending: Person[] = (pendingInvitationsByTeam[teamId] ?? []).map((inv) => ({
       userId: inv.id,
-      handle: inv.display_name,
+      label: inv.member_name ?? inv.display_name,
       roleNames: [inv.role],
       online: false,
       state: "pending",
@@ -130,10 +131,10 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
         vaultName={vault!.name}
         onCancel={() => onRequestFull?.()}
         onConverted={() => setTab("invite")}
-        inline={variant === "popover"}
+        inline={variant !== "full"}
       />
     );
-    return variant === "popover" ? <div className="p-4">{gate}</div> : gate;
+    return variant === "full" ? gate : <div className="p-4">{gate}</div>;
   }
 
   const canManage = canManageShare(myRoleNames);
@@ -147,13 +148,13 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
   };
 
   const handleRemove = (p: Person) =>
-    void removeTeamMember({ teamId, userId: p.userId, handle: p.handle })
+    void removeTeamMember({ teamId, userId: p.userId, label: p.label })
       .then(reloadMembers)
       .catch(() => {});
 
   const handleRevoke = (p: Person) =>
     p.invitationId &&
-    void revokeInvitation({ teamId, invitationId: p.invitationId, name: p.handle })
+    void revokeInvitation({ teamId, invitationId: p.invitationId, name: p.label })
       .then(reloadMembers)
       .catch(() => {});
 
@@ -161,7 +162,7 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
     void grantVaultKeyToMember({
       teamId,
       userId: p.userId,
-      handle: p.handle,
+      label: p.label,
       publicKey: p.publicKey ?? "",
     })
       .then(reloadMembers)
@@ -181,7 +182,9 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
 
   return (
     <div className="flex flex-col gap-3.5 p-4">
-      <h2 className="text-sm font-semibold text-(--t-text-primary)">{t("members.share.title", { vault: teamName })}</h2>
+      {variant !== "page" && (
+        <h2 className="text-sm font-semibold text-(--t-text-primary)">{t("members.share.title", { vault: teamName })}</h2>
+      )}
 
       {variant === "popover" && tab !== "invite" && (
         <button
@@ -253,8 +256,7 @@ export function VaultShareSheet({ vaultId, variant, onRequestFull }: Props) {
           teamId={teamId}
           roles={rolesByTeam[teamId] ?? []}
           existingIds={new Set(people.map((p) => p.userId))}
-          usedSeats={usedSeats}
-          seatCap={displaySeatCap(effectiveSeats, totalSeats)}
+          seats={seats}
           onInvited={() => setTab("people")}
         />
       )}

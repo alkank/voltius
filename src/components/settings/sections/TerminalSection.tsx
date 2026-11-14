@@ -1,26 +1,24 @@
 import { useTranslation } from "react-i18next";
-import { CURSOR_STYLES, DEFAULT_CURSOR_STYLE, useTerminalSettingsStore, type TerminalCursorStyle } from "@/stores/terminalSettingsStore";
-import { TOGGLE_DEFS, useToggle } from "@/stores/toggleSettingsStore";
-import { DEFAULT_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, MIN_SCROLLBACK_LINES } from "@/stores/terminalSettingsUtils";
-import { FormSelect } from "@/components/shared/FormSelect";
-import { Toggle } from "@/components/shared/Toggle";
-import { SettingRow } from "./shared";
+import { useToggle } from "@/stores/toggleSettingsStore";
+import { Setting } from "@/components/settings/Setting";
+import { KeywordRulesEditor } from "./KeywordRulesEditor";
+
+const TERMINAL_ROWS = [
+  "terminal.cursorStyle",
+  "toggles.cursor-blink",
+  "toggles.scroll-minimap",
+  "toggles.select-to-copy",
+  "toggles.drag-selects-text",
+  "toggles.ignore-bracketed-paste",
+  "toggles.paste-image-as-path",
+  "toggles.command-history",
+  "toggles.volume-down-ctrl",
+  "toggles.keyword-highlight",
+];
 
 export default function TerminalSection() {
   const { t } = useTranslation();
-  const [cursorBlink, setCursorBlink] = useToggle("cursor-blink");
-  const [scrollMinimapEnabled, setScrollMinimapEnabled] = useToggle("scroll-minimap");
-  const [selectToCopy, setSelectToCopy] = useToggle("select-to-copy");
-  const [dragSelectsText, setDragSelectsText] = useToggle("drag-selects-text");
-  const [ignoreBracketedPaste, setIgnoreBracketedPaste] = useToggle("ignore-bracketed-paste");
-  const scrollbackLines = useTerminalSettingsStore((s) => s.scrollbackLines);
-  const setScrollbackLines = useTerminalSettingsStore((s) => s.setScrollbackLines);
-  const cursorStyle = useTerminalSettingsStore((s) => s.cursorStyle);
-  const setCursorStyle = useTerminalSettingsStore((s) => s.setCursorStyle);
-
-  const scrollbackOptions = [1_000, 10_000, 50_000, 100_000, 250_000]
-    .filter((value) => value >= MIN_SCROLLBACK_LINES && value <= MAX_SCROLLBACK_LINES)
-    .map((value) => ({ value: String(value), label: t("settings.terminal.scrollback.option", { count: value }) }));
+  const [keywordHighlight] = useToggle("keyword-highlight");
 
   return (
     <div className="p-6 space-y-6">
@@ -28,91 +26,9 @@ export default function TerminalSection() {
         <h3 className="text-xs font-bold uppercase tracking-widest mb-4 text-(--t-text-dim)">
           {t("settings.terminal.heading")}
         </h3>
-        <SettingRow
-          variant="card"
-          title={t("settings.terminal.scrollback.title")}
-          desc={t("settings.terminal.scrollback.desc")}
-          dirty={scrollbackLines !== DEFAULT_SCROLLBACK_LINES}
-          onReset={() => setScrollbackLines(DEFAULT_SCROLLBACK_LINES)}
-        >
-          <FormSelect
-            className="w-44 shrink-0"
-            value={String(scrollbackLines)}
-            options={scrollbackOptions}
-            onChange={(value) => setScrollbackLines(Number(value))}
-          />
-        </SettingRow>
-        <SettingRow
-          variant="card"
-          className="mt-4"
-          syncKey="appSettings.terminal.cursorStyle"
-          title={t("settings.terminal.cursorStyle.title")}
-          desc={t("settings.terminal.cursorStyle.desc")}
-          dirty={cursorStyle !== DEFAULT_CURSOR_STYLE}
-          onReset={() => setCursorStyle(DEFAULT_CURSOR_STYLE)}
-        >
-          <FormSelect
-            className="w-44 shrink-0"
-            value={cursorStyle}
-            options={CURSOR_STYLES.map((value) => ({ value, label: t(`settings.terminal.cursorStyle.${value}`) }))}
-            onChange={(value) => setCursorStyle(value as TerminalCursorStyle)}
-          />
-        </SettingRow>
-        <SettingRow
-          variant="card"
-          className="mt-4"
-          syncKey="appSettings.toggles.cursor-blink"
-          title={t("settings.terminal.cursorBlink.title")}
-          desc={t("settings.terminal.cursorBlink.desc")}
-          dirty={cursorBlink !== TOGGLE_DEFS["cursor-blink"].default}
-          onReset={() => setCursorBlink(TOGGLE_DEFS["cursor-blink"].default)}
-        >
-          <Toggle checked={cursorBlink} onChange={setCursorBlink} />
-        </SettingRow>
-        <SettingRow
-          variant="card"
-          className="mt-4"
-          syncKey="appSettings.toggles.scroll-minimap"
-          title={t("settings.terminal.minimap.title")}
-          desc={t("settings.terminal.minimap.desc")}
-          dirty={scrollMinimapEnabled !== TOGGLE_DEFS["scroll-minimap"].default}
-          onReset={() => setScrollMinimapEnabled(TOGGLE_DEFS["scroll-minimap"].default)}
-        >
-          <Toggle checked={scrollMinimapEnabled} onChange={setScrollMinimapEnabled} />
-        </SettingRow>
-        <SettingRow
-          variant="card"
-          className="mt-4"
-          syncKey="appSettings.toggles.select-to-copy"
-          title={t("settings.terminal.selectToCopy.title")}
-          desc={t("settings.terminal.selectToCopy.desc")}
-          dirty={selectToCopy !== TOGGLE_DEFS["select-to-copy"].default}
-          onReset={() => setSelectToCopy(TOGGLE_DEFS["select-to-copy"].default)}
-        >
-          <Toggle checked={selectToCopy} onChange={setSelectToCopy} />
-        </SettingRow>
-        <SettingRow
-          variant="card"
-          className="mt-4"
-          syncKey="appSettings.toggles.drag-selects-text"
-          title={t("settings.terminal.dragSelectsText.title")}
-          desc={t("settings.terminal.dragSelectsText.desc")}
-          dirty={dragSelectsText !== TOGGLE_DEFS["drag-selects-text"].default}
-          onReset={() => setDragSelectsText(TOGGLE_DEFS["drag-selects-text"].default)}
-        >
-          <Toggle checked={dragSelectsText} onChange={setDragSelectsText} />
-        </SettingRow>
-        <SettingRow
-          variant="card"
-          className="mt-4"
-          syncKey="appSettings.toggles.ignore-bracketed-paste"
-          title={t("settings.terminal.ignoreBracketedPaste.title")}
-          desc={t("settings.terminal.ignoreBracketedPaste.desc")}
-          dirty={ignoreBracketedPaste !== TOGGLE_DEFS["ignore-bracketed-paste"].default}
-          onReset={() => setIgnoreBracketedPaste(TOGGLE_DEFS["ignore-bracketed-paste"].default)}
-        >
-          <Toggle checked={ignoreBracketedPaste} onChange={setIgnoreBracketedPaste} />
-        </SettingRow>
+        <Setting id="terminal.scrollbackLines" variant="card" />
+        {TERMINAL_ROWS.map((id) => <Setting key={id} id={id} variant="card" className="mt-4" />)}
+        {keywordHighlight && <KeywordRulesEditor />}
       </div>
     </div>
   );

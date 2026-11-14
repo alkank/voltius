@@ -1,14 +1,25 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useLocaleStore, SUPPORTED_LOCALES } from "./localeStore";
+import { useLocaleStore, SUPPORTED_LOCALES, systemLocale, localeSetting } from "./localeStore";
+import { usePolicyStore } from "./policyStore";
 import { useAppSettingsTimestampStore } from "./appSettingsTimestampStore";
+import { useSyncPrefsStore } from "./syncPrefsStore";
 
 describe("localeStore", () => {
   beforeEach(() => {
     useLocaleStore.setState({ locale: "en" });
   });
 
-  it("defaults to English", () => {
-    expect(useLocaleStore.getState().locale).toBe("en");
+  it("starts a fresh install in the first supported system language", () => {
+    expect(systemLocale(["de-DE", "cs-CZ", "fr-FR"])).toBe("cs");
+    expect(systemLocale(["zh-CN"])).toBe("zh");
+    expect(systemLocale(["TR"])).toBe("tr");
+    expect(systemLocale(["pt-BR"])).toBe("pt-BR");
+    expect(systemLocale(["pt-PT"])).toBe("pt-PT");
+  });
+
+  it("falls back to English when no system language is supported", () => {
+    expect(systemLocale(["de-DE", "ja"])).toBe("en");
+    expect(systemLocale([])).toBe("en");
   });
 
   it("setLocale updates the locale", () => {
@@ -16,7 +27,15 @@ describe("localeStore", () => {
     expect(useLocaleStore.getState().locale).toBe("fr");
   });
 
-  it("setLocale bumps the app-settings sync timestamp", () => {
+  it("setLocale leaves the sync timestamp alone while the language stays on the device", () => {
+    useSyncPrefsStore.setState({ syncSettingDomains: {}, settingSyncOverrides: {} });
+    useAppSettingsTimestampStore.setState({ updatedAt: new Date(0).toISOString() });
+    useLocaleStore.getState().setLocale("fr");
+    expect(useAppSettingsTimestampStore.getState().updatedAt).toBe(new Date(0).toISOString());
+  });
+
+  it("setLocale bumps the sync timestamp once the language is synced", () => {
+    useSyncPrefsStore.setState({ syncSettingDomains: {}, settingSyncOverrides: { "appSettings.locale": true } });
     useAppSettingsTimestampStore.setState({ updatedAt: new Date(0).toISOString() });
     useLocaleStore.getState().setLocale("fr");
     expect(useAppSettingsTimestampStore.getState().updatedAt).not.toBe(new Date(0).toISOString());
@@ -24,7 +43,7 @@ describe("localeStore", () => {
 
   it("exposes every shipped locale, English first", () => {
     const values = SUPPORTED_LOCALES.map((l) => l.value);
-    expect(values).toEqual(["en", "fr", "ru", "zh", "tr"]);
+    expect(values).toEqual(["en", "fr", "ru", "zh", "tr", "cs", "pt", "pt-BR", "pt-PT"]);
   });
 
   it("every supported locale is settable and carries a native label", () => {
@@ -33,5 +52,14 @@ describe("localeStore", () => {
       expect(useLocaleStore.getState().locale).toBe(value);
       expect(label.trim()).not.toBe("");
     }
+  });
+
+  it("setter is a no-op under a lock", () => {
+    const empty = { policy: {}, defaults: {} };
+    usePolicyStore.setState({ machine: { policy: { "appSettings.locale": "fr" }, defaults: {} }, server: empty });
+    useLocaleStore.getState().setLocale("cs");
+    expect(useLocaleStore.getState().locale).toBe("en");
+    expect(localeSetting.get()).toBe("fr");
+    usePolicyStore.setState({ machine: empty, server: empty });
   });
 });

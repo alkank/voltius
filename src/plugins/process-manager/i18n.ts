@@ -1,6 +1,58 @@
+import type { PluginLocale } from "@/plugins/api";
+
 // Moved from src/i18n/locales/*/mobile.json's mobile.panelItems.processes / mobile.processes.* and
 // mobile.json's common.action.cancel — values carried over verbatim.
-export const messages: Record<"en"|"fr"|"ru"|"zh"|"tr", Record<string,string>> = {
+const pt: Record<string, string> = {
+  "title": "Processos",
+  "sshOnly": "A lista de processos só está disponível para sessões SSH. Conecte-se a um host via SSH para ver seus processos.",
+  "filterPlaceholder": "Filtrar processos.",
+  "sortCpu": "CPU%",
+  "sortMem": "MEM",
+  "sortPid": "PID",
+  "sortName": "Nome",
+  "noProcessesFound": "Nenhum processo encontrado",
+  "loadingProcesses": "Carregando processos.",
+  "sheetKillTerm": "Encerrar (SIGTERM)",
+  "sheetForceKill": "Forçar encerramento (SIGKILL)",
+  "killConfirmTitle": "Encerrar processo?",
+  "forceKillConfirmTitle": "Forçar o encerramento do processo?",
+  "killConfirmBody": "{{signal}} será enviado a {{name}} (pid {{pid}}).",
+  "confirmKill": "Encerrar",
+  "confirmForceKill": "Forçar encerramento",
+  "cancel": "Cancelar",
+  // Desktop panel.
+  "noActiveSession": "Nenhuma sessão ativa",
+  "androidUnavailable": "A lista de processos deste dispositivo não está disponível no Android. Conecte-se a um host via SSH para ver seus processos.",
+  "colUser": "Usuário",
+  "killProcessTitle": "Encerrar processo {{pid}}",
+};
+
+const ptPt: Record<string, string> = {
+  "title": "Processos",
+  "sshOnly": "A lista de processos só está disponível para sessões SSH. Conecte-se a um host via SSH para ver seus processos.",
+  "filterPlaceholder": "Filtrar processos.",
+  "sortCpu": "CPU%",
+  "sortMem": "MEM",
+  "sortPid": "PID",
+  "sortName": "Nome",
+  "noProcessesFound": "Nenhum processo encontrado",
+  "loadingProcesses": "A carregar processos.",
+  "sheetKillTerm": "Encerrar (SIGTERM)",
+  "sheetForceKill": "Forçar encerramento (SIGKILL)",
+  "killConfirmTitle": "Encerrar processo?",
+  "forceKillConfirmTitle": "Forçar o encerramento do processo?",
+  "killConfirmBody": "{{signal}} será enviado a {{name}} (pid {{pid}}).",
+  "confirmKill": "Encerrar",
+  "confirmForceKill": "Forçar encerramento",
+  "cancel": "Cancelar",
+  // Desktop panel.
+  "noActiveSession": "Nenhuma sessão ativa",
+  "androidUnavailable": "A lista de processos deste dispositivo não está disponível no Android. Conecte-se a um host via SSH para ver seus processos.",
+  "colUser": "Utilizador",
+  "killProcessTitle": "Encerrar processo {{pid}}",
+};
+
+export const messages: Record<PluginLocale, Record<string,string>> = {
   en: {
     "title": "Processes",
     "sshOnly": "The process list is only available for SSH sessions. Connect to a host over SSH to see its processes.",
@@ -19,6 +71,11 @@ export const messages: Record<"en"|"fr"|"ru"|"zh"|"tr", Record<string,string>> =
     "confirmKill": "Kill",
     "confirmForceKill": "Force kill",
     "cancel": "Cancel",
+    // Desktop panel.
+    "noActiveSession": "No active session",
+    "androidUnavailable": "The process list for this device isn't available on Android. Connect to a host over SSH to see its processes.",
+    "colUser": "User",
+    "killProcessTitle": "Kill process {{pid}}",
   },
   fr: {
     "title": "Processus",
@@ -38,6 +95,10 @@ export const messages: Record<"en"|"fr"|"ru"|"zh"|"tr", Record<string,string>> =
     "confirmKill": "Tuer",
     "confirmForceKill": "Forcer l'arrêt",
     "cancel": "Annuler",
+    "noActiveSession": "Aucune session active",
+    "androidUnavailable": "La liste des processus de cet appareil n'est pas disponible sur Android. Connectez-vous à un hôte en SSH pour voir ses processus.",
+    "colUser": "Utilisateur",
+    "killProcessTitle": "Tuer le processus {{pid}}",
   },
   ru: {
     "title": "Процессы",
@@ -57,6 +118,10 @@ export const messages: Record<"en"|"fr"|"ru"|"zh"|"tr", Record<string,string>> =
     "confirmKill": "Завершить",
     "confirmForceKill": "Завершить принудительно",
     "cancel": "Отмена",
+    "noActiveSession": "Нет активной сессии",
+    "androidUnavailable": "Список процессов этого устройства недоступен на Android. Подключитесь к хосту по SSH, чтобы увидеть его процессы.",
+    "colUser": "Пользователь",
+    "killProcessTitle": "Завершить процесс {{pid}}",
   },
   zh: {
     "title": "进程",
@@ -76,6 +141,10 @@ export const messages: Record<"en"|"fr"|"ru"|"zh"|"tr", Record<string,string>> =
     "confirmKill": "终止",
     "confirmForceKill": "强制终止",
     "cancel": "取消",
+    "noActiveSession": "没有活动会话",
+    "androidUnavailable": "Android 上无法查看此设备的进程列表。请通过 SSH 连接主机以查看其进程。",
+    "colUser": "用户",
+    "killProcessTitle": "终止进程 {{pid}}",
   },
   tr: {
     "title": "İşlemler",
@@ -95,5 +164,35 @@ export const messages: Record<"en"|"fr"|"ru"|"zh"|"tr", Record<string,string>> =
     "confirmKill": "Sonlandır",
     "confirmForceKill": "Zorla sonlandır",
     "cancel": "İptal",
+    "noActiveSession": "Etkin oturum yok",
+    "androidUnavailable": "Bu cihazın işlem listesi Android'de kullanılamaz. İşlemlerini görmek için bir sunucuya SSH ile bağlanın.",
+    "colUser": "Kullanıcı",
+    "killProcessTitle": "{{pid}} işlemini sonlandır",
   },
+  cs: {
+    "title": "Procesy",
+    "sshOnly": "Seznam procesů je dostupný jen pro SSH relace. Pro zobrazení procesů se připojte k hostu přes SSH.",
+    "filterPlaceholder": "Filtrovat procesy…",
+    "sortCpu": "CPU %",
+    "sortMem": "PAM",
+    "sortPid": "PID",
+    "sortName": "Název",
+    "noProcessesFound": "Nenalezeny žádné procesy",
+    "loadingProcesses": "Načítání procesů…",
+    "sheetKillTerm": "Ukončit (SIGTERM)",
+    "sheetForceKill": "Vynutit ukončení (SIGKILL)",
+    "killConfirmTitle": "Ukončit proces?",
+    "forceKillConfirmTitle": "Vynutit ukončení procesu?",
+    "killConfirmBody": "Procesu {{name}} (pid {{pid}}) bude odeslán signál {{signal}}.",
+    "confirmKill": "Ukončit",
+    "confirmForceKill": "Vynutit ukončení",
+    "cancel": "Zrušit",
+    "noActiveSession": "Žádná aktivní relace",
+    "androidUnavailable": "Seznam procesů tohoto zařízení není v Androidu k dispozici. Pro zobrazení procesů se připojte k hostu přes SSH.",
+    "colUser": "Uživatel",
+    "killProcessTitle": "Ukončit proces {{pid}}",
+  },
+  pt,
+  "pt-BR": pt,
+  "pt-PT": ptPt,
 };

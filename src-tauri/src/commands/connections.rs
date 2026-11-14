@@ -1,9 +1,12 @@
 use crate::commands::crdt::max_clock;
 use crate::commands::vault_object::{
-    adopt_into, created_at_of, effective_vault, find_mut, impl_vault_object, requested_vault,
-    vault_delete_command, vault_list_command,
+    adopt_into, created_at_of, deleted_at, effective_vault, find_mut, impl_vault_object,
+    requested_vault, vault_delete_command, vault_list_command,
 };
-use crate::storage::config::{load_connections, save_connections, Connection, ConnectionFormData};
+use crate::error::AppError;
+use crate::storage::config::{
+    load_connections, save_connections, Connection, ConnectionFormData, ConnectionType,
+};
 use crate::vault_auth::check_vault_write;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -11,13 +14,17 @@ use uuid::Uuid;
 
 impl_vault_object!(Connection, "Connection");
 
+fn non_empty(s: String) -> Option<String> {
+    (!s.is_empty()).then_some(s)
+}
+
 /// Builds an updated `Connection` by applying `data` on top of `existing`.
 ///
 /// Using a struct literal here is intentional: the compiler will flag any newly
 /// added `Connection` field that isn't handled, preventing the class of bug
 /// where a field is silently dropped on update.
 ///
-/// `distro` / `icon` use "keep existing if not provided" semantics.
+/// `distro` / `icon` use "keep existing if not provided" semantics; an empty `icon` clears it.
 /// `vault_id` falls back to the existing vault when absent from the form.
 fn merge_form_into_connection(existing: &Connection, data: ConnectionFormData) -> Connection {
     let vault_id = data.vault_id.unwrap_or_else(|| existing.vault_id.clone());
@@ -44,12 +51,14 @@ fn merge_form_into_connection(existing: &Connection, data: ConnectionFormData) -
         ask_vars_each_time: data.ask_vars_each_time,
         terminal_encoding: data.terminal_encoding,
         distro: data.distro.or_else(|| existing.distro.clone()),
-        icon: data.icon.or_else(|| existing.icon.clone()),
+        icon: data.icon.map_or_else(|| existing.icon.clone(), non_empty),
         pinned: data.pinned,
         ping_disabled: data.ping_disabled,
         shell_integration: data.shell_integration,
         keepalive_preset: data.keepalive_preset,
         persist_session: data.persist_session,
+        proxy: data.proxy,
+        port_knock: data.port_knock,
         connection_type: data.connection_type,
         serial_port: data.serial_port,
         serial_baud: data.serial_baud,
@@ -59,6 +68,7 @@ fn merge_form_into_connection(existing: &Connection, data: ConnectionFormData) -
         serial_flow_control: data.serial_flow_control,
         serial_auto_reconnect: data.serial_auto_reconnect,
         ftp_secure: data.ftp_secure,
+        webdav_url: data.webdav_url,
         notes: data.notes,
         created_at: existing.created_at.clone(),
         last_used_at: existing.last_used_at.clone(),
@@ -117,9 +127,9 @@ connection_clocks! {
         folder_id, vault_id, agent_forwarding, legacy_algorithms, pre_command, post_command,
         pre_snippet_id, post_snippet_id, ask_vars_each_time,
         terminal_encoding, distro, icon, ping_disabled,
-        shell_integration, keepalive_preset, persist_session, connection_type, serial_port, serial_baud,
+        shell_integration, keepalive_preset, persist_session, proxy, port_knock, connection_type, serial_port, serial_baud,
         serial_data_bits, serial_parity, serial_stop_bits, serial_flow_control,
-        serial_auto_reconnect, ftp_secure,
+        serial_auto_reconnect, ftp_secure, webdav_url,
         notes,
     ],
     by_id: [jump_hosts, env_vars],
@@ -132,6 +142,11 @@ fn initial_clocks(now: &str) -> HashMap<String, String> {
 }
 
 vault_list_command!(connection_list, Connection, load_connections);
+
+#[tauri::command]
+pub fn connection_deleted_at() -> Result<std::collections::BTreeMap<String, String>, String> {
+    Ok(deleted_at(&load_connections()?))
+}
 
 // `connection_save` and `connection_adopt` stay spelled out: `build_connection`
 // takes a fifth argument, and the adopt has to carry the stored `last_used_at`.
@@ -159,7 +174,7 @@ fn build_connection(
         created_at: created_at.unwrap_or_else(|| now.clone()),
         last_used_at,
         distro: data.distro,
-        icon: data.icon,
+        icon: data.icon.and_then(non_empty),
         identity_id: data.identity_id,
         key_id: data.key_id,
         folder_id: data.folder_id,
@@ -181,6 +196,8 @@ fn build_connection(
         shell_integration: data.shell_integration,
         keepalive_preset: data.keepalive_preset,
         persist_session: data.persist_session,
+        proxy: data.proxy,
+        port_knock: data.port_knock,
         connection_type: data.connection_type,
         serial_port: data.serial_port,
         serial_baud: data.serial_baud,
@@ -190,13 +207,24 @@ fn build_connection(
         serial_flow_control: data.serial_flow_control,
         serial_auto_reconnect: data.serial_auto_reconnect,
         ftp_secure: data.ftp_secure,
+        webdav_url: data.webdav_url,
         notes: data.notes,
         clocks,
     }
 }
 
+fn check_webdav_url(data: &ConnectionFormData) -> Result<(), AppError> {
+    if data.connection_type != ConnectionType::Webdav {
+        return Ok(());
+    }
+    crate::webdav::paths::DavBase::parse(data.webdav_url.as_deref().unwrap_or_default())
+        .map(|_| ())
+        .map_err(AppError::from)
+}
+
 #[tauri::command]
-pub fn connection_save(data: ConnectionFormData) -> Result<Connection, String> {
+pub fn connection_save(data: ConnectionFormData) -> Result<Connection, AppError> {
+    check_webdav_url(&data)?;
     let mut connections = load_connections()?;
     let now = Utc::now().to_rfc3339();
     check_vault_write(&requested_vault(&data.vault_id))?;
@@ -216,7 +244,7 @@ pub fn connection_save(data: ConnectionFormData) -> Result<Connection, String> {
 /// Replacing rather than rejecting an existing id keeps a retry after a half-done
 /// migration idempotent.
 #[tauri::command]
-pub fn connection_adopt(id: String, data: ConnectionFormData) -> Result<Connection, String> {
+pub fn connection_adopt(id: String, data: ConnectionFormData) -> Result<Connection, AppError> {
     let mut connections = load_connections()?;
     let now = Utc::now().to_rfc3339();
     check_vault_write(&requested_vault(&data.vault_id))?;
@@ -233,10 +261,11 @@ pub fn connection_adopt(id: String, data: ConnectionFormData) -> Result<Connecti
 }
 
 #[tauri::command]
-pub fn connection_update(id: String, data: ConnectionFormData) -> Result<Connection, String> {
+pub fn connection_update(id: String, data: ConnectionFormData) -> Result<Connection, AppError> {
     let mut connections = load_connections()?;
     let existing = find_mut(&mut connections, &id)?.clone();
     check_vault_write(&[effective_vault(&data.vault_id, &existing.vault_id)])?;
+    check_webdav_url(&data)?;
 
     let now = Utc::now().to_rfc3339();
     let mut updated = merge_form_into_connection(&existing, data);
@@ -249,12 +278,16 @@ pub fn connection_update(id: String, data: ConnectionFormData) -> Result<Connect
 }
 
 #[tauri::command]
-pub fn connection_set_distro(id: String, distro: String) -> Result<(), String> {
+pub fn connection_set_distro(id: String, distro: String, clear_icon: bool) -> Result<(), String> {
     let mut connections = load_connections()?;
     let conn = find_mut(&mut connections, &id)?;
     let now = Utc::now().to_rfc3339();
     conn.distro = Some(distro);
     conn.clocks.insert("distro".to_string(), now.clone());
+    if clear_icon {
+        conn.icon = None;
+        conn.clocks.insert("icon".to_string(), now.clone());
+    }
     conn.updated_at = max_clock(&conn.clocks, &now);
     save_connections(&connections)
 }
@@ -276,7 +309,8 @@ vault_delete_command!(connection_delete, load_connections, save_connections);
 mod tests {
     use super::*;
     use crate::storage::config::{
-        AuthType, Connection, ConnectionFormData, ConnectionType, EnvVar, JumpHost,
+        AuthType, Connection, ConnectionFormData, ConnectionType, EnvVar, JumpHost, PortKnock,
+        ProxyMode, ProxyOverride,
     };
     use std::collections::HashMap;
 
@@ -325,6 +359,8 @@ mod tests {
             shell_integration: None,
             keepalive_preset: None,
             persist_session: None,
+            proxy: None,
+            port_knock: None,
             connection_type: ConnectionType::Ssh,
             serial_port: Some("/dev/ttyU0".into()),
             serial_baud: Some(9600),
@@ -334,6 +370,7 @@ mod tests {
             serial_flow_control: Some("none".into()),
             serial_auto_reconnect: Some(true),
             ftp_secure: false,
+            webdav_url: None,
             notes: Some("orig note".into()),
             updated_at: "2026-01-01T00:00:00Z".into(),
             deleted_at: None,
@@ -382,6 +419,18 @@ mod tests {
             shell_integration: Some(false),
             keepalive_preset: Some("balanced".into()),
             persist_session: Some(true),
+            proxy: Some(ProxyOverride {
+                mode: ProxyMode::Socks5,
+                host: Some("p".into()),
+                port: Some(1080),
+                username: None,
+            }),
+            port_knock: Some(PortKnock {
+                enabled: true,
+                delay_ms: Some(200),
+                settle_ms: None,
+                window_secs: Some(60),
+            }),
             connection_type: ConnectionType::Serial,
             serial_port: Some("/dev/ttyU1".into()),
             serial_baud: Some(115200),
@@ -391,8 +440,23 @@ mod tests {
             serial_flow_control: Some("rtscts".into()),
             serial_auto_reconnect: Some(false),
             ftp_secure: true,
+            webdav_url: Some("https://dav.example.com/".into()),
             notes: Some("new note".into()),
         }
+    }
+
+    #[test]
+    fn port_knock_round_trips_and_bumps_its_clock() {
+        let existing = sample_connection();
+        let merged = merge_form_into_connection(&existing, sample_form());
+        assert_eq!(merged.port_knock, sample_form().port_knock);
+
+        let mut changed = sample_form();
+        changed.port_knock.as_mut().unwrap().window_secs = Some(30);
+        let mut next = merge_form_into_connection(&merged, changed);
+        bump_changed_clocks(&merged, &mut next, "2026-03-03T00:00:00Z");
+        assert_eq!(next.port_knock.as_ref().unwrap().window_secs, Some(30));
+        assert_eq!(next.clocks["port_knock"], "2026-03-03T00:00:00Z");
     }
 
     // ── merge_form_into_connection ──────────────────────────────────────────
@@ -421,6 +485,14 @@ mod tests {
         let merged = merge_form_into_connection(&existing, form);
         assert_eq!(merged.distro, Some("ubuntu".to_string()));
         assert_eq!(merged.icon, Some("server".to_string()));
+    }
+
+    #[test]
+    fn merge_clears_icon_when_form_sends_empty() {
+        let mut form = sample_form();
+        form.icon = Some(String::new());
+        let merged = merge_form_into_connection(&sample_connection(), form);
+        assert_eq!(merged.icon, None);
     }
 
     #[test]
@@ -517,13 +589,33 @@ mod tests {
         assert!(diff_ids.clocks.contains_key("env_vars"));
     }
 
-    /// Pins the exact set of fields `bump_changed_clocks` tracks when everything
-    /// changes (31 fields, incl. `agent_forwarding`, `legacy_algorithms`, `ping_disabled`,
-    /// `shell_integration`, `keepalive_preset`, `persist_session`;
-    /// `pinned` is excluded as device-local).
-    /// Since Phase 1, create-time init and update-time bump both derive from the
-    /// single `connection_clocks!` list, so this set equals the one seeded by
-    /// `initial_clocks` — see `initial_clocks_match_bumpable_field_set`.
+    #[test]
+    fn webdav_form_payload_deserializes_and_merges() {
+        let json = r#"{"host":"cloud.example.com","port":443,"username":"u",
+            "auth_type":"password","tags":[],"connection_type":"webdav",
+            "webdav_url":"https://cloud.example.com/dav/"}"#;
+        let data: ConnectionFormData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.connection_type, ConnectionType::Webdav);
+        check_webdav_url(&data).unwrap();
+        let merged = merge_form_into_connection(&sample_connection(), data);
+        assert_eq!(
+            merged.webdav_url.as_deref(),
+            Some("https://cloud.example.com/dav/")
+        );
+    }
+
+    #[test]
+    fn a_webdav_host_needs_a_usable_url() {
+        for url in [None, Some("ftp://h/"), Some("https://u:p@h/")] {
+            let data = ConnectionFormData {
+                connection_type: ConnectionType::Webdav,
+                webdav_url: url.map(String::from),
+                ..sample_form()
+            };
+            assert!(check_webdav_url(&data).is_err(), "{url:?}");
+        }
+    }
+
     #[test]
     fn ftp_form_payload_deserializes_and_merges() {
         // Mirrors what the connection form sends for a new FTP host.
@@ -537,6 +629,30 @@ mod tests {
         assert!(merged.ftp_secure);
     }
 
+    #[test]
+    fn proxy_override_round_trips_through_form_json() {
+        let json = r#"{"host":"h","port":22,"username":"u","auth_type":"password","tags":[],
+            "proxy":{"mode":"http","host":"p","port":3128,"username":"pu"}}"#;
+        let data: ConnectionFormData = serde_json::from_str(json).expect("deserialize");
+        let merged = merge_form_into_connection(&sample_connection(), data);
+        let out = serde_json::to_value(&merged).unwrap();
+        let p = merged.proxy.expect("proxy kept");
+        assert_eq!(p.mode, ProxyMode::Http);
+        assert_eq!(p.port, Some(3128));
+        assert_eq!(out["proxy"]["mode"], "http");
+        assert_eq!(
+            serde_json::from_str::<ProxyMode>(r#""https""#).unwrap(),
+            ProxyMode::Https
+        );
+    }
+
+    /// Pins the exact set of fields `bump_changed_clocks` tracks when everything
+    /// changes (39 fields, incl. `agent_forwarding`, `legacy_algorithms`, `ping_disabled`,
+    /// `shell_integration`, `keepalive_preset`, `persist_session`, `proxy`, `port_knock`;
+    /// `pinned` is excluded as device-local).
+    /// Since Phase 1, create-time init and update-time bump both derive from the
+    /// single `connection_clocks!` list, so this set equals the one seeded by
+    /// `initial_clocks` — see `initial_clocks_match_bumpable_field_set`.
     #[test]
     fn bump_covers_the_expected_field_set() {
         let old = sample_connection();
@@ -571,6 +687,8 @@ mod tests {
             "post_snippet_id",
             "pre_command",
             "pre_snippet_id",
+            "port_knock",
+            "proxy",
             "serial_auto_reconnect",
             "serial_baud",
             "serial_data_bits",
@@ -583,10 +701,11 @@ mod tests {
             "terminal_encoding",
             "username",
             "vault_id",
+            "webdav_url",
         ];
         expected.sort();
         assert_eq!(keys, expected);
-        assert_eq!(keys.len(), 36);
+        assert_eq!(keys.len(), 39);
     }
 
     /// Phase 1 reconciliation: the clocks seeded for a brand-new connection
@@ -606,6 +725,6 @@ mod tests {
         let bumpable: HashSet<String> = new.clocks.into_keys().collect();
 
         assert_eq!(seeded, bumpable);
-        assert_eq!(seeded.len(), 36);
+        assert_eq!(seeded.len(), 39);
     }
 }

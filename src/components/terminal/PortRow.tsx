@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeClipboard } from "@/utils/clipboard";
+import { useCopiedFlash } from "@/hooks/useCopiedFlash";
 import { TunnelStatusDot } from "@/components/shared/TunnelStatusDot";
 
 function formatBytes(b: number): string {
@@ -19,6 +20,7 @@ export function PortRow({
   portInfo,
   isActive,
   isError,
+  error,
   isBusy,
   isDeleting,
   isSaving,
@@ -39,6 +41,7 @@ export function PortRow({
   portInfo: string;
   isActive: boolean;
   isError?: boolean;
+  error?: string;
   isBusy: boolean;
   isDeleting: boolean;
   isSaving?: boolean;
@@ -56,7 +59,7 @@ export function PortRow({
   defaultName?: string;
 }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
+  const { copied, flash } = useCopiedFlash(1200);
   const [nameDraft, setNameDraft] = useState(defaultName ?? label);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renameCommittedRef = useRef(false);
@@ -78,8 +81,7 @@ export function PortRow({
   async function copyAddress() {
     if (localPort == null) return;
     await writeClipboard(`localhost:${localPort}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
+    flash();
   }
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 group hover:bg-(--t-bg-elevated)">
@@ -121,9 +123,13 @@ export function PortRow({
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-mono text-(--t-text-muted) truncate leading-tight">
-            {portInfo}
-          </span>
+          {error ? (
+            <span title={error} className="text-[10px] text-red-400 truncate leading-tight">{error}</span>
+          ) : (
+            <span className="text-[10px] font-mono text-(--t-text-muted) truncate leading-tight">
+              {portInfo}
+            </span>
+          )}
           {bytes && (
             <span className="text-[10px] text-(--t-text-dim) shrink-0 leading-tight">
               {bytes}

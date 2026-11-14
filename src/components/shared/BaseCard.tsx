@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { ContextMenu, useContextMenu, type ContextMenuItem } from "@/components/shared/ContextMenu";
+import { CardMenuContext } from "@/components/shared/CardActionButton";
 
 interface BaseCardProps {
   isSelected?: boolean;
@@ -29,6 +30,13 @@ export const GLASS_BG = "linear-gradient(140deg, rgba(255,255,255,0.07) 0%, rgba
 export const GLASS_BG_HOVER = "linear-gradient(140deg, rgba(255,255,255,0.11) 0%, rgba(255,255,255,0.03) 45%, transparent 100%), color-mix(in srgb, var(--t-bg-card) 80%, transparent)";
 export const GLASS_SHADOW = "var(--t-ring), var(--t-elev-1), var(--t-highlight)";
 export const GLASS_SHADOW_HOVER = "var(--t-ring-strong), var(--t-elev-1-hover), var(--t-highlight-strong)";
+export const GLASS_CARD_STYLE: React.CSSProperties = {
+  background: GLASS_BG,
+  backdropFilter: "blur(12px) saturate(1.5)",
+  WebkitBackdropFilter: "blur(12px) saturate(1.5)",
+  boxShadow: GLASS_SHADOW,
+  border: "2px solid transparent",
+};
 
 export const BaseCard = memo(function BaseCard({
   isSelected,
@@ -52,20 +60,18 @@ export const BaseCard = memo(function BaseCard({
   "data-connection-id": dataConnectionId,
   "data-selectable-id": dataSelectableId,
 }: BaseCardProps) {
-  const { pos, open, close } = useContextMenu();
+  const { pos, open, openAt, close } = useContextMenu();
   const activeMenuItems = isSelected && bulkContextMenuItems?.length ? bulkContextMenuItems : contextMenuItems;
+  const openMenuFrom = (e: React.MouseEvent<HTMLElement>) => {
+    openAt(e.currentTarget.getBoundingClientRect());
+    if (!isSelected) onClick?.(e as React.MouseEvent<HTMLDivElement>);
+  };
 
   const activeBorderColor = isEditing || isSelected ? "var(--t-accent)" : "transparent";
   const focusBoxShadow = isFocused && !isSelected && !isEditing ? "inset 0 0 0 2px var(--t-accent)" : "none";
   const showOverlay = isEditing || isSelected || isFocused;
 
-  const glassStyle: React.CSSProperties = glass ? {
-    background: GLASS_BG,
-    backdropFilter: "blur(12px) saturate(1.5)",
-    WebkitBackdropFilter: "blur(12px) saturate(1.5)",
-    boxShadow: GLASS_SHADOW,
-    border: "2px solid transparent",
-  } : { border: "2px solid transparent" };
+  const glassStyle: React.CSSProperties = glass ? GLASS_CARD_STYLE : { border: "2px solid transparent" };
 
   return (
     <>
@@ -93,7 +99,9 @@ export const BaseCard = memo(function BaseCard({
           onMouseLeave?.();
         }}
       >
-        {children}
+        <CardMenuContext.Provider value={activeMenuItems?.length ? openMenuFrom : null}>
+          {children}
+        </CardMenuContext.Provider>
         {showOverlay && (
           <div
             className="absolute inset-[-2px] rounded-2xl border-2 pointer-events-none"

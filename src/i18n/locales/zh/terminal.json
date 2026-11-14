@@ -7,21 +7,28 @@
       "noActiveSession": "没有活跃会话"
     },
     "historyPanel": {
-      "relativeTime": {
-        "justNow": "刚刚",
-        "secondsAgo": "{{count}} 秒前",
-        "minutesAgo": "{{count}} 分钟前",
-        "hoursAgo": "{{count}} 小时前",
-        "daysAgo": "{{count}} 天前"
-      },
+      "historyOff": "命令历史已关闭。\n可在“设置 › 终端”中开启。",
       "removeFromHistory": "从历史中移除",
       "searchPlaceholder": "搜索历史…",
-      "showCurrentOnly": "仅显示当前连接",
       "showAllConnections": "显示所有连接",
       "clearAllTitle": "清除所有历史",
       "noCommandsMatch": "没有匹配的命令",
       "noHistoryForConnection": "此连接暂无历史",
-      "noHistoryYet": "暂无命令历史。\n您输入的命令将显示在此处。"
+      "noHistoryYet": "暂无命令历史。\n您输入的命令将显示在此处。",
+      "favorites": "收藏",
+      "recent": "最近",
+      "addFavorite": "添加到收藏",
+      "addFavoriteTeam": "添加到收藏。收藏保存在你的账户中并会同步，即使你离开团队也会保留。",
+      "removeFavorite": "取消收藏",
+      "saveAsSnippet": "保存为代码片段…",
+      "showOnlyHost": "仅显示 {{host}}",
+      "clearHostFilter": "清除主机筛选",
+      "showCurrentHost": "仅显示当前主机",
+      "clearConfirm_one": "清除 {{count}} 条命令？",
+      "clearConfirm_other": "清除 {{count}} 条命令？",
+      "favoritesStay_one": "{{count}} 条收藏会保留。",
+      "favoritesStay_other": "{{count}} 条收藏会保留。",
+      "clear": "清除"
     },
     "multiplayerBar": {
       "ended": "已结束",
@@ -37,7 +44,9 @@
       "stopSharingTitle": "停止共享",
       "leaveSessionTitle": "离开会话",
       "stop": "停止",
-      "leave": "离开"
+      "leave": "离开",
+      "waitingForKey": "正在等待主持人…",
+      "keyFailed": "主持人未共享密钥"
     },
     "sftp": {
       "hostLabel": {
@@ -85,7 +94,14 @@
         "tooManyParts": "使用端口或 远程：本地",
         "invalidRemotePort": "端口必须为 1-65535",
         "invalidLocalPort": "本地端口必须为 1-65535"
-      }
+      },
+      "toast": {
+        "viewPorts": "查看端口 →",
+        "forwardedOne": "已转发端口 {{port}} → localhost:{{localPort}}",
+        "forwardedMany_other": "已转发 {{count}} 个端口",
+        "autoForwardCapped_other": "自动转发已暂停 — 已转发 {{count}} 个端口"
+      },
+      "portLabel": "端口 {{port}}"
     },
     "rightPanel": {
       "font": "字体",
@@ -95,9 +111,11 @@
       "themeCustom": "自定义",
       "createNewTheme": "新建主题",
       "closePanelTitle": "关闭面板",
+      "resizeHandle": "拖动以调整大小，双击恢复默认",
       "sections": {
         "history": "历史",
-        "sftp": "SFTP"
+        "sftp": "SFTP",
+        "notes": "备注"
       },
       "pluginUnavailable": "此面板已不可用。提供它的插件已被移除或停用。",
       "pluginUnavailableAction": "返回主题"
@@ -227,11 +245,8 @@
         "openingShell": "正在打开 Shell",
         "sftpSubsystem": "SFTP 子系统",
         "openingPort": "正在打开端口",
-        "ready": "就绪"
-      },
-      "connectionLost": {
-        "title": "连接已断开",
-        "subtitle": "正在重连…"
+        "ready": "就绪",
+        "portKnock": "端口敲门"
       },
       "reconnectWait": {
         "offline": {
@@ -247,17 +262,17 @@
       "connectionError": {
         "title": "连接失败",
         "retry": "重试",
+        "enableLegacyAndRetry": "开启传统算法并重试",
         "dismiss": "忽略"
       },
       "hostKeyConflict": {
         "title": "主机密钥已更改",
-        "descriptionPrefix": "",
-        "descriptionSuffix": " 的指纹已更改。",
         "replace": "替换",
         "addAsNew": "添加为新主机",
         "abort": "中止",
         "stored": "已存储",
-        "received": "已收到"
+        "received": "已收到",
+        "description": "<host>{{address}}</host> 的指纹已更改。"
       },
       "passphrasePrompt": {
         "title": "需要密钥口令",
@@ -286,6 +301,24 @@
         "unlock": "解锁保险库",
         "retry": "重试",
         "dismiss": "关闭标签页"
+      },
+      "identityPick": {
+        "title": "你的身份不可用",
+        "missingBody": "你为 {{host}} 选择了一个身份，但它不在此设备上或已被删除。未尝试连接。",
+        "forbiddenBody": "你为 {{host}} 选择了 {{identity}}，但你已无法再使用它。未尝试连接。",
+        "choose": "选择其他身份",
+        "useHostNamed": "本次使用 {{name}}（主机）",
+        "useHost": "本次使用主机的凭据"
+      },
+      "saveTarget": {
+        "rememberFor": "记住用于",
+        "saveFor": "保存给",
+        "thisHost": "此主机",
+        "allVaultHosts": "{{vault}} 的所有主机",
+        "everyone": "所有人",
+        "onlyMe": "仅我自己",
+        "ownNote": "仅限你自己。队友仍使用主机自身的设置。",
+        "teamNote": "“所有人”会为整个团队更新 {{host}}。“仅我自己”不改动主机。"
       }
     },
     "statusBar": {
@@ -306,6 +339,10 @@
       "serialReopen": "重新打开串口",
       "serialAutoReconnectOn": "自动重连已开启 — 点击后不再占用串口",
       "serialAutoReconnectOff": "自动重连已关闭 — 断开后串口保持空闲",
+      "serialLineOn": "{{line}} 已开启 — 点击关闭",
+      "serialLineOff": "{{line}} 已关闭 — 点击开启",
+      "serialRtsFlowControlled": "RTS 由 RTS/CTS 流控制驱动",
+      "serialBreak": "发送 break 信号",
       "systemMetricsTitle": "系统指标",
       "activeTunnels_one": "{{count}} 个活跃隧道",
       "activeTunnels_other": "{{count}} 个活跃隧道",
@@ -315,6 +352,25 @@
       "sparklineMin": "最小 {{value}}ms",
       "sparklineAvg": "平均 {{value}}ms",
       "sparklineMax": "最大 {{value}}ms"
+    },
+    "xterm": {
+      "linkTooltip": "Alt+单击以打开",
+      "sessionClosed": "会话已关闭",
+      "serialClosed": "串口连接已关闭"
+    },
+    "pasteImage": {
+      "uploading": "正在上传截图",
+      "uploadingDetail": "到 {{host}} · {{size}} · {{width}}×{{height}}",
+      "pasted": "截图已粘贴",
+      "pastedDetail": "{{host}} · {{name}}",
+      "firstUse": "在主机上保留 7 天，仅你可读取",
+      "settings": "图片粘贴设置",
+      "deleteFromHost": "从主机删除",
+      "deleted": "截图已从主机删除",
+      "deleteFailed": "无法删除截图",
+      "failed": "无法上传截图",
+      "retry": "重试",
+      "broadcast": "同时向多个窗格输入时，图片粘贴已关闭。"
     }
   }
 }

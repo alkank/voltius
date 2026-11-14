@@ -22,6 +22,7 @@ vi.mock("@/services/teamActionFeedback", () => ({
 }));
 
 import { PendingInviteCard } from "./cards/PendingInviteCard";
+import { useTeamStore } from "@/stores/teamStore";
 
 const inv = {
   id: "inv1",
@@ -53,7 +54,7 @@ afterEach(() => cleanup());
 test("renders the invitee handle and role", () => {
   render(<PendingInviteCard {...props} />);
   expect(screen.getByText("jade-heron-7715")).toBeTruthy();
-  expect(screen.getByText("member")).toBeTruthy();
+  expect(screen.getByText("members.roleName.member")).toBeTruthy();
 });
 
 test("click revoke calls revokePendingInvitation(teamId, inv.id) then onRevoked(inv.id)", async () => {
@@ -133,4 +134,34 @@ test("both actions are permanent buttons, not hover-only", () => {
 
   expect(screen.getByTitle("members.revokeInvitationTitle").className).not.toContain("group-hover");
   expect(screen.getByTitle("members.invite.resendTitle").className).not.toContain("group-hover");
+});
+
+test("invited by shows the inviter's name from the roster, and the invitation's own name leads", () => {
+  useTeamStore.setState({
+    membersByTeam: { t1: [{ team_id: "t1", user_id: "u9", handle: "quiet-otter-1", member_name: "Jan", public_key: "", invited_by_display_name: null, joined_at: "", role_ids: [] }] },
+  });
+  render(<PendingInviteCard {...props} inv={{ ...inv, member_name: "Kasia", invited_by_display_name: "quiet-otter-1" }} />);
+  expect(screen.getByText("Kasia")).toBeTruthy();
+  expect(screen.getByText("jade-heron-7715")).toBeTruthy();
+  expect(screen.getByText(/Jan/)).toBeTruthy();
+  expect(screen.queryByText(/quiet-otter-1/)).toBeNull();
+  useTeamStore.setState({ membersByTeam: {} });
+});
+
+const multiRoles = [
+  { id: "r-mem", team_id: "t1", name: "member", is_builtin: true, permissions: 0, position: 1, created_at: "" },
+  { id: "r-dba", team_id: "t1", name: "dba", is_builtin: false, permissions: 0, position: 4, created_at: "" },
+];
+
+test("an invitation lists every role it carries (#779)", () => {
+  render(<PendingInviteCard {...props} roles={multiRoles} inv={{ ...inv, role_ids: ["r-dba", "r-mem"] }} />);
+  expect(screen.getByText("members.roleName.member")).toBeTruthy();
+  expect(screen.getByText("dba")).toBeTruthy();
+});
+
+test("resending keeps every role of the invitation", async () => {
+  render(<PendingInviteCard {...props} roles={multiRoles} inv={{ ...inv, role_ids: ["r-dba", "r-mem"] }} />);
+  fireEvent.click(screen.getByTitle("members.invite.resendTitle"));
+  await waitFor(() => expect(h.inviteByEmail).toHaveBeenCalled());
+  expect(h.inviteByEmail).toHaveBeenCalledWith(expect.objectContaining({ roleName: "member", roleIds: ["r-dba", "r-mem"] }));
 });

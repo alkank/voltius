@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+pub const APP_IDENTIFIER: &str = "com.voltius.app";
 
 /// Overrides the base config directory. Set once at startup on platforms where
 /// `dirs::config_dir()` doesn't resolve to writable, app-scoped storage — most
@@ -38,6 +40,39 @@ pub enum ConnectionType {
     Ssh,
     Serial,
     Ftp,
+    Webdav,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyMode {
+    Direct,
+    System,
+    Socks5,
+    Http,
+    Https,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProxyOverride {
+    pub mode: ProxyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PortKnock {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +113,10 @@ pub struct Folder {
     pub vault_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub updated_at: String,
     pub deleted_at: Option<String>,
     /// Per-field LWW clocks: field_name → RFC3339 timestamp of last write.
@@ -96,6 +135,10 @@ pub struct FolderFormData {
     pub vault_id: Option<String>,
     #[serde(default)]
     pub pinned: Option<bool>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +204,11 @@ pub struct Connection {
     /// Per-host session persistence override. None inherits the global setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persist_session: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyOverride>,
+    /// Plain knock settings; the port sequence lives in the secret store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_knock: Option<PortKnock>,
     #[serde(default)]
     pub connection_type: ConnectionType,
     #[serde(default)]
@@ -179,6 +227,8 @@ pub struct Connection {
     /// FTP only: use explicit FTPS (AUTH TLS) instead of plain FTP.
     #[serde(default)]
     pub ftp_secure: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webdav_url: Option<String>,
     /// Free-form user notes for this host (reminders, maintenance windows, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
@@ -245,6 +295,10 @@ pub struct ConnectionFormData {
     #[serde(default)]
     pub persist_session: Option<bool>,
     #[serde(default)]
+    pub proxy: Option<ProxyOverride>,
+    #[serde(default)]
+    pub port_knock: Option<PortKnock>,
+    #[serde(default)]
     pub connection_type: ConnectionType,
     #[serde(default)]
     pub serial_port: Option<String>,
@@ -261,6 +315,8 @@ pub struct ConnectionFormData {
     pub serial_auto_reconnect: Option<bool>,
     #[serde(default)]
     pub ftp_secure: bool,
+    #[serde(default)]
+    pub webdav_url: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
 }
@@ -385,17 +441,19 @@ fn migrate_shell_integration(obj: &mut serde_json::Map<String, serde_json::Value
 /// supplies a valid enum variant instead of the record failing to deserialize
 /// (which would silently drop it). New code only ever writes valid variants.
 fn migrate_enum_fields(obj: &mut serde_json::Map<String, serde_json::Value>) {
-    if !matches!(
-        obj.get("auth_type").and_then(|v| v.as_str()),
-        Some("password") | Some("key")
-    ) {
-        obj.remove("auth_type");
-    }
-    if !matches!(
-        obj.get("connection_type").and_then(|v| v.as_str()),
-        Some("ssh") | Some("serial") | Some("ftp")
-    ) {
-        obj.remove("connection_type");
+    drop_unless_valid::<AuthType>(obj, "auth_type");
+    drop_unless_valid::<ConnectionType>(obj, "connection_type");
+}
+
+fn drop_unless_valid<T: serde::de::DeserializeOwned>(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) {
+    if obj
+        .get(key)
+        .is_some_and(|v| serde_json::from_value::<T>(v.clone()).is_err())
+    {
+        obj.remove(key);
     }
 }
 
@@ -416,13 +474,47 @@ fn parse_with_migration<T: serde::de::DeserializeOwned>(data: &str) -> Result<Ve
 
 // ─── File helpers ────────────────────────────────────────────────────────────
 
-pub fn config_dir() -> PathBuf {
-    let dir = match CONFIG_DIR_OVERRIDE.get() {
+#[cfg(not(test))]
+fn default_config_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("voltius")
+}
+
+// Per test thread: libtest runs each test on its own thread, and the TempDir is removed when it exits.
+#[cfg(test)]
+fn default_config_dir() -> PathBuf {
+    thread_local! {
+        static DIR: tempfile::TempDir = tempfile::tempdir().expect("test config dir");
+    }
+    DIR.with(|d| d.path().to_path_buf())
+}
+
+/// `name` if it is a single path component that cannot leave its directory.
+pub fn plain_leaf(name: &str) -> Option<&str> {
+    let ok = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\');
+    ok.then_some(name)
+}
+
+pub fn app_data_dir() -> Result<PathBuf, String> {
+    dirs::data_dir()
+        .map(|d| d.join(APP_IDENTIFIER))
+        .ok_or_else(|| "Failed to get app data dir".to_string())
+}
+
+pub fn config_dir_peek() -> PathBuf {
+    match CONFIG_DIR_OVERRIDE.get() {
         Some(base) => base.clone(),
-        None => dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("voltius"),
-    };
+        None => default_config_dir(),
+    }
+}
+
+pub fn config_dir() -> PathBuf {
+    let dir = config_dir_peek();
     fs::create_dir_all(&dir).ok();
     dir
 }
@@ -486,7 +578,7 @@ fn load_json_migrated<T: serde::de::DeserializeOwned>(path: PathBuf) -> Result<V
 /// Pretty-print `value` as JSON and write it to `path`.
 fn save_json<T: Serialize + ?Sized>(path: PathBuf, value: &T) -> Result<(), String> {
     let data = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, data).map_err(|e| e.to_string())
+    super::secrets::write_atomic(&path, data.as_bytes()).map_err(String::from)
 }
 
 pub fn load_connections() -> Result<Vec<Connection>, String> {
@@ -727,7 +819,7 @@ pub struct PortForwardingRule {
     pub remote_host: String,
     #[serde(default)]
     pub tunnel_type: TunnelType,
-    /// Remote tunnels: server-side bind address (default 127.0.0.1)
+    /// Listener address: on the server for remote tunnels, on this machine otherwise (default 127.0.0.1)
     #[serde(default = "default_localhost")]
     pub bind_host: String,
     /// Remote tunnels: local target host reached from this machine (default 127.0.0.1)
@@ -781,6 +873,54 @@ pub fn load_port_forwarding_rules() -> Result<Vec<PortForwardingRule>, String> {
 
 pub fn save_port_forwarding_rules(rules: &[PortForwardingRule]) -> Result<(), String> {
     save_json(port_forwarding_rules_file(), rules)
+}
+
+fn favorite_commands_file() -> PathBuf {
+    config_dir().join("favorite_commands.json")
+}
+
+/// Kept as raw JSON: the frontend owns the record shape and its CRDT stamps.
+pub fn load_favorite_commands() -> Result<Vec<serde_json::Value>, String> {
+    load_json(favorite_commands_file())
+}
+
+pub fn save_favorite_commands(items: &[serde_json::Value]) -> Result<(), String> {
+    save_json(favorite_commands_file(), items)
+}
+
+type SuppressedPorts = BTreeMap<String, BTreeSet<u16>>;
+
+// Device-local on purpose: absent from the sync file lists.
+fn pf_suppressed_ports_file() -> PathBuf {
+    config_dir().join("pf_suppressed_ports.json")
+}
+
+pub fn load_pf_suppressed_ports(connection_id: &str) -> Result<BTreeSet<u16>, String> {
+    let mut all: SuppressedPorts = load_json(pf_suppressed_ports_file())?;
+    Ok(all.remove(connection_id).unwrap_or_default())
+}
+
+pub fn set_pf_port_suppressed(
+    connection_id: &str,
+    port: u16,
+    suppressed: bool,
+) -> Result<(), String> {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all: SuppressedPorts = load_json(pf_suppressed_ports_file())?;
+    let ports = all.entry(connection_id.to_string()).or_default();
+    let changed = if suppressed {
+        ports.insert(port)
+    } else {
+        ports.remove(&port)
+    };
+    if !changed {
+        return Ok(());
+    }
+    if ports.is_empty() {
+        all.remove(connection_id);
+    }
+    save_json(pf_suppressed_ports_file(), &all)
 }
 
 fn snippets_file() -> PathBuf {
@@ -863,9 +1003,17 @@ pub fn save_snippet_folders(folders: &[SnippetFolder]) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use serde::de::DeserializeOwned;
+
+    #[test]
+    fn app_identifier_matches_tauri_conf() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], APP_IDENTIFIER);
+    }
 
     /// Asserts that `value` survives a JSON serialize → deserialize → serialize
     /// cycle unchanged. Compares `serde_json::Value`s (not strings) so that
@@ -1022,6 +1170,8 @@ mod tests {
             shell_integration: None,
             keepalive_preset: None,
             persist_session: None,
+            proxy: None,
+            port_knock: None,
             connection_type: ConnectionType::Ssh,
             serial_port: Some("/dev/ttyU0".into()),
             serial_baud: Some(9600),
@@ -1031,11 +1181,20 @@ mod tests {
             serial_flow_control: Some("none".into()),
             serial_auto_reconnect: Some(true),
             ftp_secure: false,
+            webdav_url: None,
             notes: Some("maintenance window: Sat".into()),
             updated_at: "2026-01-02T00:00:00Z".into(),
             deleted_at: None,
             clocks: clocks(),
         }
+    }
+
+    #[test]
+    fn connection_row_without_port_knock_loads_as_none() {
+        let mut row = serde_json::to_value(sample_connection()).unwrap();
+        assert!(row.as_object_mut().unwrap().remove("port_knock").is_none());
+        let loaded: Connection = serde_json::from_value(row).unwrap();
+        assert_eq!(loaded.port_knock, None);
     }
 
     fn sample_identity() -> Identity {
@@ -1064,6 +1223,8 @@ mod tests {
             object_type: "connection".into(),
             vault_id: "team".into(),
             pinned: Some(true),
+            color: Some("#22c55e".into()),
+            icon: Some("lucide:house".into()),
             updated_at: "2026-01-02T00:00:00Z".into(),
             deleted_at: None,
             clocks: clocks(),
@@ -1157,6 +1318,21 @@ mod tests {
         // FTP is a valid connection_type and must survive a load round-trip.
         let ftp = migrate_enums(serde_json::json!({ "connection_type": "ftp" }));
         assert_eq!(ftp.get("connection_type").unwrap(), "ftp");
+
+        let webdav = migrate_enums(serde_json::json!({ "connection_type": "webdav" }));
+        assert_eq!(webdav.get("connection_type").unwrap(), "webdav");
+    }
+
+    #[test]
+    fn saved_webdav_connection_survives_load() {
+        let mut json = serde_json::to_value(sample_connection()).unwrap();
+        json["connection_type"] = "webdav".into();
+        json["webdav_url"] = "https://h/dav/".into();
+        let data = serde_json::to_string(&vec![json]).unwrap();
+        let loaded = parse_with_migration::<Connection>(&data).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].connection_type, ConnectionType::Webdav);
+        assert_eq!(loaded[0].webdav_url.as_deref(), Some("https://h/dav/"));
     }
 
     #[test]
@@ -1219,19 +1395,30 @@ mod tests {
         assert_eq!(got, vec![Mini { id: "a".into() }]);
     }
 
+    #[test]
+    fn pf_suppressed_ports_are_kept_per_connection() {
+        assert!(load_pf_suppressed_ports("c1").unwrap().is_empty());
+        set_pf_port_suppressed("c1", 5236, true).unwrap();
+        set_pf_port_suppressed("c1", 8080, true).unwrap();
+        set_pf_port_suppressed("c2", 3000, true).unwrap();
+        assert_eq!(
+            load_pf_suppressed_ports("c1").unwrap(),
+            BTreeSet::from([5236, 8080])
+        );
+
+        set_pf_port_suppressed("c1", 8080, false).unwrap();
+        set_pf_port_suppressed("c2", 3000, false).unwrap();
+        assert_eq!(
+            load_pf_suppressed_ports("c1").unwrap(),
+            BTreeSet::from([5236])
+        );
+        let on_disk = std::fs::read_to_string(pf_suppressed_ports_file()).unwrap();
+        assert!(!on_disk.contains("c2"));
+    }
+
     // ── End-to-end persistence (golden master for the load/save layer) ───────
-    //
-    // Linux only: `config_dir()` resolves via `dirs::config_dir()`, which honors
-    // `XDG_CONFIG_HOME` on Linux but not on macOS/Windows (CI runs on Linux).
-    // Kept in a single test (no `serial_test` dep) because it mutates the
-    // process-global `XDG_CONFIG_HOME`; no other test reads `config_dir()`.
-    #[cfg(target_os = "linux")]
     #[test]
     fn persistence_round_trip_and_on_disk_migration() {
-        let dir = std::env::temp_dir().join(format!("voltius-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", &dir);
-
         // A missing file loads as empty, not an error.
         assert!(load_identities().unwrap().is_empty());
 
@@ -1249,8 +1436,6 @@ mod tests {
         let migrated = load_connections().unwrap();
         assert_eq!(migrated.len(), 1);
         assert_eq!(migrated[0].vault_id, "legacy-team");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── #250: a corrupt entity file must error, not silently look empty ──────

@@ -1,6 +1,10 @@
 {
   "settings": {
     "terminal": {
+      "commandHistory": {
+        "title": "命令历史",
+        "desc": "记录在终端中运行的命令。只有终端回显的行才会保存，因此在隐藏输入的提示符处键入的密码永远不会被保存。以空格开头的行不会被保存。关闭后停止记录；已保存的内容会保留，直到你在历史面板中清除。"
+      },
       "heading": "终端行为",
       "preferredShell": {
         "title": "首选 Shell"
@@ -36,11 +40,53 @@
       "ignoreBracketedPaste": {
         "title": "纯文本粘贴（无括号粘贴）",
         "desc": "不带 \\x1b[200~ / \\x1b[201~ 标记的纯文本粘贴。修复粘贴到 sudo 提示符或不支持括号粘贴的 CLI 应用时的乱码问题。"
+      },
+      "pasteImageAsPath": {
+        "title": "以文件路径粘贴图片",
+        "desc": "剪贴板中是图片时，将其上传到 SSH 主机（~/.cache/voltius/pastes，仅所有者可访问，7 天后清理）并粘贴其路径。让主机上的工具（如 Claude Code）可以附加截图。若从该主机再 SSH 到其他主机，路径仍指向这第一台主机。"
+      },
+      "volumeDownCtrl": {
+        "title": "将音量减键用作 Ctrl",
+        "desc": "在终端中输入时，按住音量减键即可为所按的键加上 Ctrl：音量减 + C 发送 Ctrl+C。在终端之外，该按键照常调节音量。"
+      },
+      "keywordHighlight": {
+        "title": "关键词高亮",
+        "desc": "为命令输出中的“error”“warning”等词语着色。仅在启用 Shell 集成的会话中生效。",
+        "addRule": "添加规则",
+        "deleteRule": "删除规则",
+        "ruleEnabled": "启用规则",
+        "color": "颜色",
+        "wordsPlaceholder": "添加词语…",
+        "removeWord": "移除 {{word}}"
       }
     },
     "appearance": {
+      "marketplace": {
+        "installedLabel": "插件市场",
+        "available": "来自插件市场",
+        "get": "获取",
+        "remove": "移除",
+        "fromSource": "来自 {{source}}",
+        "desktopOnly": "仅限桌面版",
+        "partOfPlugin": "属于 {{plugin}}，请在插件中管理。",
+        "browseAll": "在插件市场中浏览全部",
+        "loading": "正在加载主题…",
+        "unreachable_other": "{{count}} 个插件市场无法访问"
+      },
+      "themeActions": "主题操作",
       "interface": "界面",
       "language": { "title": "语言" },
+      "timeFormat": {
+        "title": "时间格式",
+        "desc": "应用中时间的显示方式。",
+        "auto": "自动（跟随语言）",
+        "12h": "12 小时制",
+        "24h": "24 小时制"
+      },
+      "groupTabsByHost": {
+        "title": "按主机分组标签页",
+        "desc": "同一主机上的会话共用一个标签页。将鼠标悬停在上面即可切换。"
+      },
       "colorTheme": "颜色主题",
       "import": "导入",
       "importTitle": "导入主题",
@@ -50,7 +96,9 @@
       "editTheme": "编辑主题",
       "deleteTheme": "删除主题",
       "newCustomTheme": "新建自定义主题",
+      "dynamicThemeHint": "取自壁纸",
       "uiScale": {
+        "clickHintMobile": "轻触以输入数值",
         "title": "UI 缩放",
         "desc": "放大或缩小整个界面。",
         "clickHint": "点击输入值",
@@ -60,6 +108,7 @@
         "reset": "重置"
       },
       "terminalFontSize": {
+        "clickHintMobile": "轻触以输入数值",
         "title": "终端字体大小",
         "desc": "单独设置终端文字大小，不缩放其余界面。",
         "clickHint": "点击输入值",
@@ -89,28 +138,37 @@
       }
     },
     "nav": {
-      "appearance":     { "label": "外观",      "keywords": ["主题", "颜色", "字体", "ui"] },
-      "account":        { "label": "账户",         "keywords": ["个人资料", "登录", "认证"] },
-      "sync":           { "label": "同步",            "keywords": ["备份", "云", "gist", "同步", "pro"] },
-      "plugins":        { "label": "插件",         "keywords": ["扩展", "附加组件", "市场"] },
-      "integrations":   { "label": "集成",         "keywords": ["mcp", "claude", "claude code", "服务器", "socket", "代理"] },
-      "terminal":       { "label": "终端",        "keywords": ["光标", "回滚", "粘贴", "括号", "复制", "小地图", "缓冲区"] },
-      "sftp":           { "label": "SFTP",            "keywords": ["文件", "传输", "ftp", "文件"] },
-      "portForwarding": { "label": "端口转发", "keywords": ["隧道", "转发", "端口", "ssh", "自动"] },
-      "hosts":          { "label": "主机",           "keywords": ["ping", "可达性", "连接性", "状态"] },
+      "appearance":     { "mobileSub": "主题、缩放、语言", "label": "外观",      "keywords": ["主题", "颜色", "字体", "ui"] },
+      "account":        { "mobileSub": "账户模式、应用锁", "label": "账户",         "keywords": ["个人资料", "登录", "认证"] },
+      "sync":           { "mobileSub": "云、本地网络及同步内容", "label": "同步",            "keywords": ["备份", "云", "gist", "同步", "pro", "本地", "网络", "附近", "wifi", "局域网", "配对", "设备", "tailscale", "vpn"] },
+      "plugins":        { "mobileSub": "已安装插件和插件目录", "label": "插件",         "keywords": ["扩展", "附加组件", "市场"] },
+      "integrations":   { "mobileSub": "供 AI 代理使用的 MCP 服务器", "label": "集成",         "keywords": ["mcp", "claude", "claude code", "服务器", "socket", "代理"] },
+      "terminal":       { "mobileSub": "光标、回滚、粘贴", "label": "终端",        "keywords": ["光标", "回滚", "粘贴", "括号", "复制", "小地图", "缓冲区"] },
+      "devices": { "mobileSub": "允许你的设备在此打开文件", "label": "设备", "keywords": ["设备", "文件", "sftp", "共享", "文件夹", "访问"] },
+      "sftp":           { "mobileSub": "下载、传输、编辑器", "label": "SFTP",            "keywords": ["文件", "传输", "ftp", "文件"] },
+      "portForwarding": { "mobileSub": "自动端口转发", "label": "端口转发", "keywords": ["隧道", "转发", "端口", "ssh", "自动"] },
+      "hosts":          { "mobileSub": "可达性、保活、代理", "label": "主机",           "keywords": ["ping", "可达性", "连接性", "状态"] },
       "shortcuts":      { "label": "快捷键",       "keywords": ["快捷键", "热键", "快捷键", "重绑定", "键盘"] },
-      "diagnostics":    { "label": "诊断",     "keywords": ["诊断", "问题", "报告", "日志", "调试", "问题"] },
-      "about":          { "label": "关于",           "keywords": ["版本", "更新", "发布", "更新日志"] }
+      "diagnostics":    { "mobileSub": "日志和错误报告", "label": "诊断",     "keywords": ["诊断", "问题", "报告", "日志", "调试", "问题"] },
+      "about":          { "mobileSub": "版本和链接", "label": "关于",           "keywords": ["版本", "更新", "发布", "更新日志"] }
     },
     "chrome": {
       "title": "设置",
       "close": "关闭设置",
       "back": "返回",
-      "openHint": "Ctrl+, 打开",
+      "openHint": "{{shortcut}} 打开",
       "expandPluginGroup": "展开插件设置",
       "collapsePluginGroup": "折叠插件设置"
     },
     "shared": {
+      "reset": "重置",
+      "rowActions": "设置操作",
+      "sync": {
+        "label": "同步此设置",
+        "on": "在你的设备间同步",
+        "off": "仅保留在此设备上",
+        "deviceDefault": "默认仅保留在此设备上"
+      },
       "cancel": "取消",
       "resetToDefault": "重置为默认",
       "modifiedFromDefault": "已从默认值修改"
@@ -125,17 +183,65 @@
         "unknown": "未知"
       },
       "sessionSecurity": {
+        "rememberPassword": {
+          "toggle": "记住主密码",
+          "desc": "启动时无需输入即可打开保险库。开启期间，密码保存在此设备的系统钥匙串中；在 Linux 和 Windows 上，以您的身份运行的其他程序可以读取它。关闭后每次启动都需要输入。",
+          "enableTitle": "记住主密码",
+          "enableBody": "输入主密码，将其保存到此设备的系统钥匙串中。",
+          "systemAuthNeedsIt": "需要在此设备上开启“记住主密码”。否则 Voltius 会在启动时和保险库锁定后要求输入主密码；只有锁屏可以通过系统身份验证解锁。",
+          "removeFailed": "无法从系统钥匙串中移除已保存的主密码。",
+          "storeFailed": "无法将主密码保存到系统钥匙串中。"
+        },
         "title": "会话安全",
-        "autoLockLabel": "不活动后自动锁定保险库",
-        "autoLockDesc": "在会话过期时锁定保险库并要求输入主密码。",
-        "noPasswordHint": "启用主密码以使用自动锁定和会话超时。",
+        "autoLockLabel": "闲置后自动锁定",
+        "autoLockDesc": "闲置达到此时长后锁定 Voltius，或在你离开应用时立即锁定。",
         "timeout": {
           "never": "从不",
           "5min": "5 分钟",
           "15min": "15 分钟",
           "30min": "30 分钟",
           "1h": "1 小时",
-          "4h": "4 小时"
+          "4h": "4 小时",
+          "minutes_other": "{{count}} 分钟",
+          "immediately": "立即"
+        },
+        "needsSystemAuth": "开启系统身份验证后，才能锁定没有主密码的账户。",
+        "immediateVaultWarning": "选择“锁定保险库”时，即使短暂离开 Voltius 也会关闭已打开的会话。“锁定屏幕”会让它们继续运行。",
+        "policy": {
+          "timeout": "{{teams}} 的策略：最长 {{duration}}。",
+          "timeoutImmediately": "{{teams}} 的策略：离开 Voltius 时立即锁定。",
+          "vault": "{{teams}} 的策略：必须使用“锁定保险库”。"
+        },
+        "lockAction": {
+          "label": "锁定方式",
+          "vault": "锁定保险库（关闭会话）",
+          "screen": "锁定屏幕（会话继续运行）",
+          "vaultDesc": "从内存中移除保险库密钥。已打开的会话会关闭，Voltius 会重新加载。",
+          "screenDesc": "遮挡 Voltius，会话、端口转发和传输继续运行。"
+        },
+        "systemAuth": {
+          "toggle": "使用系统身份验证解锁",
+          "desc": "使用{{method}}代替输入主密码。",
+          "unavailable": "此设备不支持。",
+          "status": {
+            "bound": "已绑定到此设备的硬件。",
+            "unbound": "尚未绑定到此设备的硬件。",
+            "os-login": "受设备登录保护。",
+            "no-password": "受设备登录保护。设置主密码后即可将密钥绑定到此设备的硬件。"
+          },
+          "bindNow": "立即绑定",
+          "confirm": "确认",
+          "enableTitle": "将保险库密钥绑定到此设备",
+          "enableBody": "请输入主密码。如果此设备的登录方式发生变化，您将需要它。",
+          "disableTitle": "关闭系统身份验证",
+          "disableBody": "请输入主密码，以便启动时继续无需提示即可解锁。",
+          "method": {
+            "windows": "Windows Hello",
+            "macos": "触控 ID 或 Mac 密码",
+            "linux": "系统密码",
+            "android": "指纹或屏幕锁",
+            "ios": "面容 ID、触控 ID 或设备密码"
+          }
         }
       },
       "email": "邮箱",
@@ -147,8 +253,7 @@
         "errorInvalidEmail": "邮箱地址无效",
         "errorSameEmail": "新邮箱必须与当前邮箱不同",
         "errorPasswordRequired": "需要密码以确认更改",
-        "updatedPrefix": "邮箱已更新为 ",
-        "updatedSuffix": "。请查收收件箱中的验证链接。",
+        "updated": "邮箱已更新为 <email>{{email}}</email>。请查收收件箱中的验证链接。",
         "pausedNote": "在验证之前，付费功能将被暂停。",
         "done": "完成",
         "saving": "正在保存…",
@@ -156,22 +261,23 @@
         "toastVerification": "验证邮件已发送到 {{email}}。"
       },
       "handle": {
-        "title": "Handle",
+        "title": "用户名",
         "copy": "复制",
         "copied": "已复制",
-        "choose": "选择 handle",
-        "change": "更改 handle",
-        "chooseSub": "自定义 handle 让您团队以外的人也能搜索到您。",
-        "generatedNote": "您当前的 handle 已经可以让任何知道它的人找到您。",
-        "unverified": "请先验证邮箱，才能选择自定义 handle。",
+        "choose": "选择用户名",
+        "change": "更改用户名",
+        "chooseSub": "自定义用户名让您团队以外的人也能搜索到您。",
+        "generatedNote": "您当前的用户名已经可以让任何知道它的人找到您。",
+        "unverified": "请先验证邮箱，才能选择自定义用户名。",
+        "managed": "由你的组织管理。如需更改，请联系管理员。",
         "placeholder": "your-handle",
-        "inputLabel": "Handle",
+        "inputLabel": "用户名",
         "save": "保存",
-        "errorInvalid": "Handle 只能包含字母、数字和连字符。",
-        "errorTaken": "该 handle 已被占用。",
-        "errorEmailNotVerified": "请先验证邮箱，然后再选择您的 handle。",
-        "errorCooldown": "您很快就可以再次更改 handle。",
-        "errorGeneric": "无法更新您的 handle。"
+        "errorInvalid": "用户名只能包含字母、数字和连字符。",
+        "errorTaken": "该用户名已被占用。",
+        "errorEmailNotVerified": "请先验证邮箱，然后再选择您的用户名。",
+        "errorCooldown": "您很快就可以再次更改用户名。",
+        "errorGeneric": "无法更新您的用户名。"
       },
       "strangerInvites": {
         "label": "允许任何人邀请",
@@ -182,6 +288,11 @@
         "sub": "更新密码而无需重新加密保险库",
         "title": "更改主密码",
         "currentPlaceholder": "当前密码",
+        "verifyWithDevice": "忘记了？改用{{method}}确认",
+        "verifiedWithDevice": "已在此设备上确认",
+        "deviceReason": "确认以更改主密码",
+        "deviceFailed": "此设备无法确认您的身份。请改为输入当前密码。",
+        "deviceSignedOut": "此设备已退出登录，可能是因为在其他设备上更改了密码。请使用新密码重新登录。",
         "newPlaceholder": "新密码（至少 8 个字符）",
         "confirmPlaceholder": "确认新密码",
         "errorCurrentRequired": "需要当前密码",
@@ -193,13 +304,99 @@
         "changing": "正在更改…",
         "changeBtn": "更改密码"
       },
+      "sessions": {
+        "title": "已登录的设备",
+        "loading": "正在加载设备…",
+        "empty": "暂无可显示的设备。",
+        "unknownDevice": "未知设备",
+        "thisDevice": "此设备",
+        "cli": "CLI",
+        "signedIn": "登录于 {{date}}",
+        "lastActive": "活跃于 {{ago}}",
+        "signOut": "退出登录",
+        "signOutNamed": "让 {{name}} 退出登录",
+        "signOutOthers": "让其他设备退出登录",
+        "signOutEverywhere": "在所有设备上退出登录",
+        "working": "正在退出登录…",
+        "retry": "重试",
+        "note": "让设备退出登录会终止它对你账户的访问；设备上已有的数据不会被删除。在此次更新前登录的设备，会在下次刷新登录状态后显示在这里。",
+        "offline": "你处于离线状态。",
+        "unsupported": "你的服务器暂不支持此功能。",
+        "unavailable": "设备列表尚未加载。",
+        "ended": "此设备已退出登录。请重新登录以管理你的设备。",
+        "confirm": {
+          "one": {
+            "title": "让 {{name}} 退出登录？",
+            "message": "{{name}} 将失去对你账户的访问权限，需要重新登录。设备上已有的数据不会被删除。"
+          },
+          "this": {
+            "title": "让此设备退出登录？",
+            "message": "在你重新登录前，此设备将停止同步。它的数据会保留在此设备上。"
+          },
+          "others": {
+            "title": "让其他设备退出登录？",
+            "message": "其他所有设备（包括尚未列出的设备）都需要重新登录。此设备保持登录。这些设备上已有的数据不会被删除。"
+          },
+          "all": {
+            "title": "在所有设备上退出登录？",
+            "message": "所有设备（包括此设备）都需要重新登录。设备上已有的数据不会被删除。"
+          }
+        }
+      },
+      "twoFactor": {
+        "label": "双重验证",
+        "subOff": "在新设备上登录时要求输入验证码或使用通行密钥",
+        "subOn": "已开启。在新设备上登录时需要第二步验证",
+        "intro": "输入主密码后，在新设备上登录还需要第二步验证。请选择一种方式，另一种可以稍后添加。",
+        "introDevices": "开启后，您的其他设备将被退出登录。它们需要较新版本的 Voltius 才能重新登录。",
+        "continue": "继续",
+        "scan": "使用身份验证器应用扫描此二维码，或在应用中输入下方的密钥。",
+        "qrLabel": "用于身份验证器应用的二维码",
+        "copyKey": "复制密钥",
+        "confirmPrompt": "然后输入应用显示的 6 位验证码。",
+        "turnOn": "开启",
+        "codesTitle": "保存您的恢复码",
+        "codesBody": "如果您丢失了身份验证器或通行密钥，每个恢复码可用于登录一次。它们不会再次显示。",
+        "copy": "复制",
+        "copied": "已复制",
+        "save": "保存到文件",
+        "saved": "我已保存",
+        "manageBody": "在新设备上登录时，输入主密码后需要以下方式之一。",
+        "newCodes": "新的恢复码",
+        "newCodesSub": "当前的恢复码将失效",
+        "turnOff": "关闭",
+        "turnOffSub": "仅使用主密码登录",
+        "generate": "生成",
+        "regeneratePrompt": "请用第二重验证确认以更换恢复码。",
+        "disablePrompt": "请输入主密码并用第二重验证确认，以关闭双重验证。",
+        "authenticator": "身份验证器应用",
+        "authenticatorSub": "手机应用中的 6 位验证码",
+        "authenticatorOn": "已开启",
+        "authenticatorIntro": "在新设备上登录时需要身份验证器应用中的 6 位验证码。",
+        "passkey": "通行密钥",
+        "passkeys": "通行密钥",
+        "passkeySub": "通过浏览器使用指纹、面容或安全密钥",
+        "passkeyIntro": "Voltius 会打开浏览器来创建通行密钥，然后带您回到这里。",
+        "passkeyName": "名称，例如“笔记本电脑”",
+        "passkeyCreate": "在浏览器中继续",
+        "passkeyAdd": "添加通行密钥",
+        "passkeyAdded": "添加于 {{date}}",
+        "passkeyUsed": "上次使用于 {{date}}",
+        "passkeyRemove": "移除 {{name}}",
+        "remove": "移除",
+        "removeAuthenticatorPrompt": "请输入主密码并用第二重验证确认，以移除身份验证器应用。",
+        "removePasskeyPrompt": "请输入主密码并用第二重验证确认，以移除通行密钥“{{name}}”。",
+        "lastFactor": "这是您唯一的第二重验证方式。移除后将关闭双重验证，并使您的其他设备退出登录。",
+        "codesLeft": "未使用的恢复码：{{count}}",
+        "back": "返回"
+      },
       "setMasterPassword": {
         "label": "设置主密码",
         "sub": "在本地保护保险库，无需云同步"
       },
       "lockVault": {
-        "label": "锁定保险库",
-        "sub": "立即锁定并要求输入主密码"
+        "label": "立即锁定",
+        "sub": "按上方选择的方式锁定 Voltius"
       },
       "signOut": {
         "label": "登出云账户",
@@ -210,9 +407,7 @@
         "sub": "永久删除所有连接、密钥、保险库和密钥链条目"
       },
       "confirmWipe": {
-        "descPre": "这将永久删除 ",
-        "descBold": "所有本地数据",
-        "descPost": "：连接、SSH 密钥、身份、保险库密钥和 OS 密钥链条目。此操作无法撤销。",
+        "desc": "这将永久删除<strong>所有本地数据</strong>：连接、SSH 密钥、身份、保险库密钥和 OS 密钥链条目。此操作无法撤销。",
         "confirm": "擦除全部"
       },
       "setPassword": {
@@ -231,14 +426,19 @@
       },
       "loading": "正在处理...",
       "plan": {
-        "title": "套餐",
-        "badge": {
-          "business": "Business",
-          "teams": "Teams",
-          "proTrial": "Pro 试用——剩余 {{daysLeft}} 天",
+        "name": {
+          "free": "免费",
           "pro": "Pro",
-          "free": "免费"
+          "teams": "Teams",
+          "business": "Business"
         },
+        "trialName": "{{plan}} 试用",
+        "trialLeft": "{{plan}}——剩余 {{daysLeft}} 天",
+        "viaSeat": "{{plan}} · 通过您在 {{team}} 的席位",
+        "viaTooltip": "通过 {{team}}",
+        "throughSeat": "通过您在 {{team}} 的席位",
+        "ownLine": "您的 {{plan}} 订阅",
+        "title": "套餐",
         "manageBilling": "管理账单 →",
         "subscription": {
           "cancelled": "于 {{date}} 取消。在此之前您仍可访问。",
@@ -250,20 +450,34 @@
         "seatsUsed": "已使用 {{used}} / {{total}}",
         "upgradeToPro": "升级到 Pro 解锁云同步和更多功能",
         "upgrade": "升级",
-        "upgradeToTeams": "升级到 Teams 获取共享保险库和无限访客",
-        "teamsButton": "Teams →",
+        "upgradeToTeams": "免费试用 Teams {{days}} 天：为团队提供共享保险库和角色。需绑定银行卡。",
+        "teamsButton": "免费试用 →",
         "viewAllPlans": "查看所有套餐 →",
+        "everythingIn": "{{plan}} 的全部功能，另加：",
+        "nextAdds": "{{plan}} 新增：",
+        "freeForEveryone": "所有人免费：",
         "feature": {
-          "localVault": "本地保险库",
-          "auditLogs": "审计日志",
-          "gistSync": "GitHub Gist 同步",
-          "realtimeSync": "实时云同步",
+          "privateVault": "1 个私有保险库",
+          "localSync": "本地网络同步",
+          "deviceFiles": "在您的设备之间传输文件",
+          "syncPlugins": "Gist、Cloudflare 和 S3 同步插件",
+          "cli": "命令行 (voltius-cli)",
+          "machinePolicy": "用于批量部署的本机策略",
+          "mdm": "托管配置 (MDM)",
+          "auditLogs": "本地审计日志",
+          "cloudSync": "云同步，即使您的设备从未同时在线",
+          "cloudBackup": "Voltius Cloud 上的加密备份",
+          "crossDeviceSessions": "跨设备会话",
           "unlimitedVaults": "无限私有保险库",
-          "terminalSharing": "终端共享（1 个会话 · 1 名访客）",
-          "teamVaults": "共享团队保险库",
-          "teamSharing": "团队共享（5 个会话 · 10 名访客）",
-          "seats": "席位（按订阅数量）",
-          "customRoles": "自定义角色"
+          "terminalSharing_other": "终端共享：{{count}} 个会话，每个 {{guests}} 名访客",
+          "teamVaults": "共享团队保险库与邀请",
+          "builtInRoles": "内置角色",
+          "teamAuditLogs": "团队审计日志",
+          "granularPermissions": "自定义角色、按成员和按对象的权限",
+          "teamPolicy": "团队策略：为所有成员锁定任意设置",
+          "enrolment": "用于批量部署的设备注册令牌",
+          "commercialLicense": "自托管商业许可",
+          "prioritySupport": "优先支持"
         }
       },
       "buySeats": {
@@ -346,7 +560,9 @@
       "consequence": {
         "autoUpdate": "关闭更新的自动下载，安全修复将不再自动送达。",
         "pluginInstallReview": "关闭安装插件前显示的授权确认界面。请求敏感权限的插件仍会显示该界面。",
-        "sessionTimeout": "关闭闲置一段时间后自动锁定保险库的功能。"
+        "sessionTimeout": "关闭或延长自动锁定。",
+        "lockAction": "将锁定方式切换为屏幕锁定，保险库密钥会保留在内存中。",
+        "systemAuthUnlock": "允许通过设备登录解锁 Voltius，锁定期间保险库密钥保留在系统钥匙串中。"
       }
     },
     "about": {
@@ -355,16 +571,18 @@
       "updatesTitle": "更新",
       "checkForUpdate": "检查更新",
       "restartToUpdate": "重启以更新 · v{{version}}",
+      "downloadUpdate": "下载更新 · v{{version}}",
       "status": {
         "idle": "尚未检查",
         "checking": "正在检查更新…",
         "upToDate": "已是最新版本",
         "downloading": "正在下载 v{{version}} — {{progress}}%",
-        "ready": "v{{version}} 已准备好安装"
+        "ready": "v{{version}} 已准备好安装",
+        "available": "v{{version}} 可用"
       },
       "autoDownload": {
         "title": "自动下载更新",
-        "desc": "在后台检查并下载新版本"
+        "desc": "在后台下载新版本。无论是否开启，Voltius 都会检查更新。"
       },
       "whatsNew": {
         "title": "更新后显示新内容",
@@ -382,14 +600,26 @@
     },
     "sync": {
       "voltiusCloud": "Voltius 云",
+      "local": {
+        "pairSub": "无需账号，即可与网络中的另一台设备同步。",
+        "title": "本地同步",
+        "pauseSub": "停止与附近的其他设备同步，直到您恢复。",
+        "footer": "当两台设备都在线时，您的个人保险库会在同一网络中或通过 Tailscale 等 VPN 直接在设备之间同步。免费，无需中间服务器。不包括团队保险库。"
+      },
       "active": {
         "title": "云同步活跃",
         "syncing": "正在同步…",
         "error": "错误：{{error}}",
         "lastSync": "上次同步：{{time}}",
-        "offline": "离线",
+        "offline": "无法连接服务器",
+        "offlineDetail": "无法连接服务器：{{error}}",
         "idle": "尚未同步",
+        "paused": "已在此设备上暂停",
         "syncNow": "立即同步"
+      },
+      "pause": {
+        "label": "在此设备上暂停云同步",
+        "sub": "停止与服务器的后台同步。在恢复之前，团队保险库将停止更新，且启动时不会加载。“立即同步”仅同步您自己的数据。"
       },
       "requiresPro": {
         "title": "云同步",
@@ -397,18 +627,13 @@
         "upgrade": "升级"
       },
       "notConnected": {
-        "title": "云账户未连接",
-        "sub": "登录或创建云账户以跨设备同步。",
+        "title": "未登录",
+        "sub": "即使设备不同时在线，Voltius 云也能让它们保持同步，并提供加密备份。使用免费账户，您的设备会自动配对。",
         "signIn": "登录"
       },
-      "gistTitle": "GitHub Gist (E2EE)",
-      "gist": {
-        "title": "Gist 同步插件",
-        "sub": "通过 GitHub Gist 进行端到端加密同步",
-        "configure": "配置 →"
-      },
+      "providersTitle": "同步插件",
       "prefsTitle": "同步偏好",
-      "prefsFooter": "禁用的类型永远不会上传。单个对象也可以通过其编辑面板排除。",
+      "prefsFooter": "禁用的类型永远不会离开此设备。单个对象也可以通过其编辑面板排除。",
       "quickToggleLabel": "同步 {{label}}",
       "objectType": {
         "connection": { "label": "主机", "sub": "SSH 连接" },
@@ -419,7 +644,7 @@
         "port-forwarding-rule": { "label": "端口转发", "sub": "保存的隧道规则" }
       },
       "settingsTitle": "设置",
-      "settingsFooter": "关闭的项目只保留在此设备上，永远不会上传，即使加密后也不会。重新开启同步会发布此设备的值。",
+      "settingsFooter": "关闭的项目只保留在此设备上，即使加密后也不会发送到任何地方。重新开启同步会发布此设备的值。",
       "settingDomain": {
         "themes": { "label": "主题", "sub": "当前主题和自定义主题" },
         "uiPreferences": { "label": "界面", "sub": "缩放、布局和排序方式" },
@@ -443,10 +668,39 @@
         "deviceDefault": "设备默认",
         "yourChoice": "您的选择",
         "resume": "恢复同步"
+      },
+      "devices": {
+        "title": "你的设备",
+        "footer": "每台设备都会上传自己的加密副本。此列表显示本设备能否读取每台设备的最新副本。",
+        "empty": "还没有其他设备同步过。",
+        "unnamed": "设备 {{id}}",
+        "state": {
+          "synced": "已同步",
+          "pending": "等待下次同步",
+          "unavailable": "无法下载",
+          "unavailableStatus": "无法下载（HTTP {{status}}）",
+          "undecryptable": "无法解密：使用了本设备没有的密钥加密",
+          "unreadable": "其副本已损坏，无法读取"
+        },
+        "hint": {
+          "unavailable": "通常是暂时的。Voltius 会在下次同步时重试。",
+          "undecryptable": "该设备可能仍在使用旧的保险库密钥。在该设备上打开 Voltius 以上传新副本；如果不再使用，可以在这里移除。",
+          "unreadable": "在该设备上打开 Voltius 以上传新副本；如果不再使用，可以在这里移除。"
+        },
+        "changed": "更新于 {{time}}",
+        "lastSynced": "读取于 {{time}}",
+        "neverSynced": "从未读取",
+        "retry": "重试",
+        "retryNone": "无需重试",
+        "remove": "移除",
+        "removeTitle": "要将 {{name}} 从云同步中移除吗？",
+        "removeBody": "它的加密副本将从服务器删除。本设备已从中同步的内容会保留。如果你仍在使用该设备，它会在下次同步时上传新副本。",
+        "removeFailed": "无法移除设备：{{error}}"
       }
     },
     "vaults": {
       "general": {
+        "renameFailedToast": "无法重命名此保险库。{{reason}}",
         "vaultNameLabel": "保险库名称",
         "save": "保存",
         "makePrivate": {
@@ -463,9 +717,11 @@
         "deleteVault": {
           "title": "删除保险库",
           "confirmDesc": "将永久删除此保险库及其 {{count}} 个项目。此操作无法撤销。",
+          "confirmDescTeam": "将为所有成员永久删除此保险库及其 {{count}} 个项目。此操作无法撤销。",
           "confirmBtn": "确认删除",
           "deleting": "正在删除…",
-          "failedToast": "未能完成此保险库的删除——保险库仍在，但其中部分项目可能已被删除。{{reason}}"
+          "failedToast": "未能完成此保险库的删除——保险库仍在，但其中部分项目可能已被删除。{{reason}}",
+          "teamFailedToast": "未能删除此保险库——未删除任何内容。{{reason}}"
         },
         "madePrivateToast_one": "保险库现已私有。{{count}} 名成员失去了访问权限。",
         "madePrivateToast_other": "保险库现已私有。{{count}} 名成员失去了访问权限。",
@@ -473,12 +729,15 @@
       },
       "rolesPanel": {
         "permGroup": {
+          "administration": "管理",
           "dataAccess": "数据访问",
           "connectionManagement": "连接管理",
           "teamAdministration": "团队管理",
           "terminalSessions": "终端会话"
         },
         "perm": {
+          "VIEW": "查看对象",
+          "ADMINISTRATOR": "对所有对象拥有全部权限，不受对象规则限制",
           "VIEW_SECRETS": "以明文查看密码和私钥",
           "COPY_SECRETS": "将密码和密钥复制到剪贴板",
           "CONNECT": "启动 SSH 连接",
@@ -510,6 +769,7 @@
         "clearColor": "清除",
         "preview": "预览",
         "permissionsLabel": "权限",
+        "objectOverrideNote": "任何主机、密钥、身份、代码片段或文件夹都可以覆盖这些权限。",
         "saveChanges": "保存更改",
         "createRole": "创建角色",
         "errorNameRequired": "名称为必填项",
@@ -517,9 +777,6 @@
         "builtinRoles": "内置角色",
         "customRoles": "自定义角色",
         "newRoleBtn": "新建角色",
-        "businessFeature": "Business 套餐功能",
-        "businessFeatureDesc": "具有细粒度权限的自定义角色在 Business 套餐中可用。",
-        "upgradeBtn": "升级到 Business",
         "noCustomRolesCanEdit": "暂无自定义角色。创建一个以分配特定权限。",
         "noCustomRoles": "此团队未定义自定义角色。"
       }
@@ -546,6 +803,7 @@
         "sourceLocal": "本地",
         "sourceUrl": "URL",
         "sourceInstalled": "已安装",
+        "sourceOrganization": "组织",
         "unverified": "未验证",
         "update": "更新",
         "updating": "正在更新…",
@@ -565,6 +823,7 @@
         "addSourcePlaceholder": "https://example.com/plugins.json",
         "add": "添加",
         "installedBadge": "已安装",
+        "installsOff": "您的组织已关闭插件安装。",
         "byAuthor": "作者 {{author}} · v{{version}}",
         "noCatalog": "目录中没有插件。",
         "noResults": "没有结果。",
@@ -873,6 +1132,28 @@
         }
       }
     },
+    "devices": {
+      "fileAccess": {
+        "title": "文件访问",
+        "enable": { "title": "允许我的设备打开这台电脑上的文件", "desc": "你的其他 Voltius 设备可以通过 SFTP 浏览下面的文件夹。默认关闭。" },
+        "folders": "共享文件夹",
+        "addFolder": "添加文件夹",
+        "noFolders": "添加一个文件夹，即可与你的设备共享。",
+        "removeFolder": "停止共享 {{folder}}",
+        "readOnly": { "title": "只读", "desc": "设备可以从这里复制文件，但不能修改或删除。" }
+      },
+      "allowed": {
+        "title": "已允许的设备",
+        "asksEachTime": "每次询问",
+        "alwaysAllowed": "始终允许",
+        "connectedNow": "已连接",
+        "disconnect": "断开连接",
+        "revoke": "撤销",
+        "needsKey": "连接一次即可允许",
+        "alwaysLabel": "始终允许 {{name}}",
+        "empty": "暂无其他设备。"
+      }
+    },
     "sftp": {
       "downloads": {
         "title": "下载",
@@ -884,8 +1165,7 @@
         "title": "传输",
         "tarAcceleration": {
           "title": "Tar 加速",
-          "descPre": "在传输前将目录打包为单个 tar.gz——对于许多小文件要快得多。需要两端都启用 ",
-          "descPost": "。"
+          "desc": "在传输前将目录打包为单个 tar.gz——对于许多小文件要快得多。需要两端都有 <code>tar</code>。"
         }
       },
       "filePanel": {
@@ -950,9 +1230,32 @@
         "tolerant": { "label": "宽容", "detail": "约 20 秒；适用于不稳定的网络" },
         "off": { "label": "关闭", "detail": "不发送保持连接探测" }
       },
+      "proxy": {
+        "title": "代理",
+        "desc": "通过代理进行 SSH、SFTP 和可达性检查。可按主机单独覆盖。",
+        "modes": {
+          "none": "不使用代理",
+          "system": "系统",
+          "socks5": "SOCKS5",
+          "http": "HTTP",
+          "https": "HTTPS"
+        },
+        "detected": "已检测到：{{kind}} {{host}}:{{port}}",
+        "detectedNone": "已检测到：无（直接连接）",
+        "passwordSaveFailed": "无法保存代理密码：{{error}}"
+      },
       "persistentSessions": {
         "title": "持久会话",
         "desc": "通过在远程 shell 中包裹 tmux 来保持您的 shell 和运行中的进程在断线后存活（回退到 screen）。需要在主机上安装 tmux 或 screen。可以在连接设置的“高级”中按主机覆盖。"
+      },
+      "detachedTtl": {
+        "title": "关闭空闲的已分离会话",
+        "desc": "当没有任何设备在所选时间内连接到主机上的持久会话时将其关闭，但仅限会话中没有任何程序在运行时。适用于装有 tmux 3.2 或更高版本的 Linux 主机；screen 和更旧的 tmux 仍保持会话不变。更改将在该会话下次连接时生效。",
+        "durationTitle": "关闭时间",
+        "hours_one": "{{count}} 小时",
+        "hours_other": "{{count}} 小时",
+        "days_one": "{{count}} 天",
+        "days_other": "{{count}} 天"
       },
       "terminalTitle": "终端",
       "shellIntegration": {
@@ -963,14 +1266,95 @@
       "teamPresence": {
         "title": "共享您正在使用的团队保险库主机",
         "desc": "开启后，当您打开到某台主机的终端时，您的头像会出现在该主机卡片上。只有有权访问该主机的队友才能看到。"
+      },
+      "sshConfig": {
+        "switch": {
+          "title": "从 ~/.ssh/config 持续同步",
+          "desc": "配置中的主机会在 Voltius 中创建并保持最新，覆盖你所有的电脑。适用于由工具生成配置的情况（gcloud、MDM…）。"
+        },
+        "vault": {
+          "title": "保险库",
+          "desc": "新的托管主机创建的位置。仅限个人保险库。",
+          "personal": "个人"
+        },
+        "status": {
+          "title": "状态",
+          "line": "上次读取 {{when}} · {{managed}} 个托管 · {{skipped}} 个未同步",
+          "never": "尚未读取",
+          "view": "查看主机…",
+          "syncNow": "立即同步"
+        },
+        "off": {
+          "title": "关闭持续同步？",
+          "message_other": "{{count}} 个托管主机将保留在 Voltius 中并变为普通主机：它们在你所有的电脑上都不再跟随 ~/.ssh/config。",
+          "confirm": "关闭"
+        },
+        "dialog": {
+          "activateTitle": "开启持续同步",
+          "reviewTitle": "来自 ~/.ssh/config 的主机",
+          "intro": "已关联的主机保留其名称、文件夹和设置。只有文件中指定的内容（地址、端口，以及存在时的用户、密钥或跳板机）会跟随文件，覆盖你所有的电脑。",
+          "turnOn": "开启",
+          "cancel": "取消",
+          "close": "关闭",
+          "linkAgain": "重新关联",
+          "recreate": "重新创建",
+          "counts": "{{create}} 个待创建 · {{link}} 个待关联 · {{skipped}} 个未同步 · 保险库 {{vault}}"
+        },
+        "row": {
+          "create": "将被创建",
+          "link": {
+            "legacy": "将关联到“{{name}}” · 之前的同步",
+            "detached": "将关联到“{{name}}” · 此前已分离",
+            "name": "将关联到“{{name}}” · 名称和地址相同",
+            "address": "将关联到“{{name}}” · 地址相同"
+          },
+          "ambiguous": "有歧义（{{names}} 均匹配）· 将创建新主机",
+          "managed": "托管 · “{{name}}”",
+          "detached": "已分离 · “{{name}}”不再跟随文件",
+          "deleted": "已删除 · 同步不会重新创建",
+          "ignored": "已忽略 · 不会同步",
+          "identityReplaced": "身份“{{name}}”将被文件中的密钥替换",
+          "skipped": {
+            "pattern": "未同步 · 通配模式，不是主机",
+            "match": "未同步 · Match 块",
+            "include": "未同步 · 无法读取 Include",
+            "includeOutside": "未同步 · ~/.ssh 之外的 Include",
+            "proxyCommand": "未同步 · 不支持 ProxyCommand",
+            "key": "密钥无法读取 · 主机将不带密钥创建",
+            "keyNotCopied": "密钥未复制 · 主机将不带密钥创建",
+            "pending": "等待中 · 主机尚未从您的其他设备同步过来"
+          }
+        },
+        "keys": {
+          "title": "密钥",
+          "switch": "将私钥复制到保险库",
+          "warning": "复制的密钥会进入 {{vault}}，并同步到你所有的设备（包括手机，已加密）。",
+          "settingDesc": "关闭：主机使用保险库中已有的密钥（相同公钥或名称），否则不使用密钥。复制的密钥会同步到你所有的设备。",
+          "copy": "将被复制",
+          "notCopied": "未复制",
+          "exists": "已在保险库中",
+          "unreadable": "无法读取"
+        },
+        "here": {
+          "title": "此计算机",
+          "desc": "你的账户已开启同步，但这台计算机的 ~/.ssh/config 尚未检查。在你检查之前，这里不会读取或复制任何内容。",
+          "action": "检查…"
+        }
       }
     },
     "toggleDefs": {
+      "commandHistory": {
+        "label": "命令历史"
+      },
       "cursorBlink": { "label": "光标闪烁" },
       "scrollMinimap": { "label": "滚动小地图" },
       "selectToCopy": { "label": "选择即复制" },
       "dragSelectsText": { "label": "拖动即选择文本" },
+      "groupTabsByHost": { "label": "按主机分组标签页" },
       "ignoreBracketedPaste": { "label": "纯文本粘贴（无括号粘贴）" },
+      "pasteImageAsPath": { "label": "以文件路径粘贴图片" },
+      "volumeDownCtrl": { "label": "将音量减键用作 Ctrl" },
+      "keywordHighlight": { "label": "关键词高亮" },
       "autoForward": { "label": "自动端口转发" },
       "forwardingNotifications": { "label": "端口转发通知" },
       "sftpTar": { "label": "SFTP Tar 加速" },
@@ -979,18 +1363,10 @@
       "teamPresence": { "label": "团队在线状态" },
       "shellIntegration": { "label": "Shell 集成" },
       "persistentSessions": { "label": "持久会话" },
+      "detachedSessionTtl": { "label": "关闭空闲的已分离会话" },
       "restoreWorkspace": { "label": "启动时恢复工作区" },
       "crossDeviceSessions": { "label": "跨设备会话" },
       "changelogPopup": { "label": "更新后显示新内容" },
-      "category": {
-        "appearance": "外观",
-        "portForwarding": "端口转发",
-        "sftp": "SFTP",
-        "hosts": "主机",
-        "updates": "更新",
-        "plugins": "插件",
-        "integrations": "集成"
-      },
       "pluginInstallReview": { "label": "安装插件前先审查权限" },
       "mcpServer": { "label": "MCP 服务器" }
     },
@@ -1028,6 +1404,7 @@
         "prevTab":        { "label": "上一个标签页",     "desc": "切换到上一个标签页" },
         "sidebar":        { "label": "切换侧边栏",   "desc": "显示/隐藏侧边栏" },
         "delete":         { "label": "删除所选",  "desc": "删除所选项目" },
+        "rename":         { "label": "重命名所选",  "desc": "就地重命名所选项目" },
         "copy":           { "label": "复制",             "desc": "将选中的项目复制到剪贴板" },
         "cut":            { "label": "剪切",             "desc": "将选中的项目剪切到剪贴板" },
         "paste":          { "label": "粘贴",             "desc": "将剪贴板中的项目粘贴到当前文件夹" },
@@ -1037,8 +1414,30 @@
         "terminalSearch": { "label": "在终端中查找", "desc": "搜索终端回滚" },
         "history":        { "label": "历史面板",    "desc": "在右侧面板打开命令历史" },
         "snippets":       { "label": "代码片段面板",   "desc": "在右侧面板打开代码片段" },
-        "panelThemes":    { "label": "主题面板",     "desc": "在右侧面板打开主题" }
+        "panelThemes":    { "label": "主题面板",     "desc": "在右侧面板打开主题" },
+        "panelNotes":     { "label": "备注面板", "desc": "在右侧面板中打开主机备注" }
       }
+    },
+    "search": {
+      "placeholder": "搜索设置",
+      "clear": "清除搜索",
+      "changed": "已更改",
+      "changedTitle": "与默认值不同",
+      "results_one": "{{count}} 个结果",
+      "results_other": "{{count}} 个结果",
+      "changedOnly": "仅显示已更改",
+      "open": "打开",
+      "openSection": "打开“{{section}}”",
+      "undo": "撤销",
+      "resetAll": "全部重置",
+      "resetAllConfirm_one": "重置 {{count}} 项设置？团队管理的设置、安全设置和同步设置将保留。",
+      "resetAllConfirm_other": "重置 {{count}} 项设置？团队管理的设置、安全设置和同步设置将保留。",
+      "cancel": "取消",
+      "emptyChanged": "所有设置均为默认值。",
+      "emptyQuery": "没有与“{{query}}”匹配的设置。",
+      "emptyQueryChanged": "没有与“{{query}}”匹配的已更改设置。",
+      "changedSub_one": "{{count}} 项设置与默认值不同",
+      "changedSub_other": "{{count}} 项设置与默认值不同"
     }
   }
 }

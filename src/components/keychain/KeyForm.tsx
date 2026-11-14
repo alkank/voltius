@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { useAutosave } from "@/hooks/useAutosave";
+import { FieldError, useReportBlocked, useRequiredField, type MobileEditFormProps } from "@/components/shared/fieldValidation";
 import { useStoredSecrets } from "@/hooks/useStoredSecrets";
 import { StoredSecretsNote } from "@/components/shared/VaultUnavailableNote";
 import {
   PanelShell, PanelHeader, FormSection,
-  formInputClass, formInputStyle, formLabelClass, formLabelStyle,
+  formInputClass, formInputStyle, formLabelClass, formLabelStyle, formIdentifierProps,
 } from "@/components/shared/Panel";
 import { PanelActionsMenu } from "@/components/shared/PanelActionsMenu";
 import { PinButton } from "@/components/shared/PinButton";
@@ -27,6 +28,9 @@ import { KeyFileDropZone } from "./KeyFileDropZone";
 import { KeyGenFields } from "./KeyGenFields";
 import { PublicKeyField, isPublicKeyInvalid } from "./PublicKeyField";
 import { useDerivedPublicKey } from "./useDerivedPublicKey";
+import { formatDate } from "@/utils/localeFormat";
+import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 
 // Re-exported for back-compat (IdentityForm imports KeyFileDropZone from here).
 export { KeyFileDropZone } from "./KeyFileDropZone";
@@ -68,7 +72,7 @@ function ModeToggle({ mode, onChange }: { mode: KeyFormMode; onChange: (m: KeyFo
 // KeyForm (side panel)
 // ─────────────────────────────────────────────────────────────────
 
-export interface KeyFormProps {
+export interface KeyFormProps extends MobileEditFormProps {
   initial?: SshKey;
   initialMode?: KeyFormMode;
   onSubmit: (data: SshKeyFormData, privateKey: string | null, publicKey: string | null, passphrase: string | null) => void | Promise<void>;
@@ -78,12 +82,14 @@ export interface KeyFormProps {
   flushRef?: { current: (() => void) | null };
   isDirtyRef?: React.MutableRefObject<boolean>;
   vaults?: import("@/types").VaultOption[];
-  canEdit?: boolean;
   onMoveToVault?: (vaultId: string) => void;
   onCopyToVault?: (vaultId: string) => void;
+  hideChrome?: boolean;
 }
 
-export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onDelete, flushRef, isDirtyRef, vaults, canEdit, onMoveToVault, onCopyToVault }: KeyFormProps) {
+export const KeyForm = withEditAccess("key", (p: KeyFormProps) => p.initial, KeyFormEditor);
+
+function KeyFormEditor({ initial, initialMode, onSubmit, onClose, onExport, onDelete, flushRef, isDirtyRef, vaults, onMoveToVault, onCopyToVault, hideChrome, revealErrors, onBlockedChange, readOnly }: KeyFormProps & EditAccessProps) {
   const { t } = useTranslation();
   const [name, setName] = useState(initial?.name ?? "");
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
@@ -91,16 +97,18 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
   const [publicKey, setPublicKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [showPassphrase, setShowPassphrase] = useState(false);
-  const [folderId, setFolderId] = useState<string | null>(initial?.folder_id ?? null);
   const isNew = !initial;
   const [mode, setMode] = useState<KeyFormMode>(initial ? "import" : (initialMode ?? "import"));
   const keyInfo = useMemo(() => detectKeyInfo(privateKey, publicKey), [privateKey, publicKey]);
+  // Saved as the key's name when the field is left empty, so it is written in
+  // the language the key was created in, like any name the user types.
+  const defaultName = `${keyInfo.type ?? t("connections.common.sshKey")} · ${formatDate(new Date())}`;
   const privateKeyDirty = useRef(false);
   const publicKeyDirty = useRef(false);
   const passphraseDirty = useRef(false);
   const pinKey = useKeyStore((s) => s.pinKey);
   const shell = useVaultObjectFormShell({ initial, folderType: "keychain", objectType: "key", pin: pinKey });
-  const { vaultId, pickVault, isPinned, togglePin } = shell;
+  const { vaultId, pickVault, folderId, keepSavedOnCancel, isPinned, togglePin } = shell;
 
   const storedSecrets = useStoredSecrets(
     initial?.id,
@@ -121,17 +129,18 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
   const { toggleExcluded, isObjectSynced } = useSyncPrefsStore();
   const isSynced = initial ? isObjectSynced(initial.id, "key") : true;
 
-  const { schedule, markDirty: _markDirty, flushAndClose, flush, saveState } = useAutosave({
-    onSave: () => onSubmit(
-      // Default name kept in English — it can be persisted as the key's name (see i18n issue #14).
-      { name: name.trim() || `${keyInfo.type ?? "SSH Key"} · ${new Date().toLocaleDateString()}`, key_type: keyInfo.type ?? undefined, tags, folder_id: folderId ?? undefined, vault_id: resolveVaultIdForSave(vaultId) },
+  const { schedule, markDirty: _markDirty, flushAndClose, flush, saveState, blocked } = useAutosave({
+    onSave: () => keepSavedOnCancel(onSubmit(
+      { name: name.trim() || defaultName, key_type: keyInfo.type ?? undefined, tags, folder_id: folderId ?? undefined, vault_id: resolveVaultIdForSave(vaultId) },
       privateKeyDirty.current ? privateKey : null,
       publicKeyDirty.current ? publicKey : null,
       passphraseDirty.current ? passphrase : null,
-    ) ?? undefined,
+    )),
     // A public half that is not a key is never persisted: autosave holds until
     // the field is emptied or corrected, and the inline error says why.
-    canSave: () => !!privateKey.trim() && !isPublicKeyInvalid(publicKey),
+    canSave: () => (!!privateKey.trim() || (!isNew && !privateKeyDirty.current)) && !isPublicKeyInvalid(publicKey),
+    readOnly,
+    flushOnUnmount: hideChrome,
   });
   const markDirty = useCallback(() => {
     if (isDirtyRef) isDirtyRef.current = true;
@@ -139,6 +148,8 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
   }, [_markDirty, isDirtyRef]);
 
   if (flushRef) flushRef.current = flush;
+  useReportBlocked(blocked, onBlockedChange);
+  const privateKeyField = useRequiredField(privateKey, { enabled: !!hideChrome && (isNew || privateKeyDirty.current), reveal: revealErrors });
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => schedule(), [name, tags, privateKey, publicKey, passphrase, folderId, vaultId]);
@@ -147,7 +158,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
     privateKey,
     publicKey,
     passphrase,
-    enabled: !publicKeyDirty.current,
+    enabled: !publicKeyDirty.current && !readOnly,
     onDerived: (derived) => {
       markDirty();
       publicKeyDirty.current = true;
@@ -172,10 +183,11 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
 
   return (
     <PanelShell>
+      {!hideChrome && (
       <PanelHeader
         icon={initial ? "lucide:pencil" : "lucide:plus"}
         title={initial ? t("keychain.keyForm.titleEdit") : t("keychain.toolbar.newKey")}
-        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} />}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} disabled={readOnly} />}
         onClose={handleClose}
         saveState={saveState}
         actions={initial ? (() => {
@@ -183,7 +195,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
             t,
             contributions,
             vaults,
-            canEdit,
+            canEdit: !readOnly,
             isSynced,
             onMoveToVault,
             onCopyToVault,
@@ -199,8 +211,10 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
           );
         })() : undefined}
       />
+      )}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         <StoredSecretsNote state={storedSecrets} />
+        <ReadOnlyFields readOnly={readOnly} className="space-y-3">
         <FormSection label={t("keychain.common.general")}>
           <div>
             <label className={formLabelClass} style={formLabelStyle}>
@@ -211,8 +225,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
               style={formInputStyle}
               value={name}
               onChange={(e) => { markDirty(); setName(e.target.value); }}
-              // Matches the persisted default name fallback above — kept in English (see i18n issue #14).
-              placeholder={`${keyInfo.type ?? "SSH Key"} · ${new Date().toLocaleDateString()}`}
+              placeholder={defaultName}
             />
           </div>
           <TagsAndFolderFields
@@ -221,8 +234,6 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
             folderType="keychain"
             tags={tags}
             onChangeTags={setTags}
-            folderId={folderId}
-            onChangeFolderId={setFolderId}
             markDirty={markDirty}
           />
         </FormSection>
@@ -231,7 +242,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
 
         {mode === "generate" ? (
           <KeyGenFields onGenerated={handleGenerated} />
-        ) : (<>
+        ) : storedSecrets !== "forbidden" && (<>
           <FormSection label={t("keychain.keyForm.sectionKeyMaterial")}>
             <div>
               <label className={formLabelClass} style={formLabelStyle}>
@@ -243,7 +254,10 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
                 value={privateKey}
                 onChange={(e) => { markDirty(); privateKeyDirty.current = true; setPrivateKey(e.target.value); }}
                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..."
+                {...formIdentifierProps}
+                {...privateKeyField.fieldProps}
               />
+              <FieldError show={privateKeyField.invalid} />
               {privateKey.trim() && (
                 <div className="flex items-center gap-1.5 mt-1.5">
                   {keyInfo.valid && keyInfo.type ? (
@@ -262,7 +276,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
                     <>
                       <Icon icon="lucide:circle-x" width={12} className="text-(--t-status-error)" />
                       <span className="text-xs text-(--t-status-error)">
-                        {keyInfo.error ?? t("keychain.keyForm.invalidKey")}
+                        {t(keyInfo.errorKey ?? "keychain.keyForm.invalidKey")}
                       </span>
                     </>
                   )}
@@ -296,6 +310,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
             />
           </FormSection>
         </>)}
+        </ReadOnlyFields>
 
         {initial && onExport && (
           <div
@@ -319,6 +334,7 @@ export function KeyForm({ initial, initialMode, onSubmit, onClose, onExport, onD
             </div>
           </div>
         )}
+        {initial && <PermissionsSection objectId={initial.id} vaultId={initial.vault_id} type="key" />}
       </div>
     </PanelShell>
   );

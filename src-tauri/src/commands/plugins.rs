@@ -1,5 +1,4 @@
 use crate::storage::config::config_dir;
-use reqwest;
 use std::path::PathBuf;
 
 include!(concat!(env!("OUT_DIR"), "/seeded_plugins.rs"));
@@ -14,7 +13,7 @@ include!(concat!(env!("OUT_DIR"), "/seeded_plugins.rs"));
 ///
 /// `\` matters here even though the old guard omitted it: it is a path separator on
 /// Windows, so `a\..\..\evil` escaped the plugins directory there.
-fn validate_id(id: &str) -> Result<(), String> {
+pub(crate) fn validate_id(id: &str) -> Result<(), String> {
     let ok = !id.is_empty()
         && id.len() <= 64
         && id != "."
@@ -95,11 +94,14 @@ pub fn plugin_delete(id: String) -> Result<(), String> {
 /// Fetch a URL from the Rust backend (bypasses webview CORS restrictions)
 #[tauri::command]
 pub async fn plugin_fetch_url(url: String) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("Voltius")
+    fetch_text(&url).await
+}
+
+pub async fn fetch_text(url: &str) -> Result<String, String> {
+    let client = crate::commands::http::client_builder()
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -128,6 +130,15 @@ pub fn plugins_list_seeded() -> Result<Vec<String>, String> {
         .collect();
     ids.sort();
     Ok(ids)
+}
+
+pub(crate) fn seeded_manifests() -> impl Iterator<Item = &'static str> {
+    SEEDED_PLUGINS.iter().filter_map(|(_, files)| {
+        files
+            .iter()
+            .find(|(name, _)| *name == "manifest.json")
+            .map(|(_, text)| *text)
+    })
 }
 
 /// Read an embedded seeded artifact. No path is constructed, so the id guards are
@@ -204,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn embeds_exactly_the_six_first_party_plugin_folders() {
+    fn embeds_exactly_the_five_first_party_plugin_folders() {
         let mut ids: Vec<&str> = SEEDED_PLUGINS.iter().map(|(id, _)| *id).collect();
         ids.sort();
         assert_eq!(
@@ -214,8 +225,7 @@ mod tests {
                 "gist-sync",
                 "monitoring",
                 "process-manager",
-                "proxmox",
-                "ssh-config"
+                "proxmox"
             ]
         );
     }
@@ -229,8 +239,7 @@ mod tests {
                 "gist-sync",
                 "monitoring",
                 "process-manager",
-                "proxmox",
-                "ssh-config"
+                "proxmox"
             ]
         );
     }

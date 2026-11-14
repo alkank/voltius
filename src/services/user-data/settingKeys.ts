@@ -18,10 +18,24 @@ const HAND_WRITTEN: SettingKeyDef[] = [
     deviceScoped: true,
   },
   { id: "appSettings.terminal.cursorStyle", labelKey: "settings.terminal.cursorStyle.title" },
+  { id: "appSettings.terminal.keywordRules", labelKey: "settings.terminal.keywordHighlight.title" },
   { id: "appSettings.sftp.autoRefreshIntervalMs", labelKey: "settings.sftp.filePanel.refreshInterval.title" },
   { id: "appSettings.plugins.overrides", labelKey: "settings.sync.settingKey.pluginOverrides" },
   { id: "appSettings.keepalivePreset", labelKey: "settings.hosts.keepalive.title" },
-  { id: "appSettings.locale", labelKey: "settings.appearance.language.title" },
+  { id: "appSettings.detachedTtlHours", labelKey: "settings.hosts.detachedTtl.durationTitle" },
+  {
+    id: "appSettings.locale",
+    labelKey: "settings.appearance.language.title",
+    // Each saved account carries its own copy, so a synced locale flips the UI on every switch.
+    deviceScoped: true,
+  },
+  { id: "appSettings.timeFormat", labelKey: "settings.appearance.timeFormat.title" },
+  {
+    id: "appSettings.proxy",
+    labelKey: "settings.hosts.proxy.title",
+    // The network a machine sits on, not a preference about the app.
+    deviceScoped: true,
+  },
   {
     id: "themes.location",
     labelKey: "settings.sync.settingKey.themeLocation",

@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { type Transfer, formatSize, formatTransferProgress } from "./SFTPTypes";
 import { canRetryTransfer } from "@/stores/transferQueueStore";
 import { AcceleratedBadge } from "./AcceleratedBadge";
+import { PerFileBadge } from "./PerFileBadge";
+import { ResumedBadge } from "./ResumedBadge";
 import { McpMark, mcpOwnerTitle, mcpTint } from "@/components/shared/McpMark";
 
 export function TransferQueue({ transfers, onClear, onCancel, onCancelAll, onRetry, collapsible = false }: {
@@ -28,9 +30,11 @@ export function TransferQueue({ transfers, onClear, onCancel, onCancelAll, onRet
   const aggTotal = active.reduce((acc, tr) => acc + tr.total, 0);
   const overallPct = aggTotal > 0 ? Math.min(100, Math.round((aggTransferred / aggTotal) * 100)) : 0;
   const hasActive = active.length > 0;
+  const transfersLabel = t("fileTransfer.queue.transferCount", { count: transfers.length });
   const badgeCount = hasActive ? active.length : transfers.length;
 
   function statusIcon(tr: Transfer) {
+    if (tr.status === "done" && tr.skipped) return { icon: "lucide:triangle-alert", color: "var(--t-status-warning)", spin: false };
     if (tr.status === "done") return { icon: "lucide:circle-check-big", color: "var(--t-status-connected)", spin: false };
     if (tr.status === "error") return { icon: "lucide:circle-alert", color: "var(--t-status-error)", spin: false };
     if (tr.status === "cancelled") return { icon: "lucide:ban", color: "var(--t-text-dim)", spin: false };
@@ -41,6 +45,7 @@ export function TransferQueue({ transfers, onClear, onCancel, onCancelAll, onRet
     if (transfer.status === "done") return t("fileTransfer.queue.status.done");
     if (transfer.status === "error") return t("fileTransfer.queue.status.error");
     if (transfer.status === "cancelled") return t("fileTransfer.queue.status.cancelled");
+    if (transfer.waiting) return t("fileTransfer.queue.waiting");
     return formatTransferProgress(transfer);
   }
 
@@ -66,7 +71,7 @@ export function TransferQueue({ transfers, onClear, onCancel, onCancelAll, onRet
               background: hasActive ? "color-mix(in srgb, var(--t-accent) 18%, transparent)" : "var(--t-bg-card)",
               color: hasActive ? "var(--t-accent)" : "var(--t-text-dim)",
             }}
-            title={`${t("fileTransfer.queue.transferCount", { count: transfers.length })}${hasActive ? t("fileTransfer.queue.activeSuffix", { count: active.length }) : ""}`}
+            title={hasActive ? t("fileTransfer.queue.transferCountActive", { count: active.length, transfers: transfersLabel }) : transfersLabel}
           >
             {badgeCount}
           </span>
@@ -144,7 +149,9 @@ export function TransferQueue({ transfers, onClear, onCancel, onCancelAll, onRet
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <Icon icon={icon} width={12} className={`${spin ? "animate-spin" : ""} shrink-0`} style={{ color }} />
-                      {tr.accelerated && <AcceleratedBadge />}
+                      {tr.accel === "tar" && <AcceleratedBadge />}
+                      {tr.accel === "perFile" && <PerFileBadge />}
+                      {tr.resumedAt != null && <ResumedBadge at={tr.resumedAt} />}
                       <span className="text-xs truncate text-(--t-text-primary)">{tr.direction} {tr.label}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -183,6 +190,14 @@ export function TransferQueue({ transfers, onClear, onCancel, onCancelAll, onRet
                   )}
                   {tr.status === "error" && tr.error && (
                     <p className="text-xs mt-0.5 leading-snug text-(--t-status-error)">{tr.error}</p>
+                  )}
+                  {tr.status !== "running" && tr.skipped && (
+                    <div className="text-xs mt-0.5 leading-snug">
+                      <p className="text-(--t-status-warning)">{t("fileTransfer.queue.skipped", { count: tr.skipped.length })}</p>
+                      <ul className="max-h-16 overflow-y-auto font-mono text-(--t-text-dim)">
+                        {tr.skipped.map((path) => <li key={path} className="truncate" title={path}>{path}</li>)}
+                      </ul>
+                    </div>
                   )}
                 </div>
               );

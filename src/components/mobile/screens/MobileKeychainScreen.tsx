@@ -4,24 +4,27 @@ import { useTranslation } from "react-i18next";
 import MobilePanelHeader from "../panels/MobilePanelHeader";
 import MobileFilterBar from "../MobileFilterBar";
 import KeychainItemActionsSheet from "../sheets/KeychainItemActionsSheet";
-import FolderFormSheet from "../sheets/FolderFormSheet";
+import AddChoiceSheet from "../sheets/AddChoiceSheet";
+import FolderFormSheet, { type FolderEdit } from "../sheets/FolderFormSheet";
 import FolderActionsSheet from "../sheets/FolderActionsSheet";
 import MobileFolderBreadcrumb from "../folders/MobileFolderBreadcrumb";
 import MobileFolderRow from "../folders/MobileFolderRow";
 import FolderBackTrap from "../folders/FolderBackTrap";
+import { SectionHeader } from "@/components/shared/SectionHeader";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { useAllKeys } from "@/hooks/useAllKeys";
 import { useAllIdentities } from "@/hooks/useAllIdentities";
 import { useAllFolders } from "@/hooks/useAllFolders";
-import { useFolderNavigation } from "@/hooks/useFolderNavigation";
 import { useFolderStore } from "@/stores/folderStore";
-import { useVaultStore } from "@/stores/vaultStore";
-import { scopeItems, folderItemCount } from "../folders/mobileFolderCore";
+import { useMobileNavStore } from "@/stores/mobileNavStore";
+import { useMobileFolderScope } from "../folders/useMobileFolderScope";
+import { scopeItems } from "../folders/mobileFolderCore";
+import { folderItemCounter } from "@/utils/folderTree";
 import type { SshKey, Identity, Folder } from "@/types";
+import { compareStrings, formatDate } from "@/utils/localeFormat";
+import { useSearchMatcher } from "@/utils/search";
 
 type Sheet = { kind: "key"; item: SshKey } | { kind: "identity"; item: Identity } | null;
-
-function shortDate(iso: string): string { return new Date(iso).toLocaleDateString(); }
 
 function TagChips({ tags }: { tags: string[] }) {
   if (tags.length === 0) return null;
@@ -34,91 +37,83 @@ function TagChips({ tags }: { tags: string[] }) {
   );
 }
 
-function SectionHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <div className="flex items-center gap-2 px-3 pt-4 pb-1">
-      <span className="text-[11px] font-semibold tracking-wide text-(--t-text-dim)">{label}</span>
-      <span className="px-1.5 py-0.5 rounded-full text-[10px] text-(--t-text-dim)" style={{ background: "var(--t-bg-card)" }}>{count}</span>
-    </div>
-  );
-}
-
 export default function MobileKeychainScreen() {
   const { t } = useTranslation();
-  const keys = useAllKeys();
-  const identities = useAllIdentities();
   const allFolders = useAllFolders();
-  const selectedVaultIds = useVaultStore((s) => s.selectedVaultIds);
+  const { inScope, can, nav, axisRef, openPath, folders: kcFolders, folderIds: kcFolderIds, targetVaultId, canCreateFolder, canEditFolder } = useMobileFolderScope(allFolders, "keychain");
+  const allKeys = useAllKeys();
+  const allIdentities = useAllIdentities();
+  const keys = useMemo(() => allKeys.filter(inScope), [allKeys, inScope]);
+  const identities = useMemo(() => allIdentities.filter(inScope), [allIdentities, inScope]);
+  const push = useMobileNavStore((s) => s.push);
   const saveFolder = useFolderStore((s) => s.saveFolder);
   const updateFolder = useFolderStore((s) => s.updateFolder);
   const deleteFolder = useFolderStore((s) => s.deleteFolder);
 
   const [search, setSearch] = useState("");
   const [sheet, setSheet] = useState<Sheet>(null);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [addFolderOpen, setAddFolderOpen] = useState(false);
   const [folderSheet, setFolderSheet] = useState<Folder | null>(null);
 
-  const kcFolders = useMemo(
-    () => allFolders.filter((f) => f.object_type === "keychain" && selectedVaultIds.includes(f.vault_id ?? "personal")),
-    [allFolders, selectedVaultIds],
-  );
-  const nav = useFolderNavigation(kcFolders);
-  const subFolders = useMemo(() => [...nav.visibleFolders].sort((a, b) => a.name.localeCompare(b.name)), [nav.visibleFolders]);
+  const subFolders = useMemo(() => [...nav.visibleFolders].sort((a, b) => compareStrings(a.name, b.name)), [nav.visibleFolders]);
 
-  const q = search.trim().toLowerCase();
+  const q = search.trim();
+  const match = useSearchMatcher(q);
 
   const scopedKeys = useMemo(
-    () => scopeItems(keys, nav.activeFolderId)
-      .filter((k) => !q || (k.name ?? "").toLowerCase().includes(q) || (k.key_type ?? "").toLowerCase().includes(q) || k.tags.some((t) => t.toLowerCase().includes(q)))
-      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")),
-    [keys, nav.activeFolderId, q],
+    () => scopeItems(keys, nav.activeFolderId, kcFolderIds)
+      .filter((k) => match(k.name, k.key_type, ...k.tags))
+      .sort((a, b) => compareStrings(a.name ?? "", b.name ?? "")),
+    [keys, nav.activeFolderId, kcFolderIds, match],
   );
   const scopedIdentities = useMemo(
-    () => scopeItems(identities, nav.activeFolderId)
-      .filter((i) => !q || (i.name ?? "").toLowerCase().includes(q) || i.username.toLowerCase().includes(q) || i.tags.some((t) => t.toLowerCase().includes(q)))
-      .sort((a, b) => (a.name ?? a.username).localeCompare(b.name ?? b.username)),
-    [identities, nav.activeFolderId, q],
+    () => scopeItems(identities, nav.activeFolderId, kcFolderIds)
+      .filter((i) => match(i.name, i.username, ...i.tags))
+      .sort((a, b) => compareStrings(a.name ?? a.username, b.name ?? b.username)),
+    [identities, nav.activeFolderId, kcFolderIds, match],
   );
 
   const isEmpty = subFolders.length === 0 && scopedKeys.length === 0 && scopedIdentities.length === 0;
-  const folderCount = (id: string) => folderItemCount(keys, id) + folderItemCount(identities, id);
+  const folderCount = useMemo(() => folderItemCounter([...keys, ...identities], kcFolders), [keys, identities, kcFolders]);
 
-  const targetVaultId = nav.folderPath[nav.folderPath.length - 1]?.vault_id ?? selectedVaultIds[0] ?? "personal";
-  const createFolder = (name: string) =>
-    void saveFolder({ name, object_type: "keychain", parent_folder_id: nav.activeFolderId ?? undefined, vault_id: targetVaultId });
+  const canCreateKey = can("EDIT_KEYS", targetVaultId);
+  const canCreateIdentity = can("EDIT_IDENTITIES", targetVaultId);
+  const createFolder = (edit: FolderEdit) =>
+    void saveFolder({ ...edit, object_type: "keychain", parent_folder_id: nav.activeFolderId ?? undefined, vault_id: targetVaultId });
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-(--t-bg-base)">
-      {nav.folderPath.map((f) => <FolderBackTrap key={f.id} onBack={() => nav.setFolderPath((p) => p.slice(0, -1))} />)}
+      {openPath.map((f) => <FolderBackTrap key={f.id} onBack={nav.navigateUp} />)}
       <MobilePanelHeader
         title={t("mobile.morePages.keychain")}
-        right={
-          <button data-keychain-add-folder onClick={() => setAddFolderOpen(true)} className="p-2 text-(--t-text-primary)">
-            <Icon icon="lucide:folder-plus" width={20} />
+        right={canCreateKey || canCreateIdentity || canCreateFolder ? (
+          <button data-keychain-add onClick={() => setAddMenuOpen(true)} className="vt-icon-btn text-(--t-text-primary)">
+            <Icon icon="lucide:plus" width={20} />
           </button>
-        }
+        ) : undefined}
       />
       <MobileFilterBar value={search} onChange={setSearch} placeholder={t("mobile.keychainScreen.filterPlaceholder")} />
       <MobileFolderBreadcrumb path={nav.folderPath} onNavigate={(i) => (i < 0 ? nav.navigateToRoot() : nav.navigateTo(i))} />
 
-      <div className="flex-1 overflow-y-auto pb-4">
+      <div ref={axisRef} data-mobile-folder-level className="flex-1 overflow-y-auto pb-4">
         {!search && subFolders.length > 0 && (
           <div className="px-2 pt-1">
             {subFolders.map((f) => (
-              <MobileFolderRow key={f.id} name={f.name} count={folderCount(f.id)} onOpen={() => nav.navigateInto(f)} onActions={() => setFolderSheet(f)} />
+              <MobileFolderRow key={f.id} folder={f} count={folderCount(f.id)} onOpen={() => nav.navigateInto(f)} onActions={canEditFolder(f) ? () => setFolderSheet(f) : undefined} />
             ))}
           </div>
         )}
 
         {scopedKeys.length > 0 && (
           <div className="px-2">
-            <SectionHeader label={t("mobile.keychainScreen.sshKeysHeader")} count={scopedKeys.length} />
+            <SectionHeader compact className="px-3 pt-4 pb-1" label={t("mobile.keychainScreen.sshKeysHeader")} count={scopedKeys.length} />
             {scopedKeys.map((k) => (
               <button key={k.id} data-keychain-key className="w-full flex items-center gap-3 px-2 py-3 rounded-xl text-left active:bg-(--t-bg-card)" onClick={() => setSheet({ kind: "key", item: k })}>
                 <AvatarTile icon="lucide:key-round" className="w-9 h-9 rounded-lg" iconSize={18} />
                 <span className="flex-1 min-w-0 flex flex-col gap-0.5">
-                  <span className="text-sm font-medium text-(--t-text-primary) truncate">{k.name ?? "Unnamed key"}</span>
-                  <span className="text-[11px] text-(--t-text-dim) truncate">{k.key_type ? `${k.key_type} · ` : ""}{t("mobile.keychainScreen.addedOn", { date: shortDate(k.created_at) })}</span>
+                  <span className="text-sm font-medium text-(--t-text-primary) truncate">{k.name ?? t("mobile.sheets.keychainActions.unnamedKey")}</span>
+                  <span className="text-[11px] text-(--t-text-dim) truncate">{k.key_type ? `${k.key_type} · ` : ""}{t("mobile.keychainScreen.addedOn", { date: formatDate(k.created_at) })}</span>
                   <TagChips tags={k.tags} />
                 </span>
               </button>
@@ -128,7 +123,7 @@ export default function MobileKeychainScreen() {
 
         {scopedIdentities.length > 0 && (
           <div className="px-2">
-            <SectionHeader label={t("mobile.keychainScreen.identitiesHeader")} count={scopedIdentities.length} />
+            <SectionHeader compact className="px-3 pt-4 pb-1" label={t("mobile.keychainScreen.identitiesHeader")} count={scopedIdentities.length} />
             {scopedIdentities.map((i) => (
               <button key={i.id} data-keychain-identity className="w-full flex items-center gap-3 px-2 py-3 rounded-xl text-left active:bg-(--t-bg-card)" onClick={() => setSheet({ kind: "identity", item: i })}>
                 <AvatarTile icon="lucide:user" className="w-9 h-9 rounded-lg" iconSize={18} />
@@ -154,11 +149,26 @@ export default function MobileKeychainScreen() {
         ? <KeychainItemActionsSheet kind="key" item={sheet.item} onClose={() => setSheet(null)} />
         : <KeychainItemActionsSheet kind="identity" item={sheet.item} onClose={() => setSheet(null)} />)}
 
+      {addMenuOpen && (
+        <AddChoiceSheet
+          items={[
+            ...(canCreateKey ? [
+              { slug: "generate-key", icon: "lucide:sparkles", label: t("mobile.keychainScreen.generateKey"), onTap: () => { setAddMenuOpen(false); push({ kind: "key-edit", mode: "generate" }); } },
+              { slug: "import-key", icon: "lucide:import", label: t("mobile.keychainScreen.importKey"), onTap: () => { setAddMenuOpen(false); push({ kind: "key-edit", mode: "import" }); } },
+            ] : []),
+            ...(canCreateIdentity ? [
+              { slug: "identity", icon: "lucide:user-plus", label: t("mobile.keychainScreen.newIdentity"), onTap: () => { setAddMenuOpen(false); push({ kind: "identity-edit" }); } },
+            ] : []),
+          ]}
+          onNewFolder={canCreateFolder ? () => { setAddMenuOpen(false); setAddFolderOpen(true); } : undefined}
+          onClose={() => setAddMenuOpen(false)}
+        />
+      )}
       {addFolderOpen && <FolderFormSheet title={t("mobile.snippets.newFolderTitle")} submitLabel={t("common.action.create")} onSubmit={createFolder} onClose={() => setAddFolderOpen(false)} />}
       {folderSheet && (
         <FolderActionsSheet
           folder={folderSheet}
-          onRename={(name) => void updateFolder(folderSheet.id, { name, object_type: "keychain", parent_folder_id: folderSheet.parent_folder_id, vault_id: folderSheet.vault_id })}
+          onSave={(edit) => void updateFolder(folderSheet.id, { ...edit, object_type: "keychain" })}
           onDelete={() => { nav.onFolderDeleted(folderSheet.id); void deleteFolder(folderSheet.id); }}
           onClose={() => setFolderSheet(null)}
         />

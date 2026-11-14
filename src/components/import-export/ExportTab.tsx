@@ -6,16 +6,19 @@ import { useAccessibleVaultIds } from "@/hooks/useAccessibleVaultIds";
 import { usePermissions } from "@/hooks/usePermission";
 import { useVaultContents } from "@/hooks/useVaultContents";
 import { ContentCounts } from "@/components/shared/ContentCounts";
-import { encryptText, toJSON } from "@/services/import-export/formats";
+import { encryptText, secretBearingTypes, toJSON } from "@/services/import-export/formats";
 import { connectionsToCSV } from "@/services/import-export/parsers/csv";
 import type { ExportBundle } from "@/services/import-export/formats";
 import { HANDLERS, buildBundle } from "@/services/import-export/registry";
 import { useStoreSlices } from "./useStores";
 import type { SelectionProps } from "@/services/import-export/context";
-import { hasSelection, isSingleSelection } from "@/services/import-export/context";
+import { handlerActive, hasSelection } from "@/services/import-export/context";
 import { SnippetRefError } from "@/services/import-export/snippetRefs";
-import { ActionBtn, Checkbox, VaultChipSelect } from "./shared";
+import { ActionBtn, VaultChipSelect } from "./shared";
+import { Checkbox } from "@/components/shared/Checkbox";
 import { Toggle } from "@/components/shared/Toggle";
+import { useCopiedFlash } from "@/hooks/useCopiedFlash";
+import { notify, saveTextFile } from "@/services/saveFile";
 
 export function ExportTab({ selection, preselectedTypes }: {
   selection: SelectionProps;
@@ -27,7 +30,11 @@ export function ExportTab({ selection, preselectedTypes }: {
   const can = usePermissions();
   // Stable across renders so it can sit in the bundle effect's dep list without
   // rebuilding the preview on every keystroke.
-  const canViewSecrets = useCallback((vaultId: string) => can("VIEW_SECRETS", vaultId), [can]);
+  const mayExportSecrets = useCallback(
+    (o: { id: string; vault_id?: string }) =>
+      can("VIEW_SECRETS", o.vault_id ?? "personal", o.id) && can("COPY_SECRETS", o.vault_id ?? "personal", o.id),
+    [can],
+  );
   const vaultContentCounts = useVaultContents();
 
   const isSingleItem = !!selection.single;
@@ -45,13 +52,15 @@ export function ExportTab({ selection, preselectedTypes }: {
   );
   const toggle = (key: string, v: boolean) => setIncluded(prev => ({ ...prev, [key]: v }));
 
+  const [includeRelatedCredentials, setIncludeRelatedCredentials] = useState(false);
+
   const [format, setFormat] = useState<"json" | "csv">("json");
   const isCsvOnly = format === "csv";
 
   const [preview, setPreview] = useState("");
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, flash: flashCopied } = useCopiedFlash(2000);
   const [bundleCounts, setBundleCounts] = useState<Record<string, number>>({});
   const [showPreview, setShowPreview] = useState(false);
   const [encrypt, setEncrypt] = useState(false);
@@ -80,15 +89,12 @@ export function ExportTab({ selection, preselectedTypes }: {
     const enabled: Record<string, boolean> = Object.fromEntries(
       HANDLERS.map(h => [h.key, included[h.key] && (!h.jsonOnly || !isCsvOnly)])
     );
-    buildBundle(enabled, stores, exportVaultIds, selection, canViewSecrets).then(bundle => {
+    buildBundle(enabled, stores, exportVaultIds, selection, mayExportSecrets, { includeRelatedCredentials }).then(bundle => {
       if (cancelled) return;
       const counts: Record<string, number> = { folders: bundle.folders.length };
       for (const h of HANDLERS) counts[h.key] = (bundle[h.key as keyof ExportBundle] as unknown[])?.length ?? 0;
       setBundleCounts(counts);
-      const hasSecrets =
-        bundle.connections.some(c => c.password || c.private_key || c.passphrase || c.notes) ||
-        bundle.identities.some(i => i.password) ||
-        bundle.keys.some(k => k.private_key || k.passphrase);
+      const hasSecrets = secretBearingTypes(bundle).length > 0;
       setBundleHasSecrets(hasSecrets);
       if (hasSecrets && !encryptTouched.current) setEncrypt(true);
       setPreview(isCsvOnly ? connectionsToCSV(bundle.connections) : toJSON(bundle));
@@ -104,7 +110,7 @@ export function ExportTab({ selection, preselectedTypes }: {
     });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [included, format, exportVaultIds, canViewSecrets, stores.connections, stores.identities, stores.keys, stores.snippets, stores.pfRules]);
+  }, [included, includeRelatedCredentials, format, exportVaultIds, mayExportSecrets, stores.connections, stores.identities, stores.keys, stores.snippets, stores.pfRules]);
 
   const totalItems = Object.values(bundleCounts).reduce((a, b) => a + b, 0);
   const recapCounts = vaultContentCounts.map((item) => ({
@@ -120,29 +126,33 @@ export function ExportTab({ selection, preselectedTypes }: {
     return { content: preview, ext: format === "csv" ? "csv" : "json" };
   };
 
-  const handleCopy = async () => {
+  // Without the catch a failed encryption or clipboard write leaves the button
+  // doing nothing at all.
+  const reportingErrors = (action: () => Promise<void>) => async () => {
+    try {
+      await action();
+    } catch (e) {
+      notify("error", t("importExport.export.exportFailed", { error: e instanceof Error ? e.message : String(e) }));
+    }
+  };
+
+  const handleCopy = reportingErrors(async () => {
     const { content } = await getExportContent();
     await writeClipboard(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+    flashCopied();
+  });
 
-  const handleDownload = async () => {
+  const handleDownload = reportingErrors(async () => {
     const { content, ext } = await getExportContent();
-    const blob = new Blob([content], { type: ext === "csv" ? "text/csv" : "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `voltius-export.${ext}`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+    await saveTextFile(`voltius-export.${ext}`, content);
+  });
 
-  const autoIncludes: string[] = [];
-  if (isSingleItem && !isCsvOnly) {
-    if ((bundleCounts["identities"] ?? 0) > 0 && !isSingleSelection("identities", selection)) autoIncludes.push(t("importExport.export.autoIncludeIdentity", { count: bundleCounts["identities"] }));
-    if ((bundleCounts["keys"] ?? 0) > 0 && !isSingleSelection("keys", selection)) autoIncludes.push(t("importExport.export.autoIncludeKey", { count: bundleCounts["keys"] }));
-  }
+  const exportsType = (key: string) => included[key] && handlerActive(key, selection);
+  const showRelatedCredentials = !isCsvOnly && (bundleCounts["connections"] ?? 0) > 0 && !(exportsType("identities") && exportsType("keys"));
+
+  const autoIncluded = isCsvOnly ? [] : (["connections", "snippets"] as const)
+    .map(key => ({ key, count: exportsType(key) ? 0 : bundleCounts[key] ?? 0 }))
+    .filter(a => a.count > 0);
 
   return (
     <div className="flex flex-col gap-5 h-full">
@@ -162,9 +172,9 @@ export function ExportTab({ selection, preselectedTypes }: {
             {HANDLERS.map(h => {
               if (!h.isActive(selection)) return null;
               const available = h.countAvailable(stores, exportVaultIds);
-              const bundled = bundleCounts[h.key];
-              const displayCount = bundled !== undefined ? bundled : available;
               const disabled = h.jsonOnly && isCsvOnly;
+              const bundled = included[h.key] && !disabled ? bundleCounts[h.key] : undefined;
+              const displayCount = bundled !== undefined ? bundled : available;
               return (
                 <div key={h.key} className="flex items-center gap-2">
                   <Checkbox
@@ -182,6 +192,16 @@ export function ExportTab({ selection, preselectedTypes }: {
               <p className="text-xs text-(--t-text-muted)">
                 {t("importExport.export.selectedItem", { count: bulkCount })}
               </p>
+            )}
+            {showRelatedCredentials && (
+              <div className="flex flex-col gap-1 pt-2.5 border-t border-(--t-border)">
+                <Checkbox
+                  checked={includeRelatedCredentials}
+                  onChange={setIncludeRelatedCredentials}
+                  label={t("importExport.export.relatedCredentials")}
+                />
+                <p className="text-xs text-(--t-text-dim) ml-6">{t("importExport.export.relatedCredentialsHint")}</p>
+              </div>
             )}
           </div>
         </div>
@@ -265,12 +285,12 @@ export function ExportTab({ selection, preselectedTypes }: {
               ) : (
                 <span className="text-sm text-(--t-text-muted) truncate">{t("importExport.export.nothingToExport")}</span>
               )}
-              {autoIncludes.length > 0 && (
-                <span className="text-xs flex items-center gap-1 text-(--t-text-dim) shrink-0">
+              {autoIncluded.map(({ key, count }) => (
+                <span key={key} className="text-xs flex items-center gap-1 text-(--t-text-dim) shrink-0" title={t("importExport.export.autoIncludeHint")}>
                   <Icon icon="lucide:link" width={11} />
-                  +{autoIncludes.join(" + ")}
+                  +{t(`importExport.export.autoInclude.${key}`, { count })}
                 </span>
-              )}
+              ))}
             </>
           )}
         </div>

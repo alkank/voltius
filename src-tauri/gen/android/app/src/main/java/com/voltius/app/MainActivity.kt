@@ -1,17 +1,29 @@
 package com.voltius.app
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : TauriActivity() {
+  // Back is routed to the page by NativeBack, never to WebView history.
+  override val handleBackNavigation: Boolean = false
+
   private lateinit var dirPicker: ActivityResultLauncher<Uri?>
+  private lateinit var filePicker: ActivityResultLauncher<Array<String>>
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    intent?.let { withLinkType(LauncherShortcuts.gate(it)) }
+    // Before super.onCreate: swaps Theme.voltius.Starting for Theme.voltius once released.
+    SplashGate.install(this)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     // super.onCreate loaded the Rust lib; hand the keychain store the app Context + VM.
@@ -36,13 +48,66 @@ class MainActivity : TauriActivity() {
       }
       VoltiusDownloads.nativeDirPicked(uri?.toString())
     }
+    filePicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+      VoltiusUploads.picked(applicationContext, uris)
+    }
     instance = this
+    VoltiusBiometric.applyWindowFlags(this)
+    SystemBars.install(this)
   }
 
-  // Wry has just built the RustWebView: install the native terminal-keyboard overlay (#34).
+  override fun onPause() {
+    super.onPause()
+    VoltiusBiometric.setForeground(this, false)
+    VoltiusManagedConfig.unregister(this)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    VoltiusBiometric.setForeground(this, true)
+    VoltiusManagedConfig.register(this)
+  }
+
+  // Wry has just built the RustWebView: install the native terminal-keyboard overlay (#34),
+  // the window-insets -> CSS-variables bridge (SystemInsets.kt) and native Back (NativeBack.kt).
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    // App dark bg instead of the default white between the splash and the first web paint.
+    webView.setBackgroundColor(getColor(R.color.voltius_bg))
+    SplashGate.watch(webView)
     TerminalKeyboard.install(this, webView)
+    SystemInsets.install(webView)
+    NativeBack.install(this, webView)
+    NativeFeel.install(this, webView)
+    SystemColors.install(this, webView)
+    Haptics.install(webView)
+    LauncherShortcuts.install(this, webView)
+    ShareSheet.install(this, webView)
+    VoltiusUploads.installDrop(this, webView)
+    VoltiusManagedConfig.install(webView)
+  }
+
+  override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+    SelectionTouchFeed.onTouch(this, ev)
+    return super.dispatchTouchEvent(ev)
+  }
+
+  override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+    TerminalKeyboard.onVolumeKey(event) || super.dispatchKeyEvent(event)
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(withLinkType(LauncherShortcuts.gate(intent)))
+  }
+
+  // Root Back of a task the launcher icon didn't start (deep link, notification tap, `am start`)
+  // makes the system finish the activity instead of moving the task back. Wry then drops the
+  // WebView and tao exits the process, taking every SSH session with it, and Tauri can't attach
+  // a recreated activity to the running app. So never finish at the task root: background the
+  // task the way a launcher-started one is. The system's back-to-home preview still plays.
+  // Quitting goes through app.exit / force_quit (process exit), not finish().
+  override fun finish() {
+    if (isTaskRoot && !isChangingConfigurations && moveTaskToBack(true)) return
+    super.finish()
   }
 
   override fun onDestroy() {
@@ -50,12 +115,33 @@ class MainActivity : TauriActivity() {
     super.onDestroy()
   }
 
+  // tao 0.35 unwraps getType() on every VIEW intent, so an untyped voltius:// link aborts the app.
+  private fun withLinkType(intent: Intent): Intent {
+    val data = intent.data
+    if (intent.action == Intent.ACTION_VIEW && intent.type == null && data != null) {
+      intent.setDataAndType(data, "application/x-voltius-link")
+    }
+    return intent
+  }
+
   fun launchDirPicker() {
     runOnUiThread { dirPicker.launch(null) }
+  }
+
+  fun launchFilePicker() {
+    runOnUiThread { filePicker.launch(arrayOf("*/*")) }
+  }
+
+  fun requestNotificationPermission() {
+    if (Build.VERSION.SDK_INT < 33 || notificationPermissionAsked) return
+    if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+    notificationPermissionAsked = true
+    runOnUiThread { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0) }
   }
 
   companion object {
     @Volatile
     var instance: MainActivity? = null
+    private var notificationPermissionAsked = false
   }
 }

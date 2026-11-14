@@ -17,6 +17,7 @@
       "encryptBackup": "Chiffrer la sauvegarde",
       "plaintextSecretsWarning": "Cet export contient des mots de passe, des clés ou des notes d'hôtes en clair. Laissez le chiffrement activé, sauf si vous avez délibérément besoin d'un fichier non chiffré.",
       "snippetRefMissing": "« {{name}} » exécute un autre snippet ({{target}}) qui ne fait pas partie de cet export. Incluez-le dans la sélection ou supprimez cette étape.",
+      "exportFailed": "Échec de l’export : {{error}}",
       "confirmPasswordPlaceholder": "Confirmer le mot de passe",
       "passwordsDontMatch": "Les mots de passe ne correspondent pas",
       "building": "Génération…",
@@ -25,15 +26,28 @@
       "hidePreview": "Masquer l'aperçu",
       "showPreview": "Afficher l'aperçu",
       "selectedItem_one": "{{count}} élément sélectionné",
+      "selectedItem_many": "{{count}} éléments sélectionnés",
       "selectedItem_other": "{{count}} éléments sélectionnés",
-      "autoIncludeIdentity": "{{count}} identité",
-      "autoIncludeKey": "{{count}} clé",
+      "autoInclude": {
+        "connections_one": "{{count}} connexion",
+        "connections_many": "{{count}} connexions",
+        "connections_other": "{{count}} connexions",
+        "snippets_one": "{{count}} extrait",
+        "snippets_many": "{{count}} extraits",
+        "snippets_other": "{{count}} extraits"
+      },
+      "autoIncludeHint": "Également inclus : utilisés par les éléments exportés, pour qu'ils fonctionnent encore après l'import",
+      "relatedCredentials": "Inclure les identifiants liés",
+      "relatedCredentialsHint": "Les identités et clés SSH utilisées par ces connexions. Laissez décoché pour n'exporter que les paramètres de connexion ; à l'import, elles sont reliées à une identité ou une clé correspondante déjà présente dans le coffre.",
       "checkboxLabel": {
         "connections_one": "Connexion ({{count}})",
+        "connections_many": "Connexions ({{count}})",
         "connections_other": "Connexions ({{count}})",
         "identities_one": "Identité ({{count}})",
+        "identities_many": "Identités ({{count}})",
         "identities_other": "Identités ({{count}})",
         "keys_one": "Clé SSH ({{count}})",
+        "keys_many": "Clés SSH ({{count}})",
         "keys_other": "Clés SSH ({{count}})",
         "snippets": "Snippets ({{count}})",
         "portForwarding": "Redirection de ports ({{count}})"
@@ -43,14 +57,18 @@
       "importFrom": "Importer depuis",
       "importInto": "Importer vers",
       "autoExtractTitle": "Extraction automatique depuis {{label}}",
-      "autoExtractDescription": "Lit et déchiffre vos données locales {{label}} — aucun export manuel requis",
+      "autoExtractDescription": "Lit vos données locales {{label}} — aucun export manuel requis",
       "extracting": "Extraction…",
       "extractFrom": "Extraire depuis {{label}}",
+      "chooseConfigFolder": "Ou choisir un dossier Config {{label}}…",
       "orImportFromFile": "ou importer depuis un fichier",
       "openFileLabel": "Ouvrir un fichier {{sub}}…",
       "encryptedBackupTitle": "Sauvegarde chiffrée — entrez votre mot de passe pour déverrouiller",
       "unlock": "Déverrouiller",
+      "configPassphraseTitle": "Cette configuration SecureCRT est protégée par une phrase secrète — saisissez-la pour importer les mots de passe enregistrés",
+      "skipPasswords": "Importer sans les mots de passe enregistrés",
       "reviewItems_one": "Vérifier {{count}} élément",
+      "reviewItems_many": "Vérifier {{count}} éléments",
       "reviewItems_other": "Vérifier {{count}} éléments",
       "back": "Retour",
       "reviewImportTitle": "Vérifier l'import",
@@ -60,6 +78,9 @@
       "groupConnections": "Connexions",
       "groupKeys": "Clés SSH",
       "groupIdentities": "Identités",
+      "groupLinkedCredentials": "Identifiants liés",
+      "linkedTo": "Lié à « {{name}} » dans ce coffre",
+      "linkedNotFound": "Absent de ce coffre — à attribuer après l'import",
       "groupPortForwarding": "Redirection de ports",
       "selectAll": "Tout sélectionner",
       "deselectAll": "Tout désélectionner",
@@ -68,8 +89,10 @@
       "tagPlaceholder": "optionnel",
       "importing": "Import en cours…",
       "importButton_one": "Importer {{count}} élément",
+      "importButton_many": "Importer {{count}} éléments",
       "importButton_other": "Importer {{count}} éléments",
       "importButtonMultiVault_one": "Importer {{count}} élément × {{vaultCount}} coffres",
+      "importButtonMultiVault_many": "Importer {{count}} éléments × {{vaultCount}} coffres",
       "importButtonMultiVault_other": "Importer {{count}} éléments × {{vaultCount}} coffres",
       "nothingSelected": "Rien de sélectionné",
       "unnamedKey": "Clé sans nom",
@@ -77,11 +100,25 @@
       "actionSkip": "Ignorer",
       "actionInclude": "Importer",
       "actionOverwrite": "Écraser",
-      "resultImportedWithErrors": "{{count}} éléments importés{{vaultNote}}, {{errors}} échec(s).",
       "resultImportedSuccess_one": "{{count}} élément importé avec succès{{vaultNote}}.",
+      "resultImportedSuccess_many": "{{count}} éléments importés avec succès{{vaultNote}}.",
       "resultImportedSuccess_other": "{{count}} éléments importés avec succès{{vaultNote}}.",
       "resultVaultNote": " sur {{count}} coffres",
-      "resultError": "Erreur : {{error}}"
+      "resultError": "Erreur : {{error}}",
+      "resultImportedWithErrors_one": "{{count}} élément importé{{vaultNote}}, échecs : {{errors}}.",
+      "resultImportedWithErrors_many": "{{count}} éléments importés{{vaultNote}}, échecs : {{errors}}.",
+      "resultImportedWithErrors_other": "{{count}} éléments importés{{vaultNote}}, échecs : {{errors}}.",
+      "groupNotImported": "Non importé",
+      "viaJump": "via {{hosts}}",
+      "teamKeysWarning": "Ces clés privées seront partagées avec tous les membres de {{team}}.",
+      "notice": {
+        "pattern": "Motif : appliqué aux hôtes correspondants, pas importé seul",
+        "match": "Bloc Match : non pris en charge, ignoré",
+        "include": "Include illisible",
+        "includeOutside": "Include hors de ~/.ssh : non lu",
+        "key": "Le chemin IdentityFile contient des jetons impossibles à résoudre",
+        "proxyCommand": "ProxyCommand n'est pas encore pris en charge"
+      }
     },
     "fileInput": {
       "openFileDefault": "Ouvrir un fichier…",
@@ -94,12 +131,15 @@
         "openFileLabel": "Ouvrir un fichier…",
         "placeholder": "Collez un JSON de paramètres Voltius ici, ou déposez un fichier…\n\n{ \"type\": \"voltius-user-data\", \"version\": 2, \"sections\": { ... } }",
         "foundSections_one": "{{count}} section de paramètres trouvée",
+        "foundSections_many": "{{count}} sections de paramètres trouvées",
         "foundSections_other": "{{count}} sections de paramètres trouvées",
         "applying": "Application…",
         "applyButton_one": "Appliquer {{count}} section",
+        "applyButton_many": "Appliquer {{count}} sections",
         "applyButton_other": "Appliquer {{count}} sections",
         "applyDefault": "Appliquer",
         "resultApplied_one": "{{count}} paramètre appliqué : {{list}}.",
+        "resultApplied_many": "{{count}} paramètres appliqués : {{list}}.",
         "resultApplied_other": "{{count}} paramètres appliqués : {{list}}.",
         "resultError": "Erreur : {{error}}",
         "themesReplaceWarning": "Remplace les thèmes personnalisés de cet appareil."
@@ -114,18 +154,70 @@
       },
       "describe": {
         "themes_one": "{{count}} thème personnalisé",
+        "themes_many": "{{count}} thèmes personnalisés",
         "themes_other": "{{count}} thèmes personnalisés",
         "uiPreferences": "échelle {{scale}}× · disposition {{layout}}",
         "shortcutsOverrides_one": "{{count}} personnalisation",
+        "shortcutsOverrides_many": "{{count}} personnalisations",
         "shortcutsOverrides_other": "{{count}} personnalisations",
         "shortcutsDefaults": "Par défaut",
         "appSettingsShell": "shell : {{shell}}",
         "appSettingsDefault": "Paramètres par défaut",
         "recentPeople_one": "{{count}} personne récente",
+        "recentPeople_many": "{{count}} personnes récentes",
         "recentPeople_other": "{{count}} personnes récentes",
         "vaults_one": "{{count}} coffre",
+        "vaults_many": "{{count}} coffres",
         "vaults_other": "{{count}} coffres"
       }
+    },
+    "importers": {
+      "voltius": {
+        "sub": "JSON",
+        "placeholder": "Collez un JSON Voltius ici, ou déposez un fichier .json…\n\n{ \"version\": 1, \"connections\": [...] }"
+      },
+      "csv": {
+        "sub": "Tableur",
+        "placeholder": "Collez un CSV ici, ou déposez un fichier…\n\nname,host,port,username,auth_type,tags"
+      },
+      "openssh": {
+        "sub": "~/.ssh/config",
+        "hint": "Lit ~/.ssh/config, ses fichiers Include et les clés citées par IdentityFile. Vous pouvez aussi coller une config ou ouvrir un fichier.",
+        "hintMobile": "Collez votre ~/.ssh/config ou ouvrez le fichier. Les clés sont reliées par nom de fichier à celles déjà présentes dans le coffre.",
+        "placeholder": "Host my-server\n  HostName 10.0.0.5\n  User alex\n  IdentityFile ~/.ssh/id_ed25519",
+        "notFound": "Aucun ~/.ssh/config trouvé sur cet ordinateur.",
+        "unreadable": "Impossible de lire ~/.ssh/config ({{reason}})."
+      },
+      "mobaxterm": {
+        "sub": "Installation locale · déchiffrement auto",
+        "hint": "Nécessite que MobaXterm soit installé (Windows uniquement).",
+        "placeholder": "Déposez MobaXterm.ini ici, ou collez son contenu…"
+      },
+      "termius": {
+        "sub": "Installation locale · extraction auto",
+        "hint": "Nécessite que Termius soit installé et connecté.",
+        "placeholder": "Utilisez l'extraction automatique pour Termius. Les anciens exports Termius collés ne permettent pas une importation fidèle."
+      },
+      "zoc": {
+        "sub": "Répertoire d'hôtes · .zhd",
+        "hint": "Il se trouve dans Documents\\ZOC9 Files\\Options (Windows) ou ~/Library/Application Support/ZOC9 Files/Options (macOS). Les entrées SSH et série sont importées ; les mots de passe enregistrés ne le sont pas.",
+        "placeholder": "Déposez HostDirectory.zhd ici, ou collez son contenu…"
+      },
+      "putty": {
+        "sub": ".reg ou de session",
+        "hint": "Lit les sessions enregistrées dans le registre sous Windows, ou dans ~/.putty/sessions sous Linux et macOS. Vous pouvez aussi déposer un export .reg ou coller des fichiers de session. Les sessions SSH et série, les proxys et les tunnels sont importés ; les fichiers de clé ne le sont pas.",
+        "placeholder": "Déposez un export .reg de PuTTY ici, ou collez des fichiers de session…"
+      },
+      "securecrt": {
+        "sub": ".ini de session · export XML",
+        "hint": "L'extraction automatique lit la configuration locale de SecureCRT. Vous pouvez aussi déposer le fichier .ini d'une session (Config/Sessions) ou le fichier XML créé par File → Export Settings. Les sessions SSH et série sont importées avec leurs mots de passe enregistrés ; Telnet, RLogin, Raw et les autres protocoles sont ignorés.",
+        "placeholder": "Déposez ici le fichier .ini d'une session SecureCRT ou un export .xml, ou collez son contenu…"
+      }
+    },
+    "menu": {
+      "export": "Exporter",
+      "importEllipsis": "Importer…",
+      "exportEllipsis": "Exporter…"
     }
   }
 }

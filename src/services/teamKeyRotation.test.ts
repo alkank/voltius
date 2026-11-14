@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   rotateCalls: [] as { user_id: string; wrapped_key: string }[][],
   members: [] as { user_id: string; public_key: string }[],
   allowed: new Set<string>(),
-  objects: [] as { object_id: string; object_type: string; metadata: unknown; deleted_at?: string }[],
+  objects: [] as { object_id: string; object_type: string; metadata: unknown; deleted_at?: string; my_permissions?: number }[],
   secrets: [] as { secret_id: string; object_id: string; ciphertext: string; key_version: number }[],
   reencryptObjectCalls: [] as unknown[],
   reencryptSecretCalls: [] as unknown[],
@@ -44,15 +44,23 @@ vi.mock("@/services/teamObjectEnvelope", () => ({
   isEncryptedEnvelope: (m: unknown) =>
     typeof m === "object" && m !== null && (m as Record<string, unknown>).v === 2,
   encodeObjectMetadata: vi.fn(async (_teamId: string, _item: object) => ({ v: 2, enc: "reenc", kv: 1 })),
-  decodeObjectMetadata: vi.fn(async (_teamId: string, metadata: unknown) => metadata),
+  // A fixture envelope's `enc` is the id of the object it holds.
+  decodeObjectMetadata: vi.fn(async (_teamId: string, metadata: unknown) => ({ id: (metadata as { enc: string }).enc })),
 }));
-vi.mock("@/services/teamObjectEditPermission", () => ({
-  buildEditPermissionSnapshot: vi.fn(async () => ({})),
-  // Uses the real `objectType` argument (not just a fixed "connection" check)
-  // so the "draining" test below can actually distinguish an editable type
-  // ("connection") from one the caller cannot edit ("key").
-  canEditObjectType: vi.fn((_snapshot: unknown, _teamId: string, objectType: string) => h.allowed.has(objectType)),
-}));
+vi.mock("@/services/teamObjectEditPermission", async () => {
+  const { PERM_BITS, EDIT_PERMISSION_OF } = await import("@/services/permissions");
+  return {
+    buildEditPermissionSnapshot: vi.fn(async () => ({})),
+    // `myPermissions`, when present, wins over the type-level `h.allowed` set.
+    canEditObjectType: vi.fn((_snapshot: unknown, _teamId: string, objectType: string, myPermissions?: number) => {
+      if (myPermissions !== undefined) {
+        const permission = EDIT_PERMISSION_OF[objectType as keyof typeof EDIT_PERMISSION_OF];
+        return permission !== undefined && (myPermissions & PERM_BITS[permission]) !== 0;
+      }
+      return h.allowed.has(objectType);
+    }),
+  };
+});
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string, _args: Record<string, unknown>) => {
     if (cmd === "backup_decrypt") return { secrets: { "password:c1": "hunter2" } };
@@ -62,11 +70,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@/services/teamVaultSyncCore", () => ({
   bytesToBase64: (b: number[]) => `b64(${b.join(",")})`,
-  base64ToBytes: (_s: string) => [1, 2, 3],
+  base64ToByteArray: (_s: string) => [1, 2, 3],
 }));
 
-import { checkAndRotateTeamKey } from "./teamKeyRotation";
+import { checkAndRotateTeamKey, getLastRotationPass } from "./teamKeyRotation";
 import { getTeamVaultKeyAtVersion, getCachedTeamKeyVersion } from "@/services/teamVaultSync";
+import { PERM_BITS } from "@/services/permissions";
 
 beforeEach(() => {
   h.status = { stale: false, draining: false };
@@ -123,14 +132,29 @@ test("stale and not draining: rotates, wrapping for every member with a public k
 test("draining: does not rotate again, and re-encrypts only editable object types", async () => {
   h.status = { stale: false, draining: true };
   h.objects = [
-    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "old", kv: 0 } },
-    { object_id: "k1", object_type: "key", metadata: { v: 2, enc: "old", kv: 0 } },
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 0 } },
+    { object_id: "k1", object_type: "key", metadata: { v: 2, enc: "k1", kv: 0 } },
   ];
 
   await checkAndRotateTeamKey("t1");
 
   expect(h.rotateCalls).toHaveLength(0);
   expect(h.reencryptObjectCalls.flat().map((i: unknown) => (i as { object_id: string }).object_id)).toEqual(["c1"]);
+});
+
+test("draining: an object's own my_permissions lacking the edit bit excludes it and its secret", async () => {
+  h.status = { stale: false, draining: true };
+  h.objects = [
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 0 }, my_permissions: PERM_BITS.VIEW },
+  ];
+  h.secrets = [
+    { secret_id: "s1", object_id: "c1", ciphertext: "b64(old-cipher)", key_version: 0 },
+  ];
+
+  await checkAndRotateTeamKey("t1");
+
+  expect(h.reencryptObjectCalls).toHaveLength(0);
+  expect(h.reencryptSecretCalls).toHaveLength(0);
 });
 
 test("stale and draining: drains, does not also rotate (serialization rule)", async () => {
@@ -151,7 +175,7 @@ test("concurrent calls for the same team dedup to one pass", async () => {
 test("draining: re-encrypts a stale secret by decrypting with its OLD key version and re-wrapping under current", async () => {
   h.status = { stale: false, draining: true };
   h.objects = [
-    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "old", kv: 0 } },
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 0 } },
   ];
   h.secrets = [
     { secret_id: "s1", object_id: "c1", ciphertext: "b64(old-cipher)", key_version: 0 },
@@ -180,7 +204,7 @@ test("draining: reencrypts the legacy blob if stale, using the resolved current 
 test("draining: does not touch a secret already at or ahead of the current version", async () => {
   h.status = { stale: false, draining: true };
   h.objects = [
-    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "old", kv: 1 } },
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 1 } },
   ];
   h.secrets = [
     { secret_id: "s1", object_id: "c1", ciphertext: "b64(current-cipher)", key_version: 1 },
@@ -197,7 +221,7 @@ test("draining: a legacy secret with no key_version fetches epoch 1, not vault-k
   vi.mocked(getCachedTeamKeyVersion).mockReturnValueOnce(2);
   h.status = { stale: false, draining: true };
   h.objects = [
-    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "old", kv: 2 } },
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 2 } },
   ];
   h.secrets = [
     // key_version is undefined here (a pre-#217 row).
@@ -212,7 +236,7 @@ test("draining: a legacy secret with no key_version fetches epoch 1, not vault-k
 test("draining: does not re-encrypt a secret belonging to a soft-deleted object", async () => {
   h.status = { stale: false, draining: true };
   h.objects = [
-    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "old", kv: 0 }, deleted_at: "2026-01-01" },
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 0 }, deleted_at: "2026-01-01" },
   ];
   h.secrets = [
     { secret_id: "s1", object_id: "c1", ciphertext: "b64(old-cipher)", key_version: 0 },
@@ -226,7 +250,7 @@ test("draining: does not re-encrypt a secret belonging to a soft-deleted object"
 test("draining: a failing object batch write does not block the secrets batch that follows", async () => {
   h.status = { stale: false, draining: true };
   h.objects = [
-    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "old", kv: 0 } },
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 0 } },
   ];
   h.secrets = [
     { secret_id: "s1", object_id: "c1", ciphertext: "b64(old-cipher)", key_version: 0 },
@@ -234,7 +258,62 @@ test("draining: a failing object batch write does not block the secrets batch th
   const { reencryptTeamObjects } = await import("@/services/teamObjects");
   vi.mocked(reencryptTeamObjects).mockRejectedValueOnce(new Error("PUT 500"));
 
-  await expect(checkAndRotateTeamKey("t1")).resolves.toBeUndefined();
+  const pass = await checkAndRotateTeamKey("t1");
 
+  expect(pass.failures).toEqual([{ kind: "object", id: "c1", stage: "upload" }]);
   expect(h.reencryptSecretCalls).toHaveLength(1);
+});
+
+test("draining: a secret that fails to decrypt is reported as a local failure and recorded as the last pass", async () => {
+  h.status = { stale: false, draining: true };
+  h.objects = [{ object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 0 } }];
+  h.secrets = [{ secret_id: "s1", object_id: "c1", ciphertext: "b64(old-cipher)", key_version: 0 }];
+  vi.mocked(getTeamVaultKeyAtVersion).mockRejectedValueOnce(new Error("404"));
+
+  const pass = await checkAndRotateTeamKey("t1");
+
+  expect(pass).toMatchObject({ action: "drained", failures: [{ kind: "secret", id: "s1", stage: "local" }] });
+  expect(getLastRotationPass("t1")).toBe(pass);
+});
+
+test("draining: rows this device may not edit are counted as skipped, not failed", async () => {
+  h.status = { stale: false, draining: true };
+  h.objects = [
+    { object_id: "k1", object_type: "key", metadata: { v: 2, enc: "k1", kv: 0 } },
+    { object_id: "c1", object_type: "connection", metadata: { v: 2, enc: "c1", kv: 1 } },
+  ];
+  h.secrets = [{ secret_id: "orphan", object_id: "gone", ciphertext: "x", key_version: 0 }];
+
+  const pass = await checkAndRotateTeamKey("t1");
+
+  expect(pass).toMatchObject({ action: "drained", failures: [], skipped: 2 });
+});
+
+test("stale: a refused rotation reports the rotate step and never drains", async () => {
+  h.status = { stale: true, draining: false };
+  h.members = [{ user_id: "me", public_key: "me-pk" }];
+  const { rotateVaultKey } = await import("@/services/teamService");
+  vi.mocked(rotateVaultKey).mockRejectedValueOnce(new Error("409"));
+
+  const pass = await checkAndRotateTeamKey("t1");
+
+  expect(pass).toMatchObject({ action: "none", error: "rotate" });
+  expect(h.deleteTeamKeyCalls).toHaveLength(0);
+});
+
+test("stale: a rotation drains in the same pass and reports rotated", async () => {
+  h.status = { stale: true, draining: false };
+  h.members = [{ user_id: "me", public_key: "me-pk" }];
+
+  const pass = await checkAndRotateTeamKey("t1");
+
+  expect(pass).toMatchObject({ action: "rotated", failures: [] });
+  expect(h.deleteTeamKeyCalls).toEqual(["t1"]);
+});
+
+test("an unreachable rotation-status reports the status step", async () => {
+  const { getRotationStatus } = await import("@/services/teamService");
+  vi.mocked(getRotationStatus).mockRejectedValueOnce(new Error("offline"));
+
+  await expect(checkAndRotateTeamKey("t1")).resolves.toMatchObject({ action: "none", error: "status" });
 });

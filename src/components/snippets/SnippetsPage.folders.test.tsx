@@ -252,6 +252,15 @@ test("an empty snippet list replaces the whole folder view with the empty state"
   expect(queryByText("snippets.page.ejectRemoveFromFolder")).toBeNull();
 });
 
+test("an empty folder stays listed when there are no snippets", () => {
+  h.folders = [folder("empty")];
+  h.visibleFolders = h.folders;
+  const { queryByText } = render(<SnippetsPage />);
+
+  expect(queryByText("snippets.page.emptyState.title")).toBeNull();
+  expect(h.folderCardProps.map((p) => (p.folder as Folder).id)).toContain("empty");
+});
+
 test("the breadcrumb lists the root link plus every ancestor, the last one not a button", () => {
   h.snippets = [snippet("s1")];
   h.folderPath = [folder("parent", { name: "Parent" }), folder("child", { name: "Child" })];
@@ -346,4 +355,31 @@ test("a bulk delete over a folder warns about the snippets that go down with it"
   expect(lastModal().message).toBe(
     'snippets.page.confirmDelete.message:{"count":2} snippets.page.confirmDelete.folderCascade:{"count":1}',
   );
+});
+
+test("a new folder created inside a team folder lands in that team's vault (#816)", async () => {
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  render(<SnippetsPage />);
+
+  await act(async () => { (h.toolbarProps.onNewFolder as () => void)(); });
+  expect(h.saveFolder).toHaveBeenCalledWith(expect.objectContaining({ parent_folder_id: "child", vault_id: "team-1" }));
+});
+
+test("New folder is greyed out inside a folder whose vault the user cannot edit folders in", () => {
+  h.folderPath = [folder("child", { vault_id: "team-1" })];
+  h.activeFolderId = "child";
+  h.can.mockImplementation((p: string, vaultId: string) => !(p === "EDIT_FOLDERS" && vaultId === "team-1"));
+  render(<SnippetsPage />);
+
+  expect(h.toolbarProps.newFolderBlocked).toBe("folders.noPermissionCreate");
+});
+
+test("an open folder with no snippets shows the folder-empty state, even when the vault has no snippets", () => {
+  h.folders = [folder("child")];
+  h.folderPath = [folder("child")];
+  h.activeFolderId = "child";
+  const { getByText } = render(<SnippetsPage />);
+
+  getByText("folders.empty");
 });

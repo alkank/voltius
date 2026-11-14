@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Icon } from "@iconify/react";
 import { parseQuickForward, type QuickForwardErrorCode } from "@/utils/parseQuickForward";
+import { describeError } from "@/services/backendErrors";
 
 function quickForwardErrorMessage(code: QuickForwardErrorCode, t: TFunction): string {
   switch (code) {
@@ -34,7 +35,7 @@ export function QuickForwardRow({
       await onSubmit(parsed.remotePort, parsed.localPort);
       setValue("");
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e, t));
     } finally {
       setBusy(false);
     }
@@ -55,8 +56,7 @@ export function QuickForwardRow({
           disabled={busy}
           placeholder={t("terminal.ports.quickForwardPlaceholder")}
           spellCheck={false}
-          className="flex-1 min-w-0 bg-transparent outline-none text-xs text-(--t-text-primary)
-            placeholder:text-(--t-text-dim)"
+          className="flex-1 min-w-0 bg-transparent outline-none text-xs text-(--t-text-primary)"
         />
         {busy && <Icon icon="lucide:loader-circle" width={12} className="animate-spin text-(--t-text-muted) shrink-0" />}
       </div>

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import i18n from "@/i18n";
-import { useUIStore } from "@/stores/uiStore";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { isNavPageVisible } from "@/utils/navPageVisible";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
 import { useVaultClipboardStore, type VaultClipboardKind } from "@/stores/vaultClipboardStore";
 import {
   pasteFromClipboard,
@@ -10,6 +10,7 @@ import {
   type ClipboardAdapter,
   type PasteResult,
 } from "@/services/vaultClipboard";
+import { RuleSetMoveCancelled } from "@/services/teamObjectPersistence";
 
 export interface PageClipboardAdapter extends ClipboardAdapter {
   getSelection: () => string[];
@@ -28,7 +29,7 @@ export interface PageClipboardAdapter extends ClipboardAdapter {
 
 function toast(message: string, severity: "warning" | "error" = "warning") {
   useNotificationStore.getState().addToast({
-    source: { kind: "plugin", id: "system", name: "Voltius" },
+    source: APP_SOURCE,
     type: "toast",
     message,
     severity,
@@ -65,7 +66,7 @@ export function usePageClipboard(adapter: PageClipboardAdapter): void {
   const navItem = adapter.navItem;
 
   useEffect(() => {
-    const isActive = () => useUIStore.getState().activeNav === navItem;
+    const isActive = () => isNavPageVisible(navItem);
 
     // The paste chain is shared by every page, so a confirmation whose UI is torn
     // down mid-prompt would wedge Ctrl+V on all of them. Losing this hook declines it.
@@ -105,7 +106,7 @@ export function usePageClipboard(adapter: PageClipboardAdapter): void {
       deleteItems: (ids) => ref.current.deleteItems(ids),
       deleteFolder: (id) => ref.current.deleteFolder(id),
       setSelection: (ids) => ref.current.setSelection(ids),
-      can: (permission, vaultId) => ref.current.can(permission, vaultId),
+      can: (permission, vaultId, objectId) => ref.current.can(permission, vaultId, objectId),
     };
 
     const fill = (mode: "copy" | "cut") => () => {
@@ -173,6 +174,7 @@ export function usePageClipboard(adapter: PageClipboardAdapter): void {
             useVaultClipboardStore.getState().clear();
           }
         } catch (e) {
+          if (e instanceof RuleSetMoveCancelled) return;
           // Caught here so a rejected paste (IPC/network/permission failure)
           // can't stall every later paste on this page.
           // Said out loud too: a swallowed rejection is a Ctrl+V that does nothing.

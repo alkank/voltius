@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { test, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -26,7 +27,8 @@ vi.mock("@/stores/sessionStore", () => ({
   },
 }));
 vi.mock("@/stores/connectionStore", () => ({
-  useConnectionStore: { getState: () => ({ connections: h.connections, teamConnections: h.teamConnections }) },
+  findAnyConnection: (id: string) =>
+    [...h.connections, ...Object.values(h.teamConnections).flat()].find((c) => c.id === id),
 }));
 vi.mock("@/stores/crossDeviceSessionsStore", () => ({
   useCrossDeviceSessionsStore: { getState: () => ({ manifests: {}, tombstones: {}, markClosed: h.markClosed }) },

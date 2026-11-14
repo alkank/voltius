@@ -38,6 +38,17 @@ export const ACCOUNT_SCOPED_STORAGE_KEYS = [
   // either find nothing or, on a team it still belongs to, delete a live vault's
   // credentials.
   "voltius-pending-secret-wipe",
+  // Local secrets a personal→team move of this account's objects failed to
+  // upload. The next account has no business retrying another account's upload.
+  "voltius-pending-team-secret-upload",
+  // Which identity this account chose per shared host: ids only, never secrets.
+  "voltius-identity-picks",
+  // The validated, merged team policy layer, so it applies before the first team fetch.
+  "voltius-team-policy",
+  // This account's other devices met on the local network, by name.
+  "voltius-lan-sync-devices",
+  // Team audit events awaiting delivery; they may only ever be sent with this account's session.
+  "voltius-audit-outbox",
 ];
 
 /**
@@ -46,7 +57,11 @@ export const ACCOUNT_SCOPED_STORAGE_KEYS = [
  * last-write-wins merge, and one account's newer stamp would make the incoming
  * account's own settings look stale and never apply.
  */
-export const ACCOUNT_SCOPED_RESET_KEYS = ["voltius-app-settings-ts"];
+export const ACCOUNT_SCOPED_RESET_KEYS = [
+  "voltius-app-settings-ts",
+  // Every entity clock of each nearby device: too large to park, rebuilt by the next merge.
+  "voltius-lan-sync-clocks",
+];
 
 /**
  * Knowingly left out: `voltius-local-audit-logs`. It is account data, but it is
@@ -71,10 +86,15 @@ export const DEVICE_SCOPED_STORAGE_KEYS = [
   "voltius-sftp-settings",
   "voltius-terminal-settings",
   "voltius-toggle-settings",
+  // Marks which toggle values are admin defaults; it follows voltius-toggle-settings, which is device-scoped.
+  "voltius-admin-defaults",
   "voltius-connectivity-settings",
   "voltius-mcp-contributions",
   // Persists poll intervals only — the statuses it holds stay in memory.
   "voltius-host-ping",
+  "voltius-lan-sync",
+  "voltius-enrollment",
+  "voltius-enrolled-team",
   // Persists nothing (`partialize: () => ({})`); the key is an empty husk.
   "voltius-connection-presence",
 ];

@@ -1,7 +1,10 @@
+use crate::error::AppError;
+use crate::knock::KnockSpec;
 use crate::known_hosts::{KnownHostsStore, PendingConflicts};
 use crate::port_forward::PortForwardManager;
+use crate::proxy::ProxySpec;
 use crate::ssh::{
-    client::{self, JumpHostConnect},
+    client::{self, HopRoute, JumpHostConnect},
     session::SessionManager,
 };
 use std::sync::Arc;
@@ -37,7 +40,11 @@ pub async fn ssh_connect(
     rows: Option<u32>,
     legacy_algorithms: Option<bool>,
     initial_cwd: Option<String>,
-) -> Result<(), String> {
+    proxy: Option<ProxySpec>,
+    terminal_colors: Option<crate::ssh::control_mode::TerminalColors>,
+    knock: Option<KnockSpec>,
+    detached_ttl_secs: Option<u64>,
+) -> Result<(), AppError> {
     let connected = client::connect(
         app,
         session_id.clone(),
@@ -63,6 +70,9 @@ pub async fn ssh_connect(
         rows.filter(|r| *r > 0).unwrap_or(24),
         legacy_algorithms.unwrap_or(false),
         initial_cwd,
+        HopRoute { proxy, knock },
+        terminal_colors,
+        detached_ttl_secs,
     )
     .await?;
 
@@ -175,6 +185,84 @@ pub async fn ssh_resize(
     state.resize(&session_id, cols, rows).await
 }
 
+#[tauri::command]
+pub async fn ssh_set_output_paused(
+    state: tauri::State<'_, SessionManager>,
+    session_id: String,
+    paused: bool,
+) -> Result<(), String> {
+    state.set_output_paused(&session_id, paused).await
+}
+
+#[tauri::command]
+pub async fn ssh_set_terminal_colors(
+    state: tauri::State<'_, SessionManager>,
+    session_id: String,
+    colors: crate::ssh::control_mode::TerminalColors,
+) -> Result<(), String> {
+    state.set_terminal_colors(&session_id, colors).await
+}
+
+/// A host reached by a one-shot connection: no PTY, no jump hosts.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OneShotTarget {
+    host: String,
+    port: u16,
+    username: String,
+    password: Option<String>,
+    private_key: Option<String>,
+    passphrase: Option<String>,
+    #[serde(default)]
+    legacy_algorithms: bool,
+    proxy: Option<ProxySpec>,
+    knock: Option<KnockSpec>,
+}
+
+impl OneShotTarget {
+    async fn connect(
+        self,
+        known_hosts: &Arc<KnownHostsStore>,
+    ) -> Result<client::Authenticated, String> {
+        client::connect_authenticated(
+            Arc::clone(known_hosts),
+            &self.host,
+            self.port,
+            &self.username,
+            self.password.as_deref(),
+            self.private_key.as_deref(),
+            self.passphrase.as_deref(),
+            self.legacy_algorithms,
+            &HopRoute {
+                proxy: self.proxy,
+                knock: self.knock,
+            },
+        )
+        .await
+    }
+}
+
+async fn hang_up(handle: &russh::client::Handle<client::SshClient>) {
+    let _ = handle
+        .disconnect(russh::Disconnect::ByApplication, "Done", "en")
+        .await;
+}
+
+#[tauri::command]
+pub async fn ssh_detect_distro_direct(
+    known_hosts: tauri::State<'_, Arc<KnownHostsStore>>,
+    target: OneShotTarget,
+) -> Result<String, String> {
+    let (handle, platform) = target.connect(&known_hosts).await?;
+    let machine = crate::ssh::session::Machine {
+        handle: Arc::new(handle),
+        inside: None,
+    };
+    let distro = crate::ssh::session::detect_distro(&machine, platform).await;
+    hang_up(&machine.handle).await;
+    distro
+}
+
 #[derive(serde::Serialize)]
 pub struct SshExecResult {
     pub stdout: String,
@@ -187,54 +275,12 @@ pub struct SshExecResult {
 #[tauri::command]
 pub async fn ssh_exec_command(
     known_hosts: tauri::State<'_, Arc<KnownHostsStore>>,
-    host: String,
-    port: u16,
-    username: String,
-    password: Option<String>,
-    private_key: Option<String>,
-    passphrase: Option<String>,
+    target: OneShotTarget,
     command: String,
 ) -> Result<SshExecResult, String> {
-    use russh::client as russh_client;
     use tokio::time::{timeout, Duration};
 
-    let config = russh_client::Config {
-        ..Default::default()
-    };
-    let (ssh_client, rejection_reason) =
-        client::SshClient::new(host.clone(), port, Arc::clone(&*known_hosts));
-    let mut handle =
-        match russh_client::connect(Arc::new(config), (host.as_str(), port), ssh_client).await {
-            Ok(h) => h,
-            Err(e) => {
-                let reason = rejection_reason.lock().await.take();
-                return Err(reason.unwrap_or_else(|| format!("Connection failed: {}", e)));
-            }
-        };
-
-    let authenticated = if let Some(key_str) = private_key {
-        let key_pair = russh::keys::decode_secret_key(&key_str, passphrase.as_deref())
-            .map_err(|e| format!("Invalid private key: {}", e))?;
-        let key = russh::keys::PrivateKeyWithHashAlg::new(
-            Arc::new(key_pair),
-            Some(russh::keys::ssh_key::HashAlg::Sha256),
-        );
-        handle
-            .authenticate_publickey(&username, key)
-            .await
-            .map_err(|e| format!("Auth failed: {}", e))?
-    } else if let Some(pwd) = password {
-        handle
-            .authenticate_password(&username, &pwd)
-            .await
-            .map_err(|e| format!("Auth failed: {}", e))?
-    } else {
-        return Err("No authentication method provided".into());
-    };
-
-    if !authenticated.success() {
-        return Err("Authentication failed".into());
-    }
+    let (handle, _) = target.connect(&known_hosts).await?;
 
     let mut channel = handle
         .channel_open_session()
@@ -268,9 +314,7 @@ pub async fn ssh_exec_command(
     .await
     .is_err();
 
-    let _ = handle
-        .disconnect(russh::Disconnect::ByApplication, "Done", "en")
-        .await;
+    hang_up(&handle).await;
 
     // A hard 30s timeout means the remote command never finished: "exit 0,
     // partial stdout" would misreport that as a success.
@@ -288,83 +332,19 @@ pub async fn ssh_exec_command(
 #[tauri::command]
 pub async fn ssh_kill_persistent(
     known_hosts: tauri::State<'_, Arc<KnownHostsStore>>,
-    host: String,
-    port: u16,
-    username: String,
-    password: Option<String>,
-    private_key: Option<String>,
-    passphrase: Option<String>,
+    target: OneShotTarget,
     session_id: String,
 ) -> Result<bool, String> {
-    use russh::client as russh_client;
-    use tokio::io::AsyncReadExt;
-    use tokio::time::{timeout, Duration};
+    use crate::ssh::exec::stdout_within;
+    use tokio::time::Duration;
 
-    let config = russh_client::Config {
-        ..Default::default()
-    };
-    let (ssh_client, rejection_reason) =
-        client::SshClient::new(host.clone(), port, Arc::clone(&*known_hosts));
-    let mut handle =
-        match russh_client::connect(Arc::new(config), (host.as_str(), port), ssh_client).await {
-            Ok(h) => h,
-            Err(e) => {
-                let reason = rejection_reason.lock().await.take();
-                return Err(reason.unwrap_or_else(|| format!("Connection failed: {}", e)));
-            }
-        };
-
-    let authenticated = if let Some(key_str) = private_key {
-        let key_pair = russh::keys::decode_secret_key(&key_str, passphrase.as_deref())
-            .map_err(|e| format!("Invalid private key: {}", e))?;
-        let key = russh::keys::PrivateKeyWithHashAlg::new(
-            Arc::new(key_pair),
-            Some(russh::keys::ssh_key::HashAlg::Sha256),
-        );
-        handle
-            .authenticate_publickey(&username, key)
-            .await
-            .map_err(|e| format!("Auth failed: {}", e))?
-    } else if let Some(pwd) = password {
-        handle
-            .authenticate_password(&username, &pwd)
-            .await
-            .map_err(|e| format!("Auth failed: {}", e))?
-    } else {
-        return Err("No authentication method provided".into());
-    };
-
-    if !authenticated.success() {
-        return Err("Authentication failed".into());
-    }
+    let (handle, _) = target.connect(&known_hosts).await?;
 
     let command = crate::shell_integration::force_kill_command(&session_id);
 
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| format!("Channel error: {}", e))?;
-    channel
-        .exec(true, command.as_str())
-        .await
-        .map_err(|e| format!("Exec error: {}", e))?;
+    let output = stdout_within(&handle, &command, Duration::from_secs(15)).await?;
 
-    let mut stream = channel.into_stream();
-    let mut output = Vec::new();
-    let _ = timeout(Duration::from_secs(15), async {
-        let mut buf = [0u8; 256];
-        loop {
-            match stream.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => output.extend_from_slice(&buf[..n]),
-            }
-        }
-    })
-    .await;
+    hang_up(&handle).await;
 
-    let _ = handle
-        .disconnect(russh::Disconnect::ByApplication, "Done", "en")
-        .await;
-
-    Ok(String::from_utf8_lossy(&output).contains("VOLTIUS_KILLED"))
+    Ok(output.contains("VOLTIUS_KILLED"))
 }

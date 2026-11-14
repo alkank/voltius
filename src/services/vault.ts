@@ -1,21 +1,15 @@
-import { invoke } from "@tauri-apps/api/core";
+import { notifyAccountModeChanged } from "@/utils/accountMode";
+import { invoke } from "@/lib/invoke";
+import { logFailure } from "@/lib/logger";
+import { clearTeamPolicy } from "@/services/policy/teamPolicy";
 import { clearPersistedAccountUiState } from "@/stores/persistedAccountUiState";
-import { ACCOUNT_CACHE_KEYS } from "./accountCacheKeys";
+import { VAULT_RESET_KEYS } from "./accountCacheKeys";
+import { backendErrorCode } from "./backendErrors";
 import { VaultLockedError, VaultUnreadableError } from "./vaultErrors";
-
-/**
- * Rust's own failure strings, matched to tell a wrong key from a busy file.
- * Source of truth: src-tauri/src/storage/secrets.rs (LOCKED_ERR and decrypt) — a
- * rename there must be mirrored here, which the canary test on each side catches.
- */
-export const SECRETS_LOCKED_MESSAGE = "Secrets store is locked";
-const DECRYPT_FAILED_MESSAGE = "wrong key or corrupted file";
 
 // Pending key: set at login/setup, used to unlock secrets on first access
 let pendingKey: number[] | null = null;
 let unlocked = false;
-
-const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * Run a secrets command, giving a failed decrypt its own type. Every other
@@ -27,7 +21,7 @@ async function invokeDecrypting<T>(cmd: string, args?: Record<string, unknown>):
     return await invoke<T>(cmd, args);
   } catch (e) {
     // Possibly readable with a key we lack. Deleting it here once cost a vault (#134).
-    if (errorMessage(e).includes(DECRYPT_FAILED_MESSAGE)) throw new VaultUnreadableError(e);
+    if (backendErrorCode(e) === "vault-unreadable") throw new VaultUnreadableError(e);
     throw e;
   }
 }
@@ -46,20 +40,34 @@ async function ensureUnlocked(): Promise<void> {
   if (unlocked) return;
   if (!pendingKey) throw new VaultLockedError();
   await invokeDecrypting("secrets_unlock", { encKey: pendingKey });
+  // Before `unlocked`, so no concurrent caller reads the vault ahead of the restore.
+  await restoreCarriedSecrets().catch(() => {});
   unlocked = true;
 }
 
+const CARRIED_SECRETS_KEY = "carried_device_secrets";
+
+async function restoreCarriedSecrets(): Promise<void> {
+  const raw = await invoke<string | null>("keychain_get", { key: CARRIED_SECRETS_KEY });
+  if (!raw) return;
+  for (const [key, value] of Object.entries(JSON.parse(raw) as Record<string, string>)) {
+    await invoke("secrets_set", { key, value });
+  }
+  await invoke("keychain_delete", { key: CARRIED_SECRETS_KEY });
+}
+
 /**
- * Run a secrets command on an unlocked store, giving Rust's bare "locked" string a
- * code so the overlay can offer to unlock. Reaching it means `unlocked` disagreed
- * with the store, so the flag is dropped and the next call unlocks again.
+ * Run a secrets command on an unlocked store, turning Rust's "vault-locked" error
+ * into a VaultLockedError so the overlay can offer to unlock. Reaching it means
+ * `unlocked` disagreed with the store, so the flag is dropped and the next call
+ * unlocks again.
  */
 async function withUnlocked<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   await ensureUnlocked();
   try {
     return await invoke<T>(cmd, args);
   } catch (e) {
-    if (errorMessage(e).includes(SECRETS_LOCKED_MESSAGE)) {
+    if (backendErrorCode(e) === "vault-locked") {
       unlocked = false;
       throw new VaultLockedError();
     }
@@ -111,10 +119,19 @@ export async function verifyVaultKey(encKey: number[]): Promise<void> {
   await invokeDecrypting("secrets_verify", { encKey });
 }
 
-export async function lockVault(): Promise<void> {
+// The LAN listener outlives a page reload, so it must stop wherever the key is dropped.
+async function dropKey(): Promise<void> {
   pendingKey = null;
   unlocked = false;
-  await invoke("secrets_lock");
+  try {
+    await invoke("secrets_lock");
+  } finally {
+    await import("@/services/lanSync").then((m) => m.stopLanSync()).catch(logFailure("lan-sync stop"));
+  }
+}
+
+export async function lockVault(): Promise<void> {
+  await dropKey();
   const { onSessionEnd } = await import("@/services/teamDataManager");
   onSessionEnd();
 }
@@ -132,33 +149,111 @@ export async function getVaultStatus(): Promise<{ exists: boolean; path: string 
  * the incoming cloud pull — and so the previous account's secrets.enc, which the
  * incoming key cannot open, is gone before that key is installed.
  */
-export async function wipeLocalConfig(): Promise<void> {
+export async function wipeLocalConfig(carry: Record<string, string> = {}): Promise<void> {
+  await carrySecrets(carry);
   await invoke("config_wipe");
 }
 
-export async function resetVault(): Promise<void> {
+// Carried through the keychain and written back into the next vault on its first unlock.
+async function carrySecrets(carry: Record<string, string>): Promise<void> {
+  if (Object.keys(carry).length === 0) return;
+  await invoke("keychain_set", { key: CARRIED_SECRETS_KEY, value: JSON.stringify(carry) }).catch(() => {});
+}
+
+/**
+ * Park the live account's local data under `parkAs` (discard it when null) and
+ * bring back what is parked under `restore`. Resolves to whether anything was restored.
+ */
+export async function swapAccountProfile(
+  { parkAs, restore, carry = {} }: { parkAs: string | null; restore: string; carry?: Record<string, string> },
+): Promise<boolean> {
+  await carrySecrets(carry);
+  // No key while the files move: a read would reopen the store, or create the incoming one, under the outgoing key.
+  const key = pendingKey;
   pendingKey = null;
   unlocked = false;
-  clearPersistedAccountUiState();
-  await invoke("secrets_lock");
-  await invoke("vault_reset"); // deletes secrets.enc + connections.json + legacy vault.hold
-
-  // Clear all keychain entries so the app starts fresh
-  for (const key of ACCOUNT_CACHE_KEYS) {
-    await invoke("keychain_delete", { key }).catch(() => {});
+  try {
+    return await invoke<boolean>("account_profile_swap", { parkAs, restore });
+  } catch (e) {
+    pendingKey = key;
+    throw e;
   }
 }
 
-export async function storeSecret(key: string, value: string): Promise<void> {
+export async function dropAccountProfile(accountId: string): Promise<void> {
+  await invoke("account_profile_drop", { accountId });
+}
+
+/** The present values of `keys`; empty when the vault can't be read. */
+export async function readLocalSecrets(keys: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const key of keys) {
+    const value = await getLocalSecret(key).catch(() => null);
+    if (value != null) out[key] = value;
+  }
+  return out;
+}
+
+// Memory before storage: a persisted store writes itself back to localStorage on its next set.
+export async function clearAccountUiState(): Promise<void> {
+  clearTeamPolicy();
+  const { useLanSyncStore } = await import("@/stores/lanSyncStore");
+  useLanSyncStore.getState().forgetAccount();
+  clearPersistedAccountUiState();
+  await (await import("@/services/lanSync")).clearLanSyncScopes();
+}
+
+export async function resetVault(): Promise<void> {
+  await dropKey();
+  await clearAccountUiState();
+  await invoke("vault_reset"); // deletes secrets.enc + connections.json + legacy vault.hold
+
+  // Clear all keychain entries so the app starts fresh
+  for (const key of VAULT_RESET_KEYS) {
+    await invoke("keychain_delete", { key }).catch(() => {});
+  }
+  await invoke("vault_secret_clear").catch(() => {});
+  notifyAccountModeChanged();
+}
+
+export async function storeLocalSecret(key: string, value: string): Promise<void> {
   await withUnlocked("secrets_set", { key, value });
 }
 
-export async function getSecret(key: string): Promise<string | null> {
+export async function getLocalSecret(key: string): Promise<string | null> {
   return withUnlocked<string | null>("secrets_get", { key });
 }
 
-export async function deleteSecret(key: string): Promise<void> {
+export async function deleteLocalSecret(key: string): Promise<void> {
   await withUnlocked("secrets_delete", { key });
+}
+
+export async function purgeLocalSecrets(keys: string[]): Promise<string[]> {
+  if (keys.length === 0) return [];
+  return withUnlocked<string[]>("secrets_purge", { keys });
+}
+
+async function routeOf(key: string) {
+  const [{ teamIdOwningSecret }, routing] = await Promise.all([
+    import("@/services/teamSecretOwnership"),
+    import("@/services/secretRouting"),
+  ]);
+  return { teamId: teamIdOwningSecret(key), routing };
+}
+
+export async function getSecret(key: string): Promise<string | null> {
+  const { teamId, routing } = await routeOf(key);
+  return routing.readSecretAt(teamId, key);
+}
+
+export async function storeSecret(key: string, value: string): Promise<void> {
+  const { teamId, routing } = await routeOf(key);
+  await routing.writeSecretAt(teamId, key, value);
+}
+
+export async function deleteSecret(key: string): Promise<void> {
+  const { teamId, routing } = await routeOf(key);
+  await routing.removeSecretAt(teamId, key);
 }
 
 export function getVaultKey(): number[] | null {
@@ -172,13 +267,13 @@ export async function unlockVaultIfNeeded(): Promise<void> {
 // ─── Secrets scopés aux plugins ──────────────────────────────────────────
 
 export async function storePluginSecret(pluginId: string, key: string, value: string): Promise<void> {
-  return storeSecret(`plugin:${pluginId}:${key}`, value);
+  return storeLocalSecret(`plugin:${pluginId}:${key}`, value);
 }
 
 export async function getPluginSecret(pluginId: string, key: string): Promise<string | null> {
-  return getSecret(`plugin:${pluginId}:${key}`);
+  return getLocalSecret(`plugin:${pluginId}:${key}`);
 }
 
 export async function deletePluginSecret(pluginId: string, key: string): Promise<void> {
-  return deleteSecret(`plugin:${pluginId}:${key}`);
+  return deleteLocalSecret(`plugin:${pluginId}:${key}`);
 }

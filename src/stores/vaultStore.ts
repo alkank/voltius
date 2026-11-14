@@ -7,6 +7,7 @@ import {
   vaultRowToVault,
   type VaultsSection,
 } from "@/services/vaultSection";
+import { PERSONAL_VAULT, withPersonalFirst } from "@/services/vaultLookup";
 
 export interface Vault {
   id: string;
@@ -16,8 +17,6 @@ export interface Vault {
   /** Clock for the `vaults` sync section. Absent on pre-sync entries, which date at the epoch. */
   updatedAt?: string;
 }
-
-const PERSONAL_VAULT: Vault = { id: "personal", name: "Personal" };
 
 interface VaultStore {
   vaults: Vault[];
@@ -32,7 +31,13 @@ interface VaultStore {
   removeVault: (id: string) => void;
   setVaultTeamId: (vaultId: string, teamId: string | null) => void;
   applySyncedVaults: (section: VaultsSection) => void;
+  /** Server names of the caller's teams, held in memory only. */
+  teamNames: Record<string, string>;
+  applyTeamNames: (names: Record<string, string>) => void;
 }
+
+const withTeamNames = (vaults: Vault[], names: Record<string, string>): Vault[] =>
+  vaults.map((v) => (v.teamId && names[v.teamId] !== undefined ? { ...v, name: names[v.teamId] } : v));
 
 export const useVaultStore = create<VaultStore>()(
   persist(
@@ -40,6 +45,8 @@ export const useVaultStore = create<VaultStore>()(
       vaults: [PERSONAL_VAULT],
       deletedVaults: {},
       selectedVaultIds: ["personal"],
+      teamNames: {},
+      applyTeamNames: (names) => set((s) => ({ teamNames: names, vaults: withTeamNames(s.vaults, names) })),
       toggleVault: (id) =>
         set((s) => ({
           selectedVaultIds: s.selectedVaultIds.includes(id)
@@ -93,8 +100,8 @@ export const useVaultStore = create<VaultStore>()(
       applySyncedVaults: (section) => {
         set((s) => {
           const rows = Object.entries(pruneVaultTombstones(section));
-          const alive = rows.filter(([, row]) => isAliveVaultRow(row));
-          const dead = rows.filter(([, row]) => !isAliveVaultRow(row));
+          const alive = rows.filter(([id, row]) => isAliveVaultRow(row) || id === PERSONAL_VAULT.id);
+          const dead = rows.filter(([id, row]) => !isAliveVaultRow(row) && id !== PERSONAL_VAULT.id);
           const deadIds = new Set(dead.map(([id]) => id));
           const known = new Set(s.vaults.map((v) => v.id));
 
@@ -104,7 +111,7 @@ export const useVaultStore = create<VaultStore>()(
           }
 
           return {
-            vaults: [PERSONAL_VAULT, ...alive.map(([id, row]) => vaultRowToVault(id, row))],
+            vaults: withTeamNames(withPersonalFirst(alive.map(([id, row]) => vaultRowToVault(id, row))), s.teamNames),
             deletedVaults: Object.fromEntries(dead),
             selectedVaultIds,
           };
@@ -115,15 +122,16 @@ export const useVaultStore = create<VaultStore>()(
     {
       name: "voltius-vaults",
       partialize: (state) => ({
-        vaults: state.vaults.filter((v) => v.id !== "personal"),
+        vaults: state.vaults.map((v) => (v.teamId ? { ...v, name: "" } : v)),
         deletedVaults: state.deletedVaults,
         selectedVaultIds: state.selectedVaultIds,
       }),
       merge: (persisted, current) => {
-        const p = persisted as { vaults?: Vault[]; deletedVaults?: VaultsSection; selectedVaultIds?: string[] };
+        // Nothing is stored yet on a fresh install, and zustand then passes undefined.
+        const p = (persisted ?? {}) as { vaults?: Vault[]; deletedVaults?: VaultsSection; selectedVaultIds?: string[] };
         return {
           ...current,
-          vaults: [PERSONAL_VAULT, ...(p.vaults ?? [])],
+          vaults: withPersonalFirst(p.vaults ?? []),
           deletedVaults: p.deletedVaults ?? {},
           selectedVaultIds: p.selectedVaultIds ?? current.selectedVaultIds,
         };

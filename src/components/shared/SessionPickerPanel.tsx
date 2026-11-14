@@ -3,9 +3,13 @@ import { useEffect } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { formatLocalShellTitle } from "@/utils/localShellTitle";
-import { ConnectionAvatar } from "./ConnectionAvatar";
-import { HostRow } from "./HostPickerPanel";
+import { sessionLabel } from "@/utils/sessionLabel";
+import { ConnectionHostRow } from "./HostPickerPanel";
+import { HostRow } from "./HostRow";
+import { PickerSectionLabel } from "./pickerParts";
+import { RecentHostsGroup } from "./HostPickerTree";
 import { useSnippetTargetPicker } from "@/hooks/useSnippetTargetPicker";
+import type { Connection } from "@/types";
 
 interface Props {
   mode: "insert" | "execute";
@@ -29,6 +33,10 @@ export function SessionPickerPanel({ mode, onConfirm, onClose }: Props) {
   const confirmLabel = mode === "insert"
     ? t("shared.sessionPicker.insertConfirm", { count: picker.totalSelected })
     : t("shared.sessionPicker.executeConfirm", { count: picker.totalSelected });
+
+  const hostRow = (c: Connection) => (
+    <ConnectionHostRow key={c.id} connection={c} isSelected={picker.selectedConnectionIds.has(c.id)} onClick={() => picker.toggleConnection(c.id)} multiSelect />
+  );
 
   return createPortal(
     <>
@@ -66,9 +74,9 @@ export function SessionPickerPanel({ mode, onConfirm, onClose }: Props) {
 
           {picker.filteredSessions.length > 0 && (
             <>
-              <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-(--t-text-dim)">
+              <PickerSectionLabel>
                 {t("shared.sessionPicker.activeSessionsHeader")}
-              </p>
+              </PickerSectionLabel>
               {picker.filteredSessions.map((s) => (
                 <HostRow
                   key={s.id}
@@ -83,7 +91,7 @@ export function SessionPickerPanel({ mode, onConfirm, onClose }: Props) {
                       <Icon icon={picker.selectedSessionIds.has(s.id) ? "lucide:check" : "lucide:terminal"} width={13} />
                     </div>
                   }
-                  name={s.connectionName}
+                  name={sessionLabel(s)}
                   sub={s.type === "local" ? t("shared.pickers.thisComputer") : t("shared.sessionPicker.sshSessionSub")}
                   isSelected={picker.selectedSessionIds.has(s.id)}
                   onClick={() => picker.toggleSession(s.id)}
@@ -93,12 +101,12 @@ export function SessionPickerPanel({ mode, onConfirm, onClose }: Props) {
             </>
           )}
 
-          <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-(--t-text-dim)">
+          <PickerSectionLabel>
             {t("shared.sessionPicker.openNewConnectionHeader")}
-          </p>
+          </PickerSectionLabel>
 
           {/* Local shell rows */}
-          {!picker.search && !picker.isAndroid && (picker.shells.length > 0 ? picker.shells : [{ name: t("shared.sessionPicker.localShellFallbackName"), path: "" }]).map((s) => {
+          {!picker.search && !picker.isMobile && (picker.shells.length > 0 ? picker.shells : [{ name: t("shared.sessionPicker.localShellFallbackName"), path: "" }]).map((s) => {
             const selected = picker.localShell === s.path;
             return (
               <HostRow
@@ -122,35 +130,24 @@ export function SessionPickerPanel({ mode, onConfirm, onClose }: Props) {
             );
           })}
 
-          {!picker.search && picker.filteredHosts.length > 0 && (
+          {!picker.search && picker.hasHosts && (
             <div className="mx-2 my-1.5 border-t border-(--t-bg-terminal)" />
           )}
 
-          {picker.filteredHosts.length === 0 && !picker.search && (
+          {!picker.hasHosts && !picker.search && (
             <p className="px-3 py-4 text-xs text-center text-(--t-text-muted)">{t("shared.sessionPicker.noRemoteHostsFound")}</p>
           )}
-          {picker.filteredHosts.length === 0 && picker.search && (
+          {!picker.hasHosts && picker.search && (
             <p className="px-3 py-4 text-xs text-center text-(--t-text-muted)">{t("shared.sessionPicker.noHostsFound")}</p>
           )}
 
-          {picker.filteredHosts.map((c) => (
-            <HostRow
-              key={c.id}
-              avatar={
-                picker.selectedConnectionIds.has(c.id)
-                  ? (
-                    <div className="rounded-lg flex items-center justify-center shrink-0 w-[1.867rem] h-[1.867rem]" style={{ background: "var(--t-accent)" }}>
-                      <Icon icon="lucide:check" width={13} className="text-white" />
-                    </div>
-                  )
-                  : <ConnectionAvatar connection={c} size={28} />
-              }
-              name={c.name ?? `${c.username}@${c.host}`}
-              sub={`${c.username}@${c.host}:${c.port}`}
-              isSelected={picker.selectedConnectionIds.has(c.id)}
-              onClick={() => picker.toggleConnection(c.id)}
-            />
-          ))}
+          <RecentHostsGroup
+            recent={picker.recentHosts}
+            renderHost={hostRow}
+            heading={(label) => <PickerSectionLabel>{label}</PickerSectionLabel>}
+            restHeading={picker.filteredHosts.length > 0}
+          />
+          {picker.filteredHosts.map(hostRow)}
         </div>
 
         {picker.totalSelected > 0 && (
@@ -158,7 +155,7 @@ export function SessionPickerPanel({ mode, onConfirm, onClose }: Props) {
             <button
               onClick={() => { void picker.confirm(onConfirm).then(() => onClose()); }}
               className="w-full h-9 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-opacity"
-              style={{ background: "var(--t-accent)", color: "#fff" }}
+              style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
               onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.9")}
               onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
             >

@@ -1,27 +1,88 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import i18n from "@/i18n";
 import { useSftpSettingsStore } from "@/stores/sftpSettingsStore";
 import { CURSOR_STYLES, useTerminalSettingsStore, type TerminalCursorStyle } from "@/stores/terminalSettingsStore";
 import { usePluginRegistryStore } from "@/stores/pluginRegistryStore";
 import { useToggleSettingsStore, TOGGLE_DEFS, type ToggleId } from "@/stores/toggleSettingsStore";
 import { useAppSettingsTimestampStore } from "@/stores/appSettingsTimestampStore";
-import { useConnectivitySettingsStore } from "@/stores/connectivitySettingsStore";
-import { useLocaleStore, SUPPORTED_LOCALES, type Locale } from "@/stores/localeStore";
+import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
+import { remoteApplyTimestamp } from "@/stores/remoteApplyGuard";
+import { getPath, hasPath, setPath } from "@/utils/dotPath";
+import {
+  useConnectivitySettingsStore,
+  DETACHED_TTL_HOURS,
+  GLOBAL_PROXY_MODES,
+  type DetachedTtlHours,
+  type GlobalProxy,
+  type GlobalProxyMode,
+} from "@/stores/connectivitySettingsStore";
+import { useLocaleStore, SUPPORTED_LOCALES, TIME_FORMATS, type Locale, type TimeFormat } from "@/stores/localeStore";
 import { KEEPALIVE_PRESETS, type KeepalivePreset } from "@/utils/keepalive";
+import type { KeywordRule } from "@/utils/keywordMatcher";
 import { lastWriteWins, type UserDataHandler } from "../handler";
+import { keysForDomain, relPath } from "../settingKeys";
 
 interface AppSettingsData {
   sftp?: { autoRefreshIntervalMs?: number };
-  terminal?: { preferredShell?: string | null; cursorStyle?: TerminalCursorStyle };
+  terminal?: { preferredShell?: string | null; cursorStyle?: TerminalCursorStyle; keywordRules?: KeywordRule[] };
   plugins?: { overrides?: Record<string, boolean> };
   toggles?: Partial<Record<string, boolean>>;
   keepalivePreset?: KeepalivePreset;
+  detachedTtlHours?: DetachedTtlHours;
   locale?: Locale;
+  timeFormat?: TimeFormat;
+  proxy?: GlobalProxy;
+  // Absent from peers that predate per-leaf clocks: every leaf then carries the section's clock.
+  clocks?: Record<string, string>;
+}
+
+function leafClock(data: AppSettingsData, sectionTs: string, leaf: string): string {
+  if (!data.clocks) return sectionTs;
+  const at = data.clocks[leaf];
+  return typeof at === "string" ? at : "";
+}
+
+const mergeAppSettings: UserDataHandler["merge"] = (local, remote, localTs, remoteTs) => {
+  if (!local || !remote) return lastWriteWins(local, remote, localTs, remoteTs);
+  const l = local as AppSettingsData;
+  const r = remote as AppSettingsData;
+  const value = JSON.parse(JSON.stringify(l)) as AppSettingsData;
+  const clocks: Record<string, string> = {};
+  const { isSettingSynced } = useSyncPrefsStore.getState();
+  let updated = false;
+  let updatedAt = localTs;
+  for (const { id } of keysForDomain("appSettings")) {
+    const leaf = relPath(id);
+    const localAt = leafClock(l, localTs, leaf);
+    const remoteAt = leafClock(r, remoteTs, leaf);
+    if (isSettingSynced(id) && hasPath(r, leaf) && remoteAt > localAt) {
+      setPath(value, leaf, getPath(r, leaf));
+      clocks[leaf] = remoteAt;
+      if (remoteAt > updatedAt) updatedAt = remoteAt;
+      updated = true;
+    } else if (localAt) {
+      clocks[leaf] = localAt;
+    }
+  }
+  value.clocks = clocks;
+  return { value, updated, updatedAt };
+};
+
+// Sync input is untrusted: rebuild a fresh object field-by-field instead of
+// trusting the sender's types, so a bad host/port never reaches the Rust IPC.
+export function normalizeGlobalProxy(raw: unknown): GlobalProxy | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { mode, host, port, username } = raw as Record<string, unknown>;
+  if (typeof mode !== "string" || !GLOBAL_PROXY_MODES.includes(mode as GlobalProxyMode)) return null;
+  const out: GlobalProxy = { mode: mode as GlobalProxyMode };
+  if (typeof host === "string" && host.trim()) out.host = host.trim();
+  if (typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65535) out.port = port;
+  if (typeof username === "string" && username.trim()) out.username = username.trim();
+  return out;
 }
 
 export const appSettingsHandler: UserDataHandler = {
   key: "appSettings",
-  label: "App Settings",
   icon: "lucide:settings",
 
   export(): AppSettingsData {
@@ -31,11 +92,19 @@ export const appSettingsHandler: UserDataHandler = {
     const { values } = useToggleSettingsStore.getState();
     return {
       sftp: { autoRefreshIntervalMs: sftp.autoRefreshIntervalMs },
-      terminal: { preferredShell: terminal.preferredShell, cursorStyle: terminal.cursorStyle },
+      terminal: {
+        preferredShell: terminal.preferredShell,
+        cursorStyle: terminal.cursorStyle,
+        keywordRules: terminal.keywordRules,
+      },
       plugins: { overrides: plugins.overrides },
       toggles: { ...values },
       keepalivePreset: useConnectivitySettingsStore.getState().keepalivePreset,
+      detachedTtlHours: useConnectivitySettingsStore.getState().detachedTtlHours,
       locale: useLocaleStore.getState().locale,
+      timeFormat: useLocaleStore.getState().timeFormat,
+      proxy: useConnectivitySettingsStore.getState().proxy,
+      clocks: { ...useAppSettingsTimestampStore.getState().clocks },
     };
   },
 
@@ -53,12 +122,10 @@ export const appSettingsHandler: UserDataHandler = {
       if ("preferredShell" in d.terminal) s.setPreferredShell(d.terminal.preferredShell ?? null);
       const style = d.terminal.cursorStyle;
       if (style && CURSOR_STYLES.includes(style)) s.setCursorStyle(style);
+      if (Array.isArray(d.terminal.keywordRules)) s.setKeywordRules(d.terminal.keywordRules);
     }
-    if (d.plugins?.overrides) {
-      const overrides = d.plugins.overrides;
-      usePluginRegistryStore.setState({ overrides });
-      await invoke("plugin_registry_save", { overrides }).catch(() => {});
-    }
+    const overrides = d.plugins?.overrides;
+    if (overrides) usePluginRegistryStore.setState({ overrides });
     if (d.toggles) {
       const { set } = useToggleSettingsStore.getState();
       for (const [id, value] of Object.entries(d.toggles)) {
@@ -68,19 +135,31 @@ export const appSettingsHandler: UserDataHandler = {
     if (d.keepalivePreset && d.keepalivePreset in KEEPALIVE_PRESETS) {
       useConnectivitySettingsStore.setState({ keepalivePreset: d.keepalivePreset });
     }
+    if (DETACHED_TTL_HOURS.includes(d.detachedTtlHours as DetachedTtlHours)) {
+      useConnectivitySettingsStore.setState({ detachedTtlHours: d.detachedTtlHours });
+    }
     if (d.locale && SUPPORTED_LOCALES.some((l) => l.value === d.locale)) {
       useLocaleStore.getState().setLocale(d.locale);
     }
+    if (TIME_FORMATS.includes(d.timeFormat as TimeFormat)) {
+      useLocaleStore.getState().setTimeFormat(d.timeFormat as TimeFormat);
+    }
+    const proxy = normalizeGlobalProxy(d.proxy);
+    if (proxy) useConnectivitySettingsStore.setState({ proxy });
+    if (d.clocks && typeof d.clocks === "object" && remoteApplyTimestamp() !== null) {
+      useAppSettingsTimestampStore.getState().adoptClocks(d.clocks);
+    }
+    if (overrides) await invoke("plugin_registry_save", { overrides }).catch(() => {});
   },
 
-  merge: lastWriteWins,
+  merge: mergeAppSettings,
 
   getTimestamp(): string {
     return useAppSettingsTimestampStore.getState().updatedAt;
   },
 
-  touch(): void {
-    useAppSettingsTimestampStore.getState().touch();
+  touch(path?: string): void {
+    useAppSettingsTimestampStore.getState().touch(path ? [relPath(path)] : undefined);
   },
 
   describe(): string {

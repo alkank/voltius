@@ -1,26 +1,62 @@
 import { useState } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
-import { useSnippetStore } from "@/stores/snippetStore";
-import { useVaultStore } from "@/stores/vaultStore";
+import MobileEditScreen from "../MobileEditScreen";
+import { useSnippetStore, type SnippetDraft } from "@/stores/snippetStore";
+import { useAllSnippets } from "@/hooks/useAllSnippets";
+import { useVaultScope } from "@/hooks/useVaultScope";
+import { useBackInterceptor } from "@/hooks/useBackInterceptor";
+import { snippetToForm } from "@/utils/snippetForm";
 import { useMobileNavStore } from "@/stores/mobileNavStore";
+import { useCloseWhenGone } from "@/hooks/useCloseWhenGone";
+import { haptic } from "@/lib/haptics";
 import { StepListEditor } from "@/components/snippets/StepListEditor";
+import { ScriptEditor } from "@/components/snippets/ScriptEditor";
 import { RemotePathPickerPanel } from "@/components/snippets/RemotePathPickerPanel";
-import type { SnippetFormData, SnippetStep } from "@/types";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
+import { FieldError, useRequiredField } from "@/components/shared/fieldValidation";
+import { formInputClass, formInputStyle, formLabelClass, formLabelStyle } from "@/components/shared/Panel";
+import type { NewObjectPlacement, Snippet, SnippetFormData, SnippetStep } from "@/types";
 
-export default function MobileSnippetEditScreen({ snippetId }: { snippetId?: string }) {
+export default function MobileSnippetEditScreen({ snippetId, placement, draft }: { snippetId?: string; placement?: NewObjectPlacement; draft?: SnippetDraft }) {
+  const pop = useMobileNavStore((s) => s.pop);
+  const snippets = useAllSnippets();
+  const editing = snippetId ? snippets.find((s) => s.id === snippetId) ?? null : null;
+  useCloseWhenGone(snippetId, editing !== null, pop);
+  return <MobileSnippetEditor editing={editing} placement={placement} draft={draft} />;
+}
+
+interface EditorProps {
+  editing: Snippet | null;
+  placement?: NewObjectPlacement;
+  draft?: SnippetDraft;
+}
+
+const MobileSnippetEditor = withEditAccess("snippet", (p: EditorProps) => p.editing ?? undefined, MobileSnippetEditorFields);
+
+const NEW_STEPS: SnippetStep[] = [{ kind: "script", content: "" }];
+
+/**
+ * The one mobile editor that saves explicitly: a snippet is only written once it has a
+ * name and a non-empty step, and the step list passes through states that must not be
+ * synced half-typed. So it keeps a single Save action, and Back over unsaved changes
+ * asks first (Save / Keep editing / Discard).
+ */
+function MobileSnippetEditorFields({ editing, placement, draft, readOnly }: EditorProps & EditAccessProps) {
   const { t } = useTranslation();
   const pop = useMobileNavStore((s) => s.pop);
-  const snippets = useSnippetStore((s) => s.snippets);
+  const snippets = useAllSnippets();
   const createSnippet = useSnippetStore((s) => s.createSnippet);
   const updateSnippet = useSnippetStore((s) => s.updateSnippet);
   const deleteSnippet = useSnippetStore((s) => s.deleteSnippet);
-  const selectedVaultIds = useVaultStore((s) => s.selectedVaultIds);
-  const editing = snippetId ? snippets.find((s) => s.id === snippetId) ?? null : null;
+  const { createVaultId } = useVaultScope();
 
-  const [name, setName] = useState(editing?.name ?? "");
-  const [steps, setSteps] = useState<SnippetStep[]>(editing?.steps ?? [{ kind: "script", content: "" }]);
+  const initialSteps = editing?.steps ?? draft?.steps ?? NEW_STEPS;
+  const [name, setName] = useState(editing?.name ?? draft?.name ?? "");
+  const [steps, setSteps] = useState<SnippetStep[]>(initialSteps);
   const [remotePick, setRemotePick] = useState<{ index: number; field: "from_path" | "to_path"; isDir: boolean } | null>(null);
+  const [revealErrors, setRevealErrors] = useState(false);
+  useBackInterceptor(!!remotePick, () => setRemotePick(null));
 
   // Single-script fast path: keep the plain textarea when the snippet is just one script step.
   const [forceSequence, setForceSequence] = useState(false);
@@ -28,27 +64,27 @@ export default function MobileSnippetEditScreen({ snippetId }: { snippetId?: str
   const showStepList = forceSequence || !singleStep;
   const content = singleStep?.content ?? "";
 
-  const canSave = name.trim().length > 0 && steps.some((s) => s.kind !== "script" || s.content.trim());
+  const hasContent = steps.some((s) => s.kind !== "script" || s.content.trim());
+  const canSave = !readOnly && name.trim().length > 0 && hasContent;
+  const dirty = !readOnly && (name !== (editing?.name ?? "") || JSON.stringify(steps) !== JSON.stringify(initialSteps));
+  const nameField = useRequiredField(name, { enabled: true, reveal: revealErrors });
+  const contentField = useRequiredField(hasContent ? "x" : "", { enabled: !showStepList, reveal: revealErrors });
 
   const save = async () => {
-    if (!canSave) return;
+    if (!canSave) {
+      setRevealErrors(true);
+      haptic("reject");
+      return;
+    }
     if (editing) {
-      const data: SnippetFormData = {
-        name: name.trim(), steps,
-        description: editing.description,
-        tags: editing.tags, folder_id: editing.folder_id,
-        favorite: editing.favorite,
-        only_for_connection_tags: editing.only_for_connection_tags,
-        only_for_distros: editing.only_for_distros,
-        vault_id: editing.vault_id,
-      };
-      await updateSnippet(editing.id, data);
+      await updateSnippet(editing.id, { ...snippetToForm(editing), name: name.trim(), steps });
     } else {
       const data: SnippetFormData = {
         name: name.trim(), steps,
         tags: [], favorite: false,
         only_for_connection_tags: [], only_for_distros: [],
-        vault_id: selectedVaultIds[0] ?? "personal",
+        folder_id: placement?.folderId,
+        vault_id: placement?.vaultId ?? createVaultId,
       };
       await createSnippet(data);
     }
@@ -56,76 +92,18 @@ export default function MobileSnippetEditScreen({ snippetId }: { snippetId?: str
   };
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-(--t-bg-base)">
-      <header
-        className="shrink-0 flex items-center gap-2 px-2 h-12 border-b"
-        style={{ background: "var(--t-bg-chrome)", borderColor: "var(--t-border)" }}
-      >
-        <button data-mobile-back onClick={pop} className="p-2 text-(--t-text-primary)">
-          <Icon icon="lucide:arrow-left" width={22} />
-        </button>
-        <span className="flex-1 text-base font-semibold text-(--t-text-primary)">
-          {editing ? t("mobile.snippetEdit.editTitle") : t("mobile.snippetEdit.newTitle")}
-        </span>
-        <button
-          data-mobile-snippet-save
-          onClick={() => void save()}
-          disabled={!canSave}
-          className="px-3 py-1.5 rounded-lg text-sm font-medium"
-          style={{ background: "var(--t-accent)", color: "#fff", opacity: !canSave ? 0.5 : 1 }}
-        >
-          {t("common.action.save")}
-        </button>
-      </header>
-      <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
-        <input
-          data-mobile-snippet-name
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t("mobile.snippetEdit.namePlaceholder")}
-          className="shrink-0 rounded-xl px-3 h-10 text-sm outline-none text-(--t-text-primary)"
-          style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}
-        />
-        {showStepList ? (
-          <StepListEditor
-            value={steps}
-            onChange={setSteps}
-            snippets={snippets.filter((s) => s.id !== editing?.id)}
-            onBrowseRemote={(index, field, isDir) => setRemotePick({ index, field, isDir })}
-          />
-        ) : (
-          <div className="flex-1 flex flex-col gap-1.5">
-            <textarea
-              data-mobile-snippet-content
-              value={content}
-              onChange={(e) => setSteps([{ kind: "script", content: e.target.value }])}
-              placeholder={t("mobile.snippetEdit.contentPlaceholder")}
-              className="flex-1 min-h-40 rounded-xl px-3 py-2 text-sm font-mono outline-none resize-none text-(--t-text-primary)"
-              style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}
-            />
-            <button
-              type="button"
-              onClick={() => setForceSequence(true)}
-              className="self-start text-xs"
-              style={{ color: "var(--t-text-dim)" }}
-            >
-              {t("snippets.step.addStep")}
-            </button>
-          </div>
-        )}
-        {editing && (
-          <button
-            data-mobile-snippet-delete
-            onClick={() => { void deleteSnippet(editing.id); pop(); }}
-            className="shrink-0 flex items-center justify-center gap-2 rounded-xl h-10 text-sm font-medium"
-            style={{ color: "var(--t-danger, #e5484d)", border: "1px solid var(--t-border)" }}
-          >
-            <Icon icon="lucide:trash-2" width={16} /> {t("mobile.snippetEdit.delete")}
-          </button>
-        )}
-      </div>
-
-      {remotePick && (
+    <MobileEditScreen
+      form="snippet"
+      title={editing ? t("mobile.snippetEdit.editTitle") : t("mobile.snippetEdit.newTitle")}
+      onLeave={pop}
+      primary={{ label: t("common.action.save"), attr: "mobile-snippet-save", disabled: readOnly, onClick: () => void save() }}
+      guard={dirty ? {
+        title: t("mobile.editForm.unsavedTitle"),
+        body: t("mobile.editForm.unsavedBody"),
+        onSave: canSave ? () => void save() : undefined,
+      } : null}
+      onRevealErrors={() => setRevealErrors(true)}
+      overlay={remotePick && (
         <div className="absolute inset-0 z-40 bg-(--t-bg-base)">
           <RemotePathPickerPanel
             isDir={remotePick.isDir}
@@ -140,6 +118,61 @@ export default function MobileSnippetEditScreen({ snippetId }: { snippetId?: str
           />
         </div>
       )}
-    </div>
+    >
+      <ReadOnlyFields readOnly={readOnly} className="min-h-full p-4 flex flex-col gap-4">
+        <div className="shrink-0">
+          <label className={formLabelClass} style={formLabelStyle}>{t("mobile.snippetEdit.nameLabel")}</label>
+          <input
+            data-mobile-snippet-name
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t("mobile.snippetEdit.namePlaceholder")}
+            className={formInputClass}
+            style={formInputStyle}
+            {...nameField.fieldProps}
+          />
+          <FieldError show={nameField.invalid} />
+        </div>
+        {showStepList ? (
+          <StepListEditor
+            value={steps}
+            onChange={setSteps}
+            snippets={snippets.filter((s) => s.id !== editing?.id)}
+            onBrowseRemote={(index, field, isDir) => setRemotePick({ index, field, isDir })}
+          />
+        ) : (
+          <div className="flex-1 flex flex-col">
+            <label className={formLabelClass} style={formLabelStyle}>{t("mobile.snippetEdit.contentLabel")}</label>
+            <ScriptEditor
+              value={content}
+              onChange={(v) => setSteps([{ kind: "script", content: v }])}
+              placeholder={t("mobile.snippetEdit.contentPlaceholder")}
+              minHeight="10rem"
+              fill
+              className="flex-1"
+              {...contentField.fieldProps}
+            />
+            <FieldError show={contentField.invalid} />
+            <button
+              type="button"
+              onClick={() => setForceSequence(true)}
+              className="self-start mt-1 h-10 px-1 flex items-center gap-1.5 text-sm font-medium text-(--t-accent)"
+            >
+              <Icon icon="lucide:list-plus" width={16} /> {t("snippets.step.addStep")}
+            </button>
+          </div>
+        )}
+        {editing && !readOnly && (
+          <button
+            data-mobile-snippet-delete
+            onClick={() => { void deleteSnippet(editing.id); pop(); }}
+            className="shrink-0 flex items-center justify-center gap-2 rounded-full h-12 text-sm font-medium"
+            style={{ color: "var(--t-danger, #e5484d)", border: "1px solid var(--t-border)" }}
+          >
+            <Icon icon="lucide:trash-2" width={16} /> {t("mobile.snippetEdit.delete")}
+          </button>
+        )}
+      </ReadOnlyFields>
+    </MobileEditScreen>
   );
 }

@@ -108,6 +108,16 @@ test("output messages are decrypted before reaching onOutput", async () => {
   expect(Array.from(cb.onOutput.mock.calls[0][0] as Uint8Array)).toEqual(Array.from(payload));
 });
 
+test("input messages reach onInput decrypted, with their sender", async () => {
+  const cb = noopCallbacks();
+  const k = await key();
+  openWebSocket("https://s", "sid", "jwt", k, cb);
+  const encrypted = await encryptData(k, new Uint8Array([0x6c, 0x73]));
+  await MockWS.last.onmessage!({ data: JSON.stringify({ type: "input", from: "u2", data: encrypted }) });
+  const [data, from] = cb.onInput.mock.calls[0] as [Uint8Array, string];
+  expect([Array.from(data), from]).toEqual([[0x6c, 0x73], "u2"]);
+});
+
 test("malformed message JSON is swallowed", async () => {
   const cb = noopCallbacks();
   openWebSocket("https://s", "sid", "jwt", await key(), cb);
@@ -145,4 +155,29 @@ test("output buffer evicts oldest chunks past 64KB and drains in order", () => {
   appendSessionOutputBuffer("s2", new Uint8Array(40 * 1024).fill(8)); // pushes total > 64KB, evicts first
   const drained = drainSessionOutputBuffer("s2")!;
   expect(drained.length).toBeLessThanOrEqual(64 * 1024);
+});
+
+test("key_request reaches the host with the guest's id, key_ready reaches the guest", async () => {
+  const cb = { ...noopCallbacks(), onKeyRequest: vi.fn(), onKeyReady: vi.fn() };
+  openWebSocket("https://s", "sid", "jwt", await key(), cb);
+  await MockWS.last.onmessage!({ data: JSON.stringify({ type: "key_request", user_id: "guest-1" }) });
+  await MockWS.last.onmessage!({ data: JSON.stringify({ type: "key_ready" }) });
+  expect(cb.onKeyRequest).toHaveBeenCalledWith("guest-1");
+  expect(cb.onKeyReady).toHaveBeenCalledTimes(1);
+});
+
+test("output that arrives before a pending key is held and delivered in order once it resolves", async () => {
+  const cb = noopCallbacks();
+  const k = await key();
+  let resolveKey: (k: Uint8Array) => void = () => {};
+  openWebSocket("https://s", "sid", "jwt", new Promise<Uint8Array>((r) => { resolveKey = r; }), cb);
+  const frames = [[1], [2], [3]].map(async (bytes) => encryptData(k, new Uint8Array(bytes)));
+  const delivered = (await Promise.all(frames)).map((data) =>
+    MockWS.last.onmessage!({ data: JSON.stringify({ type: "output", data }) }),
+  );
+  expect(cb.onOutput).not.toHaveBeenCalled();
+
+  resolveKey(k);
+  await Promise.all(delivered);
+  expect(cb.onOutput.mock.calls.map(([d]) => Array.from(d as Uint8Array))).toEqual([[1], [2], [3]]);
 });

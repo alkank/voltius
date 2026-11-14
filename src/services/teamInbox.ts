@@ -1,9 +1,11 @@
 import i18n from "@/i18n";
-import { useNotificationStore } from "@/stores/notificationStore";
-import type { InboxAction, InboxEntry, InboxKind } from "@/stores/notificationStore";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
+import type { InboxAction, InboxEntry, InboxKind, ToastEntry } from "@/stores/notificationStore";
 import { useTeamStore } from "@/stores/teamStore";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
 import { useSessionStore } from "@/stores/sessionStore";
+import { useUIStore } from "@/stores/uiStore";
+import { findLeaf, getPaneSessionIds, useLayoutStore } from "@/stores/layoutStore";
 import type { MultiplayerSessionState } from "@/stores/teamSessionStore";
 import { useTeamVaultStateStore } from "@/stores/teamVaultStateStore";
 import type { TeamVaultStatus } from "@/stores/teamVaultStateStore";
@@ -14,8 +16,16 @@ import { declineSessionInvite, getMyUserId } from "@/services/teamService";
 import type { MyPendingInvitation } from "@/services/teamService";
 import type { ActiveSession } from "@/services/multiplayerService";
 import { sessionDisplayName } from "@/services/teamSharing";
-
-const APP_SOURCE = { kind: "app", area: "team" } as const;
+import { resolvePeerName } from "@/services/peerName";
+import { getServerUrl } from "@/services/authTokens";
+import { enrollFailureText, joinRefusal, redeemEnrollment, tokenHost, type MyJoinRequest } from "@/services/enrollment/enrollmentPublic";
+import { userFacingReason } from "@/services/errorReason";
+import { subscribeAccountMode } from "@/utils/accountMode";
+import { machineEnrollmentToken } from "@/services/enrollment/machineToken";
+import { accountKey, useEnrollmentStore } from "@/stores/enrollmentStore";
+import { usePolicyStore } from "@/stores/policyStore";
+import { serverAllowed } from "@/services/policy/serverPolicy";
+import { sameServer } from "@/utils/serverInstance";
 
 // Deny has no server-side state to delete: the connection still reports the
 // requester, so without this the next reconcile re-derives the entry and
@@ -25,11 +35,17 @@ const deniedRequests = new Set<string>();
 // Sessions whose "you have control" toast already fired, so it posts once per
 // grant instead of on every reconcile.
 const controlHeldSessions = new Set<string>();
+const joiningTeams = new Set<string>();
+
+export type EnrollAccount = { serverUrl: string | null; accountId: string };
+let enrollAccount: EnrollAccount | null = null;
 
 /** Clears the per-reconcile memory that has no source of truth to re-derive from. */
 export function resetTeamInboxState(): void {
   deniedRequests.clear();
   controlHeldSessions.clear();
+  joiningTeams.clear();
+  enrollAccount = null;
 }
 
 /**
@@ -37,12 +53,12 @@ export function resetTeamInboxState(): void {
  * the dismissed-notification history — see `ToastEntry.inboxId`. Omit it only
  * for toasts that have no inbox entry behind them.
  */
-function toast(message: string, duration: number, inboxId?: string): void {
+function toast(message: string, duration: number, inboxId?: string, severity: ToastEntry["severity"] = "info"): void {
   useNotificationStore.getState().addToast({
     source: APP_SOURCE,
     type: "toast",
     message,
-    severity: "info",
+    severity,
     duration,
     inboxId,
   });
@@ -167,8 +183,8 @@ export function reconcileSessions(
           ? `@${s.invited_by_handle}`
           : i18n.t("notifications.inbox.someone")
         : invited
-          ? (s.participants?.find((p) => p.user_id === s.invited_by)?.handle ??
-              i18n.t("notifications.inbox.someone"))
+          ? peerLabel(s.invited_by as string, s.participants?.find((p) => p.user_id === s.invited_by)?.handle) ??
+              i18n.t("notifications.inbox.someone")
           : "";
       const kind: InboxKind = knock ? "sessionKnock" : invited ? "sessionInvite" : "sessionShared";
       const name = sessionDisplayName(s);
@@ -224,7 +240,25 @@ export function reconcileSessions(
   reconcile(["sessionShared", "sessionInvite", "sessionKnock"], entries);
 }
 
+function peerLabel(userId: string, fallbackHandle: string | undefined): string | null {
+  const peer = resolvePeerName(useTeamStore.getState().membersByTeam, userId, { fallbackHandle });
+  return peer.name ?? (peer.handle ? `@${peer.handle}` : null);
+}
+
+// The session's MultiplayerBar is on screen and already says what a toast would, under it.
+function sessionOnScreen(localSessionId: string): boolean {
+  const { activeNav, sftpPanelOpen } = useUIStore.getState();
+  if (activeNav !== "terminal" || sftpPanelOpen) return false;
+  const layout = useLayoutStore.getState();
+  if (!layout.splitTabActive) return useSessionStore.getState().activeSessionId === localSessionId;
+  const shown = layout.maximizedPaneId
+    ? [findLeaf(layout.root, layout.maximizedPaneId)?.sessionId]
+    : getPaneSessionIds(layout.root);
+  return shown.includes(localSessionId);
+}
+
 export function reconcileControlRequests(connections: Record<string, MultiplayerSessionState>): void {
+  const onScreenIds = new Set<string>();
   const derived = Object.entries(connections)
     .filter(
       ([, c]) => !c.ended && c.role === "host" && c.controlRequester !== null && c.controlRequester !== c.myUserId,
@@ -232,8 +266,9 @@ export function reconcileControlRequests(connections: Record<string, Multiplayer
     .map(([localSessionId, c]) => {
       const requesterId = c.controlRequester as string;
       const id = `control:${localSessionId}:${requesterId}`;
+      if (sessionOnScreen(localSessionId)) onScreenIds.add(id);
       const requester =
-        c.participants.find((p) => p.user_id === requesterId)?.handle ??
+        peerLabel(requesterId, c.participants.find((p) => p.user_id === requesterId)?.handle) ??
         i18n.t("notifications.inbox.someone");
       return {
         id,
@@ -266,7 +301,7 @@ export function reconcileControlRequests(connections: Record<string, Multiplayer
     useNotificationStore.getState().inbox.filter((e) => e.kind === "controlRequest").map((e) => e.id),
   );
   for (const e of entries) {
-    if (!known.has(e.id)) toast(e.message, 8000, e.id);
+    if (!known.has(e.id) && !onScreenIds.has(e.id)) toast(e.message, 8000, e.id);
   }
 
   reconcile(["controlRequest"], entries);
@@ -283,7 +318,7 @@ export function reconcileControlRequests(connections: Record<string, Multiplayer
       controlHeldSessions.delete(localSessionId);
     } else if (!controlHeldSessions.has(localSessionId)) {
       controlHeldSessions.add(localSessionId);
-      toast(i18n.t("notifications.inbox.control.granted"), 4000);
+      if (!sessionOnScreen(localSessionId)) toast(i18n.t("notifications.inbox.control.granted"), 4000);
     }
   }
 }
@@ -305,6 +340,108 @@ export function reconcileAwaitingKeys(statusByTeamId: Record<string, TeamVaultSt
   );
 }
 
+const accountService = () => import("@/services/account");
+
+/** Inbox entries for the machine enrolment token and the active account's own join requests. */
+export function reconcileEnrollment(account: EnrollAccount | null = enrollAccount): void {
+  enrollAccount = account;
+  const entries = account ? enrollmentEntries(account) : [];
+  reconcile(["enrollInvite", "enrollPending", "enrollDeclined"], entries.map((e) => ({ ...e, state: "pending" })));
+}
+
+const toastJoined = (team: string) => toast(i18n.t("notifications.inbox.enroll.joined", { team }), 8000, undefined, "success");
+
+function enrollmentEntries(account: EnrollAccount): Parameters<typeof reconcile>[1] {
+  const store = useEnrollmentStore.getState();
+  const teams = useTeamStore.getState().teams;
+  const member = new Set(teams.map((t) => t.id));
+  // A server account's requests and teams may already cover the token's team, so it waits for both.
+  if (account.serverUrl !== null && (store.myRequests === null || !useTeamStore.getState().teamsLoaded)) return [];
+  const requests = Array.isArray(store.myRequests) ? store.myRequests : [];
+  const key = accountKey(account.serverUrl ?? "", account.accountId);
+  const act = (label: string, run: () => unknown): InboxAction => ({
+    label,
+    run: async () => {
+      await run();
+      reconcileEnrollment();
+    },
+  });
+  const dismiss = (run: () => void) => act(i18n.t("common.action.dismiss"), run);
+  const loadRequests = () => useEnrollmentStore.getState().loadMyRequests();
+
+  for (const r of requests) {
+    if (r.status === "pending" && !member.has(r.teamId)) joiningTeams.add(r.teamId);
+    else if (r.status === "denied") joiningTeams.delete(r.teamId);
+  }
+  for (const team of teams.filter((t) => joiningTeams.has(t.id))) {
+    joiningTeams.delete(team.id);
+    toastJoined(team.name);
+  }
+
+  const token = machineEnrollmentToken();
+  const resolved = token ? store.resolved[token.id]?.result : undefined;
+  const offered = token && serverAllowed(token.serverUrl) && !store.records[`${token.id}|${key}`] ? token : null;
+  if (offered && !resolved) void store.resolve(offered).catch(() => {});
+
+  const askAgain = (r: MyJoinRequest) => {
+    if (!token || !resolved || resolved.teamId !== r.teamId || !sameServer(token.serverUrl, account.serverUrl)) return [];
+    return [act(i18n.t("notifications.inbox.enroll.askAgain"), async () => {
+      try {
+        const outcome = await redeemEnrollment(token, "active");
+        useEnrollmentStore.getState().record(token.id, key, outcome);
+        if (outcome.status !== "pending") toastJoined(r.teamName);
+      } catch (e) {
+        const refusal = joinRefusal(e);
+        const t = (k: string, o?: Record<string, unknown>) => i18n.t(k, o);
+        const ctx = { team: r.teamName, host: tokenHost(token.serverUrl), domains: resolved.allowedDomains };
+        toast(refusal ? enrollFailureText(refusal, t, ctx) : userFacingReason(e), 8000, undefined, "error");
+        throw e;
+      }
+      await loadRequests();
+    })];
+  };
+
+  const entries: Parameters<typeof reconcile>[1] = [];
+  if (offered && resolved && !member.has(resolved.teamId) && !requests.some((r) => r.teamId === resolved.teamId)) {
+    entries.push({
+      id: `enroll-invite:${offered.id}`,
+      kind: "enrollInvite",
+      message: i18n.t("notifications.inbox.enroll.invite", { team: resolved.teamName }),
+      actions: [
+        act(i18n.t("notifications.inbox.enroll.signIn"), () => useUIStore.getState().openEnroll(offered, "machine")),
+        dismiss(() => store.record(offered.id, key, "dismissed")),
+      ],
+    });
+  }
+  for (const r of requests.filter((r) => !member.has(r.teamId))) {
+    if (r.status === "pending") {
+      entries.push({
+        id: `enroll-pending:${r.teamId}`,
+        kind: "enrollPending",
+        message: i18n.t(`notifications.inbox.enroll.pending.${r.reason ?? "approval"}`, { team: r.teamName }),
+        actions: r.reason !== "email_unverified" ? [] : [
+          act(i18n.t("notifications.emailVerification.banner.resend"), async () => {
+            await (await accountService()).resendVerificationEmail();
+            toast(i18n.t("notifications.emailVerification.toast.sent"), 3500);
+          }),
+          act(i18n.t("notifications.emailVerification.banner.verified"), async () => {
+            await (await accountService()).refreshVerificationState();
+            await loadRequests();
+          }),
+        ],
+      });
+    } else if (!store.dismissedRequests.includes(r.id)) {
+      entries.push({
+        id: `enroll-declined:${r.id}`,
+        kind: "enrollDeclined",
+        message: i18n.t("notifications.inbox.enroll.declined", { team: r.teamName }),
+        actions: [...askAgain(r), dismiss(() => store.dismissRequest(r.id))],
+      });
+    }
+  }
+  return entries;
+}
+
 export function startTeamInbox(): () => void {
   resetTeamInboxState();
   reconcileInvites(useTeamStore.getState().myPendingInvitations);
@@ -312,6 +449,7 @@ export function startTeamInbox(): () => void {
     if (s.myPendingInvitations !== prev.myPendingInvitations) {
       reconcileInvites(s.myPendingInvitations);
     }
+    if (s.teams !== prev.teams || s.teamsLoaded !== prev.teamsLoaded) syncEnrollment();
   });
 
   let stopped = false;
@@ -346,26 +484,41 @@ export function startTeamInbox(): () => void {
     }
   });
 
+  let accountReads = 0;
+  function syncEnrollment(): void {
+    const read = ++accountReads;
+    Promise.all([getServerUrl(), accountService().then((m) => m.getAccountId())])
+      .then(([serverUrl, accountId]) => {
+        if (!stopped && read === accountReads) reconcileEnrollment(accountId ? { serverUrl, accountId } : null);
+      })
+      .catch(() => {});
+  }
+  syncEnrollment();
+  const unsubEnrollment = useEnrollmentStore.subscribe(syncEnrollment);
+  const unsubAccountMode = subscribeAccountMode(syncEnrollment);
+  const unsubPolicy = usePolicyStore.subscribe((s, prev) => {
+    if (s.machine !== prev.machine) syncEnrollment();
+  });
+
   return () => {
     stopped = true;
     unsubInvites();
     unsubSessions();
     unsubVaultState();
+    unsubEnrollment();
+    unsubAccountMode();
+    unsubPolicy();
   };
 }
 
-/**
- * One-shot, unlike the reconcilers above: the team is gone from every source we
- * could re-derive these from, so they are upserted directly and stay until
- * acted on. Keyed by team so two departures raise two entries.
- */
-function notifyOneShot(id: string, kind: InboxKind, message: string, action: InboxAction): void {
+/** Upserts an inbox entry directly and echoes it as a toast; it stays until acted on. */
+export function notifyOneShot(id: string, kind: InboxKind, message: string, actions: InboxAction[]): void {
   useNotificationStore.getState().upsertInbox({
     id,
     kind,
     source: APP_SOURCE,
     message,
-    actions: [action],
+    actions,
   });
 
   toast(message, 10000, id);
@@ -373,13 +526,13 @@ function notifyOneShot(id: string, kind: InboxKind, message: string, action: Inb
 
 export function notifyMembershipEnded(teamName: string): void {
   const id = `membership-ended:${teamName}`;
-  notifyOneShot(id, "membershipEnded", i18n.t("notifications.inbox.membershipEnded.message", { team: teamName }), {
+  notifyOneShot(id, "membershipEnded", i18n.t("notifications.inbox.membershipEnded.message", { team: teamName }), [{
     label: i18n.t("notifications.inbox.membershipEnded.review"),
     run: async () => {
       const { useUIStore } = await import("@/stores/uiStore");
       useUIStore.getState().setActiveNav("keychain");
     },
-  });
+  }]);
 }
 
 /**
@@ -389,7 +542,7 @@ export function notifyMembershipEnded(teamName: string): void {
  */
 export function notifySecretsNotWiped(teamId: string, teamName: string): void {
   const id = `secrets-not-wiped:${teamId}`;
-  notifyOneShot(id, "secretsNotWiped", i18n.t("notifications.inbox.secretsNotWiped.message", { team: teamName }), {
+  notifyOneShot(id, "secretsNotWiped", i18n.t("notifications.inbox.secretsNotWiped.message", { team: teamName }), [{
     label: i18n.t("notifications.inbox.secretsNotWiped.retry"),
     run: async () => {
       const { drainPendingSecretWipes } = await import("@/services/teamVaultSync");
@@ -399,5 +552,5 @@ export function notifySecretsNotWiped(teamId: string, teamName: string): void {
         useNotificationStore.getState().retractInbox(id);
       }
     },
-  });
+  }]);
 }

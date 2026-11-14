@@ -1,22 +1,25 @@
 import { writeClipboard } from "../../utils/clipboard";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { Icon } from "@iconify/react";
 import { useTeamStore } from "@/stores/teamStore";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
+import { tierAtLeast } from "@/stores/subscriptionTier";
 import { buildInviteLink } from "@/services/inviteCode";
 import { uninviteFromSession } from "@/services/teamService";
 import { guestCapFor, highestOwnerTier, inviteSessionOf, membersOfTeams, seatUsage, type InviteSession, type InviteTarget, type ShareTier } from "@/services/teamSharing";
-import { useDelayedUnmount } from "@/hooks/useDelayedUnmount";
+import { useAnchoredPopover } from "@/hooks/useAnchoredPopover";
 import { PresenceAvatar } from "@/components/shared/PresenceAvatar";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { InviteCodeField } from "./InviteCodeField";
+import { CheckboxBox } from "@/components/shared/Checkbox";
 import { SpokenCodeRow } from "./SpokenCodeRow";
 import { PeopleTab } from "./PeopleTab";
 import { ParticipantsRatioNotice } from "./ParticipantsRatioNotice";
+import { avatarLabel, usePeerResolver } from "@/services/peerName";
+import { usePlanDisplay } from "@/services/planDisplay";
 
-const EXIT_MS = 140;
 
 const ROLES = ["owner", "manager", "editor", "member"] as const;
 
@@ -35,8 +38,8 @@ interface ShareMenuProps {
 
 export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectionName, connectionVaultId, isLoggedIn, tier, onSignIn, onUpgrade }: ShareMenuProps) {
   const { t } = useTranslation();
-  const menuRef = useRef<HTMLDivElement>(null);
-  const mounted = useDelayedUnmount(open, EXIT_MS);
+  const upgrade = usePlanDisplay().upgradeTo ? onUpgrade : undefined;
+  const fade = useAnchoredPopover(open, onClose, anchorRef);
   const [pos, setPos] = useState({ top: 0, left: 0, originX: 140 });
   const [tab, setTab] = useState<"people" | "invite" | "team">("people");
   const [sessionName, setSessionName] = useState(connectionName);
@@ -73,7 +76,7 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
   const inviteSession = inviteSessionOf(activeMp, matchingActiveSession);
 
   // Vaults whose owner has a qualifying plan (teams/business) — free-tier users can share to these
-  const qualifyingVaults = teams.filter((t) => t.owner_tier === "teams" || t.owner_tier === "business");
+  const qualifyingVaults = teams.filter((t) => tierAtLeast(t.owner_tier, "teams"));
   const hasQualifyingVaults = qualifyingVaults.length > 0;
 
   // For free/pro users, team sharing is only allowed when the connection itself lives in a qualifying vault.
@@ -118,18 +121,6 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
       setInviteLinkToken(null);
       setAutoCopied(false);
     }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        anchorRef.current && !anchorRef.current.contains(e.target as Node) &&
-        menuRef.current && !menuRef.current.contains(e.target as Node)
-      ) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
   const toggleVault = (id: string) => {
@@ -229,22 +220,18 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
     }
   };
 
-  if (!mounted) return null;
+  if (!fade.mounted) return null;
 
   return createPortal(
     <div
-      ref={menuRef}
-      className={`surface-float fixed z-9999 ${open ? "animate-fadeIn" : "animate-fadeOut"}`}
+      ref={fade.panelRef}
+      className={`surface-float fixed z-9999 ${fade.className}`}
       style={{
         top: pos.top,
         left: pos.left,
         width: 280,
         transformOrigin: `${pos.originX}px top`,
-        // `--animate-fadeIn`/`fadeOut` are the `animation` shorthand (duration baked
-        // in at 0.3s/0.25s) — a Tailwind arbitrary `[animation-duration:...]` utility
-        // competes with that shorthand on generation order, which is not something
-        // to rely on. An inline style always wins the cascade.
-        animationDuration: open ? "140ms" : "110ms",
+        ...fade.style,
       }}
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -264,7 +251,7 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
           </div>
           <button
             className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
-            style={{ background: "var(--t-accent)", color: "var(--t-accent-fg)", opacity: 1 }}
+            style={{ background: "var(--t-accent)", color: "var(--t-on-accent)", opacity: 1 }}
             onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
             onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
             onClick={onSignIn}
@@ -303,15 +290,17 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
               </div>
             ))}
           </div>
-          <button
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
-            style={{ background: "var(--t-accent)", color: "var(--t-accent-fg)", opacity: 1 }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
-            onClick={onUpgrade}
-          >
-            {t("terminal.share.upgradeToPro")}
-          </button>
+          {upgrade && (
+            <button
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
+              style={{ background: "var(--t-accent)", color: "var(--t-on-accent)", opacity: 1 }}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+              onClick={upgrade}
+            >
+              {t("terminal.share.upgradeToPro")}
+            </button>
+          )}
         </div>
       ) : isSharing ? (
         /* ── Active sharing view ── */
@@ -328,7 +317,7 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
           onInvite={handleInvite}
           onUninvite={handleUninvite}
           onStop={handleStopSharing}
-          onUpgrade={onUpgrade}
+          onUpgrade={upgrade}
         />
       ) : (
         /* ── Setup view ── */
@@ -385,7 +374,7 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
               invitedThisSession={invitedThisSession}
               guestCap={guestCap}
               tier={tier}
-              onUpgrade={onUpgrade}
+              onUpgrade={upgrade}
               onInvite={handleInvite}
             />
           ) : tab === "team" ? (
@@ -407,7 +396,7 @@ export function ShareMenu({ anchorRef, open, onClose, activeSessionId, connectio
               guestCap={guestCap}
               tier={tier}
               onGenerate={handleGenerateInviteLink}
-              onUpgrade={onUpgrade}
+              onUpgrade={upgrade}
             />
           )}
         </>
@@ -446,10 +435,11 @@ function ActiveSharingView({
   onInvite: (target: InviteTarget) => Promise<void>;
   onUninvite: (userId: string) => Promise<void>;
   onStop: () => void;
-  onUpgrade: () => void;
+  onUpgrade?: () => void;
 }) {
   const { t } = useTranslation();
   const participantCount = inviteSession.participantIds.length;
+  const peer = usePeerResolver();
   // An invite_link session retains no per-user session key (#66) — inviting into it
   // would always throw cannotInviteWithoutSessionKey, so don't offer the action.
   const canInviteDirectly = !!activeMp.sessionKeyBytes;
@@ -477,22 +467,25 @@ function ActiveSharingView({
 
       {participantCount > 0 && (
         <div className="flex flex-wrap gap-1 mb-3">
-          {activeMp.participants.map((p) => (
-            <div
-              key={p.user_id}
-              className="flex items-center gap-1.5 pl-0.5 pr-2 py-0.5 rounded-full text-[10px]"
-              style={{
-                background: p.user_id === activeMp.controlHolder
-                  ? "color-mix(in srgb, var(--t-accent) 15%, transparent)"
-                  : "var(--t-bg-elevated)",
-                color: p.user_id === activeMp.controlHolder ? "var(--t-accent)" : "var(--t-text-secondary)",
-                border: "1px solid var(--t-border)",
-              }}
-            >
-              <PresenceAvatar handle={p.handle} size={20} hasControl={p.user_id === activeMp.controlHolder} />
-              {p.handle}
-            </div>
-          ))}
+          {activeMp.participants.map((p) => {
+            const who = peer(p.user_id, { fallbackHandle: p.handle });
+            return (
+              <div
+                key={p.user_id}
+                className="flex items-center gap-1.5 pl-0.5 pr-2 py-0.5 rounded-full text-[10px]"
+                style={{
+                  background: p.user_id === activeMp.controlHolder
+                    ? "color-mix(in srgb, var(--t-accent) 15%, transparent)"
+                    : "var(--t-bg-elevated)",
+                  color: p.user_id === activeMp.controlHolder ? "var(--t-accent)" : "var(--t-text-secondary)",
+                  border: "1px solid var(--t-border)",
+                }}
+              >
+                <PresenceAvatar handle={avatarLabel(who)} size={20} hasControl={p.user_id === activeMp.controlHolder} />
+                {who.primary}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -581,15 +574,7 @@ function TeamTab({
                   onMouseLeave={(e) => ((e.currentTarget as HTMLDivElement).style.background = "transparent")}
                   onClick={() => onToggleVault(team.id)}
                 >
-                  <div
-                    className="w-3.5 h-3.5 rounded-sm border flex items-center justify-center shrink-0"
-                    style={{
-                      background: selected ? "var(--t-accent)" : "transparent",
-                      borderColor: selected ? "var(--t-accent)" : "var(--t-border)",
-                    }}
-                  >
-                    {selected && <Icon icon="lucide:check" width={9} style={{ color: "white" }} />}
-                  </div>
+                  <CheckboxBox checked={selected} small />
                   <Icon icon="lucide:vault" width={13} style={{ color: selected ? "var(--t-accent)" : "var(--t-text-secondary)" }} />
                   <span className="text-xs flex-1 truncate">{team.name}</span>
                 </div>
@@ -669,7 +654,7 @@ function InviteLinkTab({
   guestCap: number;
   tier: ShareTier;
   onGenerate: () => void;
-  onUpgrade: () => void;
+  onUpgrade?: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -707,7 +692,7 @@ function InviteLinkTab({
           <p className="text-[10px] mt-1.5 text-center" style={{ color: "var(--t-text-dim)" }}>
             {t("terminal.share.upToParticipants", { count: guestCap })}
           </p>
-          {tier === "pro" && (
+          {tier === "pro" && onUpgrade && (
             <button
               className="w-full text-[10px] mt-0.5 text-center underline"
               style={{ color: "var(--t-text-dim)", background: "none", border: "none", cursor: "pointer" }}

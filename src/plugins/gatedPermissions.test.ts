@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, test, it, expect } from "vitest";
 import i18n from "@/i18n";
 import {
@@ -5,6 +6,11 @@ import {
   isNonDangerGatedPermission,
   describePermissions, hasGatedPermission, requiresInstallConsent,
 } from "./gatedPermissions";
+
+test("gated_permissions.json mirrors GATED_PERMISSIONS", async () => {
+  await expect(JSON.stringify([...GATED_PERMISSIONS].sort(), null, 2) + "\n")
+    .toMatchFileSnapshot("../../src-tauri/src/policy/gated_permissions.json");
+});
 
 describe("gatedPermissions", () => {
   test("terminal read/stream are gated", () => {

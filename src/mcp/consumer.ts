@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { PluginAPI } from "@/plugins/api";
-import { buildCoreTools, deriveScope, type ToolSurfacePorts, type OwnedSessions } from "@voltius/tools";
+import { buildCoreTools, deriveScope, renameDescriptions, type ToolSurfacePorts, type OwnedSessions } from "@voltius/tools";
 import { listContributions } from "./contributions";
 import { isPluginExposed } from "@/stores/mcpContributionStore";
 import { useTransferQueueStore } from "@/stores/transferQueueStore";
@@ -108,9 +108,11 @@ export const MCP_TEXT = {
       + "responsible for approval. A snippet in a team vault cannot be deleted.",
     port_forward_create:
       "Save a new port forwarding rule. `tunnel_type` is \"local\" (a port on this machine reaches "
-      + "a remote address), \"remote\" (the reverse) or \"dynamic\" (a SOCKS proxy). Saving does not "
-      + "open anything — use port_forward_start. Runs immediately; your own client is responsible "
-      + "for approval.",
+      + "a remote address), \"remote\" (the reverse) or \"dynamic\" (a SOCKS proxy). `bind_host` is "
+      + "the address the listener binds, 127.0.0.1 by default: on the SSH server for \"remote\", on "
+      + "this machine otherwise. Any other address lets other devices on that network use the "
+      + "tunnel. Saving does not open anything — use port_forward_start. Runs immediately; your "
+      + "own client is responsible for approval.",
     port_forward_update:
       "Change fields on a saved port forwarding rule. Only the fields given are altered. Runs "
       + "immediately; your own client is responsible for approval. A rule in a team vault cannot be "
@@ -148,6 +150,7 @@ export const MCP_TEXT = {
       "Bring a session's pane to the front so the user sees it, optionally maximizing it within its "
       + "tab. Works on any open session and changes only what is visible. Runs immediately; your "
       + "own client is responsible for approval.",
+    ...renameDescriptions("Runs immediately; your own client is responsible for approval."),
     member_invite:
       "Invite someone to a team by email, or add an existing user by id — exactly one of the two. "
       + "Requires your team role to allow it. Runs immediately; your own client is responsible for "
@@ -204,11 +207,11 @@ export const MCP_TEXT = {
       "Remove a custom marketplace source. Runs immediately; your own client is responsible for "
       + "approval. Plugins already installed from it stay installed.",
     import_objects:
-      "Import a bundle produced by export_objects, or a Termius, MobaXterm or CSV export, into one "
-      + "vault. Runs immediately; your own client is responsible for approval. Give it `content` or "
-      + "a `path` — a path must be under the user's home directory. An encrypted bundle needs its "
-      + "passphrase. Importing only ever adds — existing items are matched and skipped. With "
-      + "dry_run: true, nothing is written.",
+      "Import a bundle produced by export_objects, or a Termius, MobaXterm, ZOC, PuTTY, SecureCRT or CSV export, or an OpenSSH client config, "
+      + "into one vault. Runs immediately; your own client is responsible for approval. Give it `content` or "
+      + "a `path` — a path must be under the user's home directory. An encrypted bundle, or a SecureCRT "
+      + "config with a config passphrase, needs its passphrase. Importing only ever adds — existing items "
+      + "are matched and skipped. With dry_run: true, nothing is written.",
     export_objects:
       "Export saved objects — connections, identities, SSH keys, snippets, port-forwarding rules — "
       + "from one or more vaults. Runs immediately; your own client is responsible for approval. If "
@@ -308,7 +311,7 @@ function queueTransfer(
       // so the caller still gets the refusal back untouched below.
       const refusal = refusalMessage(out);
       if (refusal !== null) throw new Error(refusal);
-    }, undefined, false, owner)
+    }, undefined, undefined, owner)
     .then(() => {
       if (failed) throw thrown;
       return out;

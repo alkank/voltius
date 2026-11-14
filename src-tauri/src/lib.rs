@@ -6,30 +6,54 @@
 
 #[cfg(target_os = "android")]
 mod android_ctx;
+mod app_lock;
+pub mod auth;
+pub mod cli;
+pub mod cli_state;
 mod clock;
 mod commands;
 mod crypto;
+mod device_files;
 mod docker;
 mod error;
 mod ftp;
+mod ios_native;
 #[cfg(target_os = "android")]
 mod keychain_android;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod keychain_bundle;
+mod knock;
 mod known_hosts;
+mod lan_sync;
 #[cfg(target_os = "linux")]
 mod linux_gfx;
 mod local;
 pub mod mcp;
 mod metrics;
+mod network_watch;
+mod passkey_loopback;
+pub mod policy;
 mod port_forward;
 mod processes;
 mod proxmox;
+mod proxy;
+mod recent_ids;
+mod scratch;
 mod serial;
 mod sftp;
 mod shell_integration;
 mod ssh;
 mod storage;
+mod system_auth;
+mod system_bars;
 mod terminal_kbd;
+mod terminal_output;
+mod tls;
+mod updater;
 mod vault_auth;
+mod webdav;
+#[cfg(windows)]
+mod win_security;
 
 use commands::http::HttpSseStreamManager;
 use docker::stream::DockerLogStreamManager;
@@ -41,295 +65,28 @@ use processes::stream::ProcessStreamManager;
 use serial::connect::SerialSessionManager;
 use sftp::SftpManager;
 use ssh::session::SessionManager;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use storage::secrets::SecretsStore;
-
-#[cfg(desktop)]
-struct PendingUpdate(Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>>);
-
-#[cfg(desktop)]
-struct UpdaterBusy(std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-#[cfg(desktop)]
-struct BusyGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-#[cfg(desktop)]
-impl Drop for BusyGuard {
-    fn drop(&mut self) {
-        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-#[cfg(desktop)]
-#[allow(dead_code)] // not every variant is constructed on every target
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Os {
-    Linux,
-    Macos,
-    Windows,
-}
-
-#[cfg(desktop)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InstallKind {
-    SelfUpdate,
-    External,
-}
-
-/// Decide whether the running install can replace itself in place.
-/// Pure so it can be unit-tested across every platform from one host.
-#[cfg(desktop)]
-fn classify_install(
-    os: Os,
-    appimage_env: bool,
-    exe_path: &std::path::Path,
-    bundle_writable: bool,
-) -> InstallKind {
-    match os {
-        // Tauri's Linux updater only replaces an AppImage (APPIMAGE env set).
-        Os::Linux => {
-            if appimage_env {
-                InstallKind::SelfUpdate
-            } else {
-                InstallKind::External
-            }
-        }
-        // macOS replaces the .app bundle: impossible from a read-only dmg
-        // mount, from a Gatekeeper-translocated path, or when the install
-        // location isn't writable.
-        Os::Macos => {
-            let p_str = exe_path.to_str().unwrap_or("");
-            if exe_path.starts_with("/Volumes/")
-                || p_str.contains("AppTranslocation")
-                || !bundle_writable
-            {
-                InstallKind::External
-            } else {
-                InstallKind::SelfUpdate
-            }
-        }
-        // Per-user NSIS self-updates. A per-machine install still attempts the
-        // update and surfaces any UAC-elevation failure via the error path;
-        // no proactive install-scope detection here.
-        //
-        // The exception is an MSIX package from the Microsoft Store, which
-        // lands under C:\Program Files\WindowsApps. That tree is locked down
-        // even for administrators, so the download would always fail at the
-        // install step; the Store owns updates for that install anyway.
-        //
-        // Matched on the raw string rather than on Path components: this
-        // function is unit-tested for every platform from one host, and a
-        // Linux Path does not split a Windows path on its backslashes.
-        Os::Windows => {
-            let p = exe_path.to_string_lossy().to_ascii_lowercase();
-            if p.contains("\\windowsapps\\") || p.contains("/windowsapps/") {
-                InstallKind::External
-            } else {
-                InstallKind::SelfUpdate
-            }
-        }
-    }
-}
-
-/// Probe whether the directory containing the `.app` bundle is writable —
-/// i.e. whether the updater could replace the bundle. Writes and removes a
-/// temp file in the bundle's parent (e.g. /Applications). macOS only.
-#[cfg(target_os = "macos")]
-fn mac_install_writable(exe_path: &std::path::Path) -> bool {
-    let bundle = exe_path
-        .ancestors()
-        .find(|p| p.extension().map(|e| e == "app").unwrap_or(false));
-    let Some(parent) = bundle.and_then(|b| b.parent()) else {
-        return false;
-    };
-    let probe = parent.join(".voltius_write_probe");
-    let ok = std::fs::File::create(&probe).is_ok();
-    let _ = std::fs::remove_file(&probe);
-    ok
-}
-
-/// Whether the currently running install can self-update.
-#[cfg(desktop)]
-fn self_update_capable() -> bool {
-    let os = if cfg!(target_os = "linux") {
-        Os::Linux
-    } else if cfg!(target_os = "macos") {
-        Os::Macos
-    } else {
-        Os::Windows
-    };
-    let appimage_env = std::env::var_os("APPIMAGE").is_some();
-    let exe = std::env::current_exe().unwrap_or_default();
-    #[cfg(target_os = "macos")]
-    let bundle_writable = mac_install_writable(&exe);
-    #[cfg(not(target_os = "macos"))]
-    let bundle_writable = true;
-    classify_install(os, appimage_env, &exe, bundle_writable) == InstallKind::SelfUpdate
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
-enum UpdaterEvent {
-    Checking,
-    UpToDate,
-    Downloading { version: String, progress: u8 },
-    Ready { version: String },
-    ExternalUpdate { version: String },
-    Error { message: String },
-}
-
-#[cfg(desktop)]
-async fn check_for_update(handle: tauri::AppHandle) {
-    use tauri::{Emitter, Manager};
-    use tauri_plugin_updater::UpdaterExt;
-
-    use std::sync::atomic::Ordering;
-    let flag = handle.state::<UpdaterBusy>().0.clone();
-    if flag
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return; // a check is already running
-    }
-    let _busy = BusyGuard(flag); // released on every return path
-
-    let _ = handle.emit("updater-status", UpdaterEvent::Checking);
-
-    let updater = match handle.updater_builder().build() {
-        Ok(u) => u,
-        Err(e) => {
-            let _ = handle.emit(
-                "updater-status",
-                UpdaterEvent::Error {
-                    message: e.to_string(),
-                },
-            );
-            return;
-        }
-    };
-
-    let update = match updater.check().await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            let _ = handle.emit("updater-status", UpdaterEvent::UpToDate);
-            return;
-        }
-        Err(e) => {
-            let _ = handle.emit(
-                "updater-status",
-                UpdaterEvent::Error {
-                    message: e.to_string(),
-                },
-            );
-            return;
-        }
-    };
-
-    // Installs that can't self-update (Linux deb/rpm, macOS from dmg /
-    // translocated, etc.) must not download/install — notify instead.
-    if !self_update_capable() {
-        let _ = handle.emit(
-            "updater-status",
-            UpdaterEvent::ExternalUpdate {
-                version: update.version.clone(),
-            },
-        );
-        return;
-    }
-
-    let version = update.version.clone();
-    let pending = handle.state::<PendingUpdate>();
-
-    let _ = handle.emit(
-        "updater-status",
-        UpdaterEvent::Downloading {
-            version: version.clone(),
-            progress: 0,
-        },
-    );
-
-    let mut downloaded: u64 = 0;
-    let mut total: u64 = 0;
-    let handle_clone = handle.clone();
-    let version_clone = version.clone();
-
-    let bytes = match update
-        .download(
-            move |chunk_len, content_length| {
-                downloaded += chunk_len as u64;
-                if let Some(len) = content_length {
-                    total = len;
-                }
-                let progress = (downloaded * 100)
-                    .checked_div(total)
-                    .map(|p| p.min(99) as u8)
-                    .unwrap_or(0);
-                let _ = handle_clone.emit(
-                    "updater-status",
-                    UpdaterEvent::Downloading {
-                        version: version_clone.clone(),
-                        progress,
-                    },
-                );
-            },
-            || {},
-        )
-        .await
-    {
-        Ok(b) => b,
-        Err(e) => {
-            let _ = handle.emit(
-                "updater-status",
-                UpdaterEvent::Error {
-                    message: e.to_string(),
-                },
-            );
-            return;
-        }
-    };
-
-    *pending.0.lock().unwrap() = Some((update, bytes));
-    let _ = handle.emit("updater-status", UpdaterEvent::Ready { version });
-}
 
 #[tauri::command]
 fn force_quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-#[tauri::command]
-fn updater_restart(app: tauri::AppHandle) {
-    #[cfg(desktop)]
-    {
-        use tauri::{Emitter, Manager};
-        let pending = app.state::<PendingUpdate>();
-        let taken = pending.0.lock().unwrap().take();
-        if let Some((update, bytes)) = taken {
-            if let Err(e) = update.install(bytes) {
-                let _ = app.emit(
-                    "updater-status",
-                    UpdaterEvent::Error {
-                        message: e.to_string(),
-                    },
-                );
-                return; // do not restart into an unchanged/broken state
-            }
-        }
-    }
-    app.restart();
-}
-
-#[tauri::command]
-async fn updater_check(app: tauri::AppHandle) {
-    #[cfg(desktop)]
-    check_for_update(app).await;
-    #[cfg(not(desktop))]
-    let _ = app;
-}
-
 /// Register the OS-native credential store as keyring-core's default. Exactly one
 /// branch is active per target; other platforms get a no-op (keychain unavailable).
 fn init_keychain_store() -> keyring_core::Result<()> {
+    desktop_keychain_store(true)?;
+    #[cfg(target_os = "android")]
+    keyring_core::set_default_store(crate::keychain_android::Store::new());
+    #[cfg(target_os = "ios")]
+    keyring_core::set_default_store(apple_native_keyring_store::protected::Store::new()?);
+    Ok(())
+}
+
+/// `allow_volatile` lets keyring-less Linux fall back to keyutils, which the desktop app would not read after a reboot.
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+pub(crate) fn desktop_keychain_store(allow_volatile: bool) -> keyring_core::Result<()> {
     #[cfg(target_os = "linux")]
     {
         // Prefer the persistent Secret Service (gnome-keyring/KWallet). The kernel
@@ -339,7 +96,7 @@ fn init_keychain_store() -> keyring_core::Result<()> {
         // volatile keyutils store there so the app still runs (no persistence).
         match dbus_secret_service_keyring_store::Store::new() {
             Ok(store) => keyring_core::set_default_store(store),
-            Err(e) => {
+            Err(e) if allow_volatile => {
                 log::warn!(
                     "Secret Service unavailable ({e}); falling back to volatile keyutils keyring"
                 );
@@ -349,20 +106,20 @@ fn init_keychain_store() -> keyring_core::Result<()> {
                     )?,
                 );
             }
+            Err(e) => return Err(e),
         }
     }
     #[cfg(target_os = "macos")]
-    keyring_core::set_default_store(
+    keyring_core::set_default_store(keychain_bundle::Store::new(
         apple_native_keyring_store::keychain::Store::new_with_configuration(
             &std::collections::HashMap::<&str, &str>::new(),
         )?,
-    );
+        |service| service == commands::keychain::service(),
+    ));
     #[cfg(target_os = "windows")]
     keyring_core::set_default_store(windows_native_keyring_store::Store::new_with_configuration(
         &std::collections::HashMap::<&str, &str>::new(),
     )?);
-    #[cfg(target_os = "android")]
-    keyring_core::set_default_store(crate::keychain_android::Store::new());
     Ok(())
 }
 
@@ -458,7 +215,9 @@ pub fn run() {
 
     #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_notification::init());
     }
 
     builder
@@ -474,6 +233,16 @@ pub fn run() {
                 && payload.event() == tauri::webview::PageLoadEvent::Started
             {
                 let app = webview.app_handle().clone();
+                let devices = app.clone();
+                // Drain before returning: a connect from the new page must see the new reload count.
+                let drained = app.state::<device_files::link::DeviceLinks>().drain();
+                tauri::async_runtime::spawn(async move {
+                    commands::device_files::close_sessions(
+                        &devices.state::<SftpManager>(),
+                        drained,
+                    )
+                    .await;
+                });
                 tauri::async_runtime::spawn(async move {
                     let state = app.state::<Arc<mcp::McpState>>();
                     // Order matters: close the gate first so nothing new can
@@ -489,6 +258,12 @@ pub fn run() {
 
             // Verbose logging auto-reverts on every launch: always start at Info.
             log::set_max_level(log::LevelFilter::Info);
+
+            #[cfg(target_os = "ios")]
+            {
+                crate::ios_native::hide_keyboard_accessory_bar();
+                crate::policy::managed_ios::watch(app.handle().clone());
+            }
 
             // On Android `dirs::config_dir()` resolves to an unwritable cwd, so
             // pin generic file storage (connections, plugins, identities, …) to
@@ -509,37 +284,21 @@ pub fn run() {
             }
 
             #[cfg(desktop)]
-            app.manage(PendingUpdate(Mutex::new(None)));
-            #[cfg(desktop)]
-            app.manage(UpdaterBusy(std::sync::Arc::new(
-                std::sync::atomic::AtomicBool::new(false),
-            )));
+            app.manage(updater::UpdaterState::default());
+            #[cfg(target_os = "android")]
+            android_ctx::set_app(app.handle());
+            commands::uploads::sweep_stale_copies(app.handle());
             app.manage(KnownHostsStore::load());
+            app.manage(app_lock::AppLock::load());
+            app.manage(app_lock::LastActive::load());
+            app.manage(passkey_loopback::PasskeyLoopback::default());
             app.manage(Arc::new(PendingConflicts::new()));
             app.manage(PortForwardManager::new(app.handle().clone()));
             app.manage(Arc::new(mcp::McpState::new()));
+            network_watch::start(app.handle().clone());
 
             #[cfg(all(desktop, not(debug_assertions)))]
-            {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    // Short delay so the window is visible before we start network I/O
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    if commands::sync::updater_auto_enabled() {
-                        check_for_update(handle.clone()).await;
-                    }
-                    // Re-check every 4 hours while the app is running
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_secs(4 * 60 * 60));
-                    interval.tick().await; // consume the immediate first tick
-                    loop {
-                        interval.tick().await;
-                        if commands::sync::updater_auto_enabled() {
-                            check_for_update(handle.clone()).await;
-                        }
-                    }
-                });
-            }
+            updater::spawn_background_checks(app.handle().clone());
 
             Ok(())
         })
@@ -549,23 +308,45 @@ pub fn run() {
         .manage(ProcessStreamManager::new())
         .manage(SessionManager::new())
         .manage(LocalSessionManager::new())
+        .manage(terminal_output::TerminalOutputs::default())
         .manage(SecretsStore::new())
         .manage(SftpManager::new())
         .manage(SerialSessionManager::new())
+        .manage(commands::lan_sync::LanSyncState::default())
+        .manage(device_files::link::DeviceLinks::default())
         .invoke_handler(tauri::generate_handler![
+            auth::auth_challenge,
+            auth::auth_device,
+            auth::auth_login,
+            auth::auth_second_factor,
+            auth::auth_passkey_start,
             force_quit,
-            updater_restart,
-            updater_check,
+            updater::updater_restart,
+            updater::updater_check,
+            updater::updater_get_state,
             commands::greet,
             commands::get_platform,
+            app_lock::app_lock_get,
+            app_lock::app_lock_set,
+            app_lock::app_lock_hide_in_recents,
+            app_lock::app_lock_last_active,
+            app_lock::app_lock_touch,
+            passkey_loopback::passkey_loopback_start,
+            passkey_loopback::passkey_loopback_wait,
+            passkey_loopback::passkey_loopback_stop,
+            system_auth::system_auth_available,
+            system_auth::system_auth_verify,
+            system_bars::set_system_bars,
             terminal_kbd::terminal_show_keyboard,
             terminal_kbd::terminal_hide_keyboard,
+            terminal_kbd::terminal_selection_touch_feed,
             commands::diagnostics::set_verbose_logging,
             commands::diagnostics::create_bug_report,
             commands::ping::ping_host,
             commands::ping::ping_host_via_jumps,
             commands::ping::ping_session,
             commands::connections::connection_list,
+            commands::connections::connection_deleted_at,
             commands::connections::connection_save,
             commands::connections::connection_update,
             commands::connections::connection_adopt,
@@ -593,7 +374,10 @@ pub fn run() {
             commands::vault::vault_status,
             commands::vault::vault_reset,
             commands::vault::config_wipe,
+            commands::vault::account_profile_swap,
+            commands::vault::account_profile_drop,
             commands::vault::get_machine_fingerprint,
+            commands::vault::os_user_name,
             commands::crypto::derive_keys,
             commands::crypto::derive_gist_key,
             commands::crypto::generate_keypair,
@@ -601,12 +385,25 @@ pub fn run() {
             commands::crypto::unwrap_user_secrets_cmd,
             commands::crypto::generate_user_secrets_cmd,
             commands::team_crypto::derive_x25519_keypair,
+            commands::team_crypto::x25519_public_from_private,
             commands::team_crypto::generate_session_key,
             commands::team_crypto::x25519_wrap_key,
             commands::team_crypto::x25519_unwrap_key,
             commands::keychain::keychain_get,
             commands::keychain::keychain_set,
             commands::keychain::keychain_delete,
+            commands::vault_secret::vault_secret_state,
+            commands::vault_secret::vault_secret_seal_available,
+            commands::vault_secret::vault_secret_get,
+            commands::vault_secret::vault_secret_set,
+            commands::vault_secret::vault_secret_bind,
+            commands::vault_secret::vault_secret_unbind,
+            commands::vault_secret::vault_secret_clear,
+            commands::vault_secret::vault_secret_export,
+            commands::vault_secret::vault_secret_import,
+            commands::vault_secret::vault_secret_store_device_key,
+            commands::vault_secret::vault_secret_remembers,
+            commands::vault_secret::vault_secret_set_remembers,
             storage::secrets::secrets_unlock,
             storage::secrets::secrets_verify,
             storage::secrets::secrets_exists,
@@ -616,6 +413,7 @@ pub fn run() {
             storage::secrets::secrets_get,
             storage::secrets::secrets_set,
             storage::secrets::secrets_delete,
+            storage::secrets::secrets_purge,
             storage::secrets::secrets_quarantine,
             storage::secrets::secrets_backups,
             storage::secrets::secrets_restore,
@@ -633,12 +431,53 @@ pub fn run() {
             commands::sync::settings_save,
             commands::sync::live_sessions_load,
             commands::sync::live_sessions_save,
+            commands::sync::ssh_config_state_load,
+            commands::sync::ssh_config_state_save,
             commands::sync::device_hostname,
+            commands::policy::policy_load,
+            commands::policy::policy_check_team_doc,
+            commands::cli_state::cli_pending_load,
+            commands::cli_state::cli_pending_settle,
+            commands::cli_state::cli_mirror_save,
+            commands::cli_state::cli_logout_marker_take,
+            commands::lan_sync::lan_sync_start,
+            commands::lan_sync::lan_sync_stop,
+            commands::lan_sync::lan_sync_forget,
+            commands::lan_sync::lan_sync_clear_scope,
+            commands::lan_sync::lan_sync_broadcast,
+            commands::lan_sync::lan_sync_take_blob,
+            commands::lan_sync::lan_sync_peers,
+            commands::lan_sync::lan_sync_set_paused,
+            commands::device_files::device_files_connect,
+            #[cfg(desktop)]
+            commands::device_files::device_files_start,
+            #[cfg(desktop)]
+            commands::device_files::device_files_stop,
+            #[cfg(desktop)]
+            commands::device_files::device_files_get_config,
+            #[cfg(desktop)]
+            commands::device_files::device_files_set_config,
+            #[cfg(desktop)]
+            commands::device_files::device_files_answer,
+            #[cfg(desktop)]
+            commands::device_files::device_files_disconnect,
+            #[cfg(desktop)]
+            commands::device_files::device_files_pending,
+            commands::lan_sync::lan_sync_learn,
+            commands::lan_sync::lan_sync_pair_open,
+            commands::lan_sync::lan_sync_pair_close,
+            commands::lan_sync::lan_sync_pair_confirm,
+            commands::lan_sync::lan_sync_pair_cancel,
+            commands::lan_sync::lan_sync_set_members,
+            commands::lan_sync::lan_sync_device_key,
             commands::ssh::ssh_connect,
             commands::ssh::ssh_disconnect,
             commands::ssh::ssh_send_input,
             commands::ssh::ssh_resize,
+            commands::ssh::ssh_set_terminal_colors,
+            commands::ssh::ssh_set_output_paused,
             commands::ssh::ssh_detect_distro,
+            commands::ssh::ssh_detect_distro_direct,
             commands::ssh::ssh_get_system_info,
             commands::ssh::ssh_exec_command,
             commands::ssh::ssh_kill_persistent,
@@ -647,10 +486,13 @@ pub fn run() {
             commands::known_hosts::known_host_move_vault,
             commands::known_hosts::known_host_copy_vault,
             commands::known_hosts::known_host_resolve,
+            commands::known_hosts::known_host_cancel,
             commands::known_hosts::known_host_trust,
             commands::local::local_list_shells,
             commands::local::local_connect,
             commands::local::local_ready,
+            terminal_output::terminal_output_attach,
+            terminal_output::terminal_output_detach,
             commands::local::local_disconnect,
             commands::local::local_send_input,
             commands::local::local_resize,
@@ -661,16 +503,22 @@ pub fn run() {
             commands::termius::termius_extract_debug,
             commands::termius::termius_extract_leveldb_keys,
             commands::mobaxterm::mobaxterm_extract,
+            commands::putty::putty_sessions,
+            commands::openssh::openssh_config_read,
+            commands::securecrt::securecrt_read_config,
+            commands::securecrt::securecrt_decrypt,
+            commands::zoc::zoc_host_directory,
             commands::fs::fs_home_dir,
             commands::fs::fs_list_dir,
             commands::wsl::wsl_list_distros,
             commands::wsl::wsl_home_dir,
-            commands::fs::fs_tar_available,
             commands::fs::fs_read_text_home,
             commands::fs::fs_write_text_home,
             commands::fs::fs_exists_home,
             commands::fs::fs_stat,
             commands::fs::fs_read_file,
+            commands::fs::fs_read_image,
+            commands::clipboard::clipboard_write_rgba,
             commands::fs::fs_write_file,
             commands::fs::fs_mkdir,
             commands::fs::fs_rename,
@@ -679,12 +527,19 @@ pub fn run() {
             commands::fs::fs_copy,
             commands::fs::fs_compress,
             commands::fs::fs_extract,
+            commands::fs::fs_owners,
+            commands::fs::fs_set_attrs,
             commands::sftp::editor::sftp_read_file,
+            commands::sftp::editor::sftp_read_image,
+            commands::sftp::paste::paste_image_read,
+            commands::sftp::paste::paste_image_upload,
             commands::sftp::editor::sftp_write_file,
             commands::sftp::sftp_cancel_transfer,
+            commands::sftp::sftp_mark_resume,
             commands::sftp::sftp_stat,
             commands::sftp::sftp_connect,
             commands::sftp::ftp_connect,
+            commands::sftp::webdav_connect,
             commands::sftp::sftp_open,
             commands::sftp::sftp_close,
             commands::sftp::sftp_list_dir,
@@ -693,6 +548,8 @@ pub fn run() {
             commands::sftp::sftp_touch,
             commands::sftp::sftp_rename,
             commands::sftp::sftp_delete,
+            commands::sftp::sftp_owners,
+            commands::sftp::sftp_set_attrs,
             commands::sftp::sftp_upload,
             commands::sftp::sftp_download,
             commands::sftp::sftp_upload_dir,
@@ -705,6 +562,7 @@ pub fn run() {
             commands::sftp::sftp_download_dir_tar,
             commands::sftp::sftp_transfer_dir_tar,
             commands::sftp::sftp_tar_available,
+            commands::sftp::sftp_can_exec,
             commands::sftp::sftp_upload_batch_tar,
             commands::sftp::sftp_download_batch_tar,
             commands::downloads::download_temp_path,
@@ -712,10 +570,18 @@ pub fn run() {
             commands::downloads::download_dir_pick,
             commands::downloads::download_dir_clear,
             commands::downloads::download_publish,
+            commands::uploads::upload_pick,
+            commands::uploads::upload_drop_target,
+            commands::uploads::upload_stage,
+            commands::uploads::upload_stage_clear,
+            ios_native::haptic_perform,
+            ios_native::share_files_native,
             commands::sftp::sftp_transfer_batch_tar,
             commands::plugin_storage::plugin_storage_get,
+            commands::plugin_storage::plugin_storage_read_strict,
             commands::plugin_storage::plugin_storage_set,
             commands::plugin_storage::plugin_storage_delete,
+            commands::plugin_storage::plugin_storage_clear,
             commands::plugin_registry::plugin_registry_load,
             commands::plugin_registry::plugin_registry_save,
             commands::plugins::plugins_list_installed,
@@ -726,12 +592,13 @@ pub fn run() {
             commands::plugins::plugins_list_seeded,
             commands::plugins::plugin_seeded_read,
             commands::plugins::plugin_fetch_url,
+            commands::favorite_commands::favorite_command_list,
+            commands::favorite_commands::favorite_command_put,
             commands::snippets::snippet_list,
             commands::snippets::snippet_create,
             commands::snippets::snippet_update,
             commands::snippets::snippet_adopt,
             commands::snippets::snippet_delete,
-            commands::snippets::snippet_inject,
             commands::snippets::snippet_folder_list,
             commands::snippets::snippet_folder_create,
             commands::snippets::snippet_folder_update,
@@ -796,115 +663,24 @@ pub fn run() {
             serial::connect::serial_list_ports,
             serial::connect::serial_connect,
             serial::connect::serial_write,
+            serial::connect::serial_set_line,
+            serial::connect::serial_send_break,
             serial::connect::serial_disconnect,
             commands::mcp::mcp_bridge_reply,
             commands::mcp::mcp_consumer_ready,
             commands::mcp::mcp_set_enabled,
             commands::mcp::mcp_status,
             commands::mcp::mcp_notify_tools_changed,
+            proxy::proxy_detect_system,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-
-#[cfg(all(test, desktop))]
-mod updater_tests {
-    use super::{classify_install, InstallKind, Os};
-    use std::path::Path;
-
-    #[test]
-    fn linux_appimage_self_updates() {
-        assert_eq!(
-            classify_install(Os::Linux, true, Path::new("/tmp/Voltius.AppImage"), true),
-            InstallKind::SelfUpdate
-        );
-    }
-
-    #[test]
-    fn linux_package_is_external() {
-        assert_eq!(
-            classify_install(Os::Linux, false, Path::new("/usr/bin/voltius"), true),
-            InstallKind::External
-        );
-    }
-
-    #[test]
-    fn macos_in_applications_self_updates() {
-        assert_eq!(
-            classify_install(
-                Os::Macos,
-                false,
-                Path::new("/Applications/Voltius.app/Contents/MacOS/Voltius"),
-                true
-            ),
-            InstallKind::SelfUpdate
-        );
-    }
-
-    #[test]
-    fn macos_from_dmg_is_external() {
-        assert_eq!(
-            classify_install(
-                Os::Macos,
-                false,
-                Path::new("/Volumes/Voltius/Voltius.app/Contents/MacOS/Voltius"),
-                true
-            ),
-            InstallKind::External
-        );
-    }
-
-    #[test]
-    fn macos_translocated_is_external() {
-        assert_eq!(
-            classify_install(
-                Os::Macos,
-                false,
-                Path::new("/private/var/folders/x/AppTranslocation/ABC/d/Voltius.app/Contents/MacOS/Voltius"),
-                true
-            ),
-            InstallKind::External
-        );
-    }
-
-    #[test]
-    fn macos_unwritable_bundle_is_external() {
-        assert_eq!(
-            classify_install(
-                Os::Macos,
-                false,
-                Path::new("/Applications/Voltius.app/Contents/MacOS/Voltius"),
-                false
-            ),
-            InstallKind::External
-        );
-    }
-
-    #[test]
-    fn windows_self_updates() {
-        assert_eq!(
-            classify_install(
-                Os::Windows,
-                false,
-                Path::new(r"C:\Program Files\Voltius\voltius.exe"),
-                true
-            ),
-            InstallKind::SelfUpdate
-        );
-    }
-
-    #[test]
-    fn windows_msix_package_is_external() {
-        assert_eq!(
-            classify_install(
-                Os::Windows,
-                false,
-                Path::new(
-                    r"C:\Program Files\WindowsApps\Voltius_0.27.0.0_x64__abcdefg\voltius.exe"
-                ),
-                true
-            ),
-            InstallKind::External
-        );
-    }
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                app.state::<SerialSessionManager>().release_all();
+                #[cfg(desktop)]
+                updater::install_pending_on_exit(app);
+            }
+        });
 }

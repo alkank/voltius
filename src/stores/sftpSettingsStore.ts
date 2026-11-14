@@ -1,13 +1,17 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { useAppSettingsTimestampStore } from "./appSettingsTimestampStore";
+import { touchAppSetting, writeAndTouchUnlessLocked } from "./appSettingsTimestampStore";
+import { storeSetting } from "@/services/policy/effectiveCore";
 import {
-  DEFAULT_COLUMN_WIDTHS, DEFAULT_VISIBLE_COLS,
+  DEFAULT_COLUMN_WIDTHS, DEFAULT_VISIBLE_COLS, LEGACY_DEFAULT_SIZE_WIDTH,
   type ColumnWidths, type VisibleCols,
 } from "@/components/filetransfer/SFTPTypes";
 
+import { DEFAULT_EDITOR_MAX_BYTES } from "@/services/editorLimits";
+
+export { DEFAULT_EDITOR_MAX_BYTES };
+
 export const DEFAULT_AUTO_REFRESH_INTERVAL_MS = 2000;
-export const DEFAULT_EDITOR_MAX_BYTES = 5 * 1024 * 1024;
 
 interface SftpSettingsStore {
   autoRefreshIntervalMs: number;
@@ -33,22 +37,41 @@ type Updater<T> = T | ((prev: T) => T);
 const applyUpdate = <T,>(update: Updater<T>, prev: T): T =>
   typeof update === "function" ? (update as (p: T) => T)(prev) : update;
 
+// Every setter reports its leaf; the settings registry decides whether it syncs.
+const sftpKey = (key: keyof SftpSettingsStore) => `appSettings.sftp.${key}`;
+const touchSftp = (key: keyof SftpSettingsStore) => touchAppSetting(sftpKey(key));
+
+export function migrateSftpSettings(persisted: unknown, version: number): unknown {
+  const state = (persisted ?? {}) as { columnWidths?: ColumnWidths };
+  if (version < 1 && state.columnWidths?.size === LEGACY_DEFAULT_SIZE_WIDTH) {
+    state.columnWidths = { ...state.columnWidths, size: DEFAULT_COLUMN_WIDTHS.size };
+  }
+  return state;
+}
+
 export const useSftpSettingsStore = create<SftpSettingsStore>()(
   persist(
     (set) => ({
       autoRefreshIntervalMs: DEFAULT_AUTO_REFRESH_INTERVAL_MS,
-      setAutoRefreshIntervalMs: (v) => { set({ autoRefreshIntervalMs: v }); useAppSettingsTimestampStore.getState().touch(); },
+      setAutoRefreshIntervalMs: (v) =>
+        writeAndTouchUnlessLocked(sftpKey("autoRefreshIntervalMs"), () => set({ autoRefreshIntervalMs: v })),
       editorAutoSave: false,
-      setEditorAutoSave: (v) => { set({ editorAutoSave: v }); useAppSettingsTimestampStore.getState().touch(); },
+      setEditorAutoSave: (v) => { set({ editorAutoSave: v }); touchSftp("editorAutoSave"); },
       editorMaxBytes: DEFAULT_EDITOR_MAX_BYTES,
-      setEditorMaxBytes: (n) => { set({ editorMaxBytes: n }); useAppSettingsTimestampStore.getState().touch(); },
+      setEditorMaxBytes: (n) => { set({ editorMaxBytes: n }); touchSftp("editorMaxBytes"); },
       showHidden: false,
-      setShowHidden: (v) => { set({ showHidden: v }); useAppSettingsTimestampStore.getState().touch(); },
+      setShowHidden: (v) => { set({ showHidden: v }); touchSftp("showHidden"); },
       columnWidths: DEFAULT_COLUMN_WIDTHS,
-      setColumnWidths: (update) => { set((s) => ({ columnWidths: applyUpdate(update, s.columnWidths) })); useAppSettingsTimestampStore.getState().touch(); },
+      setColumnWidths: (update) => { set((s) => ({ columnWidths: applyUpdate(update, s.columnWidths) })); touchSftp("columnWidths"); },
       visibleColumns: DEFAULT_VISIBLE_COLS,
-      setVisibleColumns: (update) => { set((s) => ({ visibleColumns: applyUpdate(update, s.visibleColumns) })); useAppSettingsTimestampStore.getState().touch(); },
+      setVisibleColumns: (update) => { set((s) => ({ visibleColumns: applyUpdate(update, s.visibleColumns) })); touchSftp("visibleColumns"); },
     }),
-    { name: "voltius-sftp-settings" },
+    {
+      name: "voltius-sftp-settings",
+      version: 1,
+      migrate: (persisted, version) => migrateSftpSettings(persisted, version) as SftpSettingsStore,
+    },
   ),
 );
+
+export const autoRefreshIntervalSetting = storeSetting(useSftpSettingsStore, "autoRefreshIntervalMs", sftpKey("autoRefreshIntervalMs"));

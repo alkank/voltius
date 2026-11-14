@@ -1,15 +1,17 @@
 import i18n from "@/i18n";
 import { refreshVerificationState } from "@/services/account";
 import { getJwt } from "@/services/authTokens";
+import { serverAllowed } from "@/services/policy/serverPolicy";
 import { getSavedAccounts, switchToAccount, type SavedAccount } from "@/services/savedAccounts";
 import { isNavigateIntent } from "@/services/deepLinkUrl";
 import type { NavigateIntent, UnpromptedIntent, VerifiedIntent } from "@/services/deepLinkUrl";
 import { useUIStore } from "@/stores/uiStore";
-import { useNotificationStore } from "@/stores/notificationStore";
-import { parseJwtPayload } from "@/utils/emailVerification";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
+import { parseJwtPayload } from "@/utils/jwtPayload";
 import type { ToastSeverity } from "@/plugins/api";
-
-const SOURCE = { kind: "plugin", id: "system", name: "Voltius" } as const;
+import { openPortForwardingPage } from "@/services/portForwardingNav";
+import { requestHostConnect } from "@/services/launcherShortcuts";
+import { isMobileShell } from "@/utils/platform";
 
 function toast(
   message: string,
@@ -17,7 +19,7 @@ function toast(
   action?: { label: string; onClick: () => void },
 ): void {
   useNotificationStore.getState().addToast({
-    source: SOURCE,
+    source: APP_SOURCE,
     type: "toast",
     message,
     severity,
@@ -55,16 +57,22 @@ async function handleVerified(intent: VerifiedIntent): Promise<void> {
     return;
   }
 
+  const switchAction = serverAllowed(match.server_url)
+    ? {
+        label: i18n.t("notifications.emailVerification.toast.verifiedSwitch"),
+        // switchToAccount saves the outgoing account and reloads the window.
+        onClick: () =>
+          void switchToAccount(match).catch((e) =>
+            toast(i18n.t("layout.sidebarAccount.switchFailed", { error: e instanceof Error ? e.message : String(e) }), "error"),
+          ),
+      }
+    : undefined;
   toast(
     match.email
       ? i18n.t("notifications.emailVerification.toast.verifiedOther", { email: match.email })
       : i18n.t("notifications.emailVerification.toast.verified"),
     "success",
-    {
-      label: i18n.t("notifications.emailVerification.toast.verifiedSwitch"),
-      // switchToAccount saves the outgoing account and reloads the window.
-      onClick: () => void switchToAccount(match),
-    },
+    switchAction,
   );
 }
 
@@ -85,6 +93,9 @@ function handleNavigate(intent: NavigateIntent): void {
       return;
     case "billing":
       ui.openSettings("account");
+      return;
+    case "port-forwarding":
+      openPortForwardingPage();
       return;
     default: {
       const _exhaustive: never = intent;
@@ -107,6 +118,10 @@ export function handleUnpromptedIntent(intent: UnpromptedIntent): void {
   switch (intent.route) {
     case "verified":
       void handleVerified(intent);
+      return;
+    case "connect":
+      // Launcher shortcuts exist on Android only; the desktop shell never acts on one.
+      if (isMobileShell()) requestHostConnect(intent.hostId);
       return;
     default: {
       const _exhaustive: never = intent;

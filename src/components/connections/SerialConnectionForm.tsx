@@ -1,9 +1,10 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, type RefAttributes, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConnectionFormData } from "@/types";
 import { useAutosave } from "@/hooks/useAutosave";
 import { resolveVaultIdForSave } from "@/hooks/useWritableVaultIds";
 import { serialListPorts } from "@/services/serial";
+import { emptyHostSecrets } from "@/services/hostForm";
 import { PanelActionsMenu } from "@/components/shared/PanelActionsMenu";
 import { PinButton } from "@/components/shared/PinButton";
 import { VaultPicker } from "@/components/shared/VaultPicker";
@@ -21,21 +22,26 @@ import { FormSelect } from "@/components/shared/FormSelect";
 import { PortInput } from "@/components/shared/PortInput";
 import { TagsAndFolderFields } from "@/components/shared/vaultObjectForm";
 import { Toggle } from "@/components/shared/Toggle";
+import { normalizeNotes } from "@/components/notes/notesText";
 import {
   AdvancedDisclosure,
   SettingRow,
   HostCommandFields,
+  NotesSection,
   hostCommandFieldsSet,
   useHostCommandFields,
   useConnectionFormShell,
   type ConnectionFormHandle,
   type ConnectionFormProps,
 } from "./formShared";
+import { formatNumber } from "@/utils/localeFormat";
+import { PermissionsSection } from "@/components/permissions/PermissionsSection";
+import { ReadOnlyFields, withEditAccess, type EditAccessProps } from "@/components/shared/editAccess";
 
 const BAUD_RATES = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 
-const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProps>(function SerialConnectionForm(
-  { initial, onSubmit, onClose, onDuplicate, onConnect, onDelete, canEdit },
+const SerialConnectionFormEditor = forwardRef<ConnectionFormHandle, ConnectionFormProps & EditAccessProps>(function SerialConnectionFormEditor(
+  { initial, placement, onSubmit, onClose, onDuplicate, onConnect, onDelete, readOnly },
   ref,
 ) {
   const { t } = useTranslation();
@@ -67,11 +73,11 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
     ),
   );
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
-  const [folderId, setFolderId] = useState<string | null>(initial?.folder_id ?? null);
+  const [notes, setNotes] = useState(initial?.notes ?? "");
   const [availablePorts, setAvailablePorts] = useState<{ name: string; path: string }[]>([]);
 
-  const shell = useConnectionFormShell(initial);
-  const { vaultId, pickVault, isPinned, togglePin } = shell;
+  const shell = useConnectionFormShell(initial, placement);
+  const { vaultId, pickVault, folderId, keepSavedOnCancel, isPinned, togglePin } = shell;
   const userEditedRef = useRef(false);
 
   useEffect(() => {
@@ -103,9 +109,7 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
         post_snippet_id: hostCommands.postSnippetId,
         ask_vars_each_time: hostCommands.askVarsEachTime,
         terminal_encoding: hostCommands.terminalEncoding || undefined,
-        // Serial has no notes UI; pass through any existing note so saving
-        // (e.g. after a note synced in from another device) never wipes it.
-        notes: initial?.notes,
+        notes: normalizeNotes(notes),
         // Serial connections don't use these SSH fields; provide empty defaults
         host: "",
         port: 0,
@@ -120,9 +124,10 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
   const { schedule, markDirty: _markDirty, flushAndClose, flush, saveState } = useAutosave({
     onSave: () => {
       const { data, password: pwd, privateKey: pk } = buildSubmit();
-      return onSubmit(data, pwd, pk, null) ?? undefined;
+      return keepSavedOnCancel(onSubmit(data, { ...emptyHostSecrets(), password: pwd, private_key: pk }));
     },
     canSave: () => !!serialPort.trim(),
+    readOnly,
   });
   const markDirty = useCallback(() => {
     userEditedRef.current = true;
@@ -130,7 +135,7 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
   }, [_markDirty]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => schedule(), [name, serialPort, baud, customBaud, useCustomBaud, dataBits, parity, stopBits, flowControl, autoReconnect, hostCommands.preCommand, hostCommands.postCommand, hostCommands.preSnippetId, hostCommands.postSnippetId, hostCommands.askVarsEachTime, hostCommands.terminalEncoding, tags, folderId, vaultId]);
+  useEffect(() => schedule(), [name, serialPort, baud, customBaud, useCustomBaud, dataBits, parity, stopBits, flowControl, autoReconnect, hostCommands.preCommand, hostCommands.postCommand, hostCommands.preSnippetId, hostCommands.postSnippetId, hostCommands.askVarsEachTime, hostCommands.terminalEncoding, tags, folderId, vaultId, notes]);
 
   useImperativeHandle(ref, () => ({ flush, isDirty: () => userEditedRef.current }), [flush]);
 
@@ -140,7 +145,7 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
     ? [
         ...(onConnect ? [{ label: t("common.action.connect"), icon: "lucide:terminal", onClick: () => onConnect() }] : []),
         ...(onDuplicate ? [{ label: t("connections.serialForm.duplicate"), icon: "lucide:copy", onClick: () => onDuplicate(), divider: true as const }] : []),
-        ...(canEdit && onDelete ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => onDelete(), danger: true as const, divider: true as const }] : []),
+        ...(!readOnly && onDelete ? [{ label: t("common.action.delete"), icon: "lucide:trash-2", onClick: () => onDelete(), danger: true as const, divider: true as const }] : []),
       ]
     : [];
 
@@ -149,7 +154,7 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
       <PanelHeader
         icon={initial ? "lucide:pencil" : "lucide:ethernet-port"}
         title={initial ? t("connections.serialForm.titleEdit") : t("connections.serialForm.titleNew")}
-        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} />}
+        subtitle={<VaultPicker vaultId={vaultId} onChange={(id) => pickVault(id, markDirty)} disabled={readOnly} />}
         onClose={handleClose}
         saveState={initial ? saveState : undefined}
         actions={initial ? (
@@ -163,6 +168,7 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
       <div className="flex flex-col flex-1 overflow-y-auto">
         <div className="flex-1 px-4 py-4 space-y-3">
 
+          <ReadOnlyFields readOnly={readOnly} className="space-y-3">
           <FormSection label={t("connections.common.general")}>
             <div>
               <label className={formLabelClass} style={formLabelStyle}>{t("connections.common.labelField")}</label>
@@ -180,8 +186,6 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
               folderType="connection"
               tags={tags}
               onChangeTags={setTags}
-              folderId={folderId}
-              onChangeFolderId={setFolderId}
               markDirty={markDirty}
             />
           </FormSection>
@@ -205,7 +209,7 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
                   <FormSelect
                     className="flex-1"
                     value={String(baud)}
-                    options={BAUD_RATES.map((r) => ({ value: String(r), label: r.toLocaleString() }))}
+                    options={BAUD_RATES.map((r) => ({ value: String(r), label: formatNumber(r) }))}
                     onChange={(v) => { markDirty(); setBaud(Number(v)); }}
                   />
                   <button
@@ -304,11 +308,17 @@ const SerialConnectionForm = forwardRef<ConnectionFormHandle, ConnectionFormProp
               <HostCommandFields connectionId={initial?.id} fields={hostCommands} markDirty={markDirty} />
             </AdvancedDisclosure>
           </FormSection>
+          </ReadOnlyFields>
+
+          <NotesSection value={notes} onChange={(v) => { markDirty(); setNotes(v); }} readOnly={readOnly} />
+          {initial && <PermissionsSection objectId={initial.id} vaultId={initial.vault_id} type="connection" />}
         </div>
       </div>
     </PanelShell>
   );
 });
+
+const SerialConnectionForm = withEditAccess("connection", (p: ConnectionFormProps & RefAttributes<ConnectionFormHandle>) => p.initial, SerialConnectionFormEditor);
 
 export default SerialConnectionForm;
 export type { ConnectionFormHandle as SerialConnectionFormHandle };

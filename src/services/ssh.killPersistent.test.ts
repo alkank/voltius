@@ -15,8 +15,12 @@ describe("sshKillPersistent", () => {
     });
     expect(res).toBe(true);
     expect(invoke).toHaveBeenCalledWith("ssh_kill_persistent", {
-      host: "h", port: 22, username: "u",
-      password: "p", privateKey: null, passphrase: null, sessionId: "s1",
+      target: {
+        host: "h", port: 22, username: "u",
+        password: "p", privateKey: null, passphrase: null,
+        legacyAlgorithms: false, proxy: null, knock: null,
+      },
+      sessionId: "s1",
     });
   });
 });

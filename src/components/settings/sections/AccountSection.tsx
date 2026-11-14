@@ -1,23 +1,35 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Icon } from "@iconify/react";
-import { useTranslation } from "react-i18next";
-import { getAccountMode, getCurrentUserEmail, getMe, setMasterPassword, logout, lockVaultSession } from "@/services/account";
+import { Trans, useTranslation } from "react-i18next";
+import { getAccountMode, getCurrentUserEmail, getMe, setMasterPassword } from "@/services/account";
+import { useSignOutConfirm } from "@/hooks/useSignOutConfirm";
+import { lockApp } from "@/services/appLock";
 import { resetVault } from "@/services/vault";
 import { useSecurityStore } from "@/stores/securityStore";
-import { ActionItem, FormButtons, SettingsInput } from "./shared";
+import { ActionItem, FormButtons, SETTINGS_SURFACE, SettingsInput } from "./shared";
 import { VaultBackups } from "@/components/shared/VaultBackups";
 import { useSubscriptionStore } from "@/stores/subscriptionStore";
+import { usePlanDisplay } from "@/services/planDisplay";
 import { openPortal } from "@/utils/billing";
+import { useSeatReadout } from "@/hooks/useSeatReadout";
+import { seatsUsedText } from "@/services/seatMath";
 import { openBillingCheckout } from "@/services/billingCheckout";
+import { TEAMS_TRIAL_DAYS } from "@/services/billingTrial";
 import { UpgradeStrip } from "@/components/shared/UpgradeStrip";
 import { claimHandle, updateInvitePreferences, HandleClaimError } from "@/services/teamService";
-import { FormSelect } from "@/components/shared/FormSelect";
 import { Toggle } from "@/components/shared/Toggle";
 import { useCopyHandle } from "@/hooks/useCopyHandle";
-import { canLockVault } from "@/utils/accountMode";
-import { sessionTimeoutOptions, sessionTimeoutValue } from "@/utils/sessionTimeout";
+import { canLockApp } from "@/utils/accountMode";
 import EditEmailModal from "./EditEmailModal";
+import { SessionSecuritySettings } from "./SessionSecuritySettings";
 import ChangeMasterPasswordModal from "./ChangeMasterPasswordModal";
+import { TwoFactorSettings } from "./TwoFactorSettings";
+import { ActiveSessionsSettings } from "./ActiveSessionsSettings";
+import { formatOptionalDate, SHORT_DATE } from "@/utils/localeFormat";
+import { DeleteAccountModal } from "@/components/shared/DeleteAccountModal";
+import { usePlatform } from "@/utils/platform";
+import { adjacentPlan, planFeatureLabel, planFeaturesFor, type PlanFeature } from "@/services/planFeatures";
+import { FreeFeaturesLine } from "@/components/shared/FreeFeaturesLine";
 
 type AccountStep = "idle" | "set-password" | "loading" | "confirm-wipe";
 
@@ -66,19 +78,6 @@ function useEditableField(
   return { editing, input, setInput, error, loading, start, cancel, submit };
 }
 
-const PLAN_FEATURES = [
-  { id: "localVault",       free: true,  pro: true,  teams: true,  business: true  },
-  { id: "auditLogs",        free: true,  pro: true,  teams: true,  business: true  },
-  { id: "gistSync",         free: true,  pro: true,  teams: true,  business: true  },
-  { id: "realtimeSync",     free: false, pro: true,  teams: true,  business: true  },
-  { id: "unlimitedVaults",  free: false, pro: true,  teams: true,  business: true  },
-  { id: "terminalSharing",  free: false, pro: true,  teams: true,  business: true  },
-  { id: "teamVaults",       free: false, pro: false, teams: true,  business: true  },
-  { id: "teamSharing",      free: false, pro: false, teams: true,  business: true  },
-  { id: "seats",            free: false, pro: false, teams: true,  business: true  },
-  { id: "customRoles",      free: false, pro: false, teams: false, business: true  },
-];
-
 async function openCheckout(plan: "pro" | "teams") {
   await openBillingCheckout(plan);
 }
@@ -109,17 +108,20 @@ export default function AccountSection() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showEditEmail, setShowEditEmail] = useState(false);
+  const { requestSignOut, signOutConfirm } = useSignOutConfirm((e) => setError(e instanceof Error ? e.message : String(e)));
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false);
   const [handle, setHandle] = useState<string | null>(null);
   const [handleIsCustom, setHandleIsCustom] = useState(false);
+  const [handleManaged, setHandleManaged] = useState(false);
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState<boolean | null>(null);
   // `null` until /auth/me answers — the claim control renders in neither state
   // until then, so a verified user never sees the "verify your email" row flash.
   const [emailVerified, setEmailVerified] = useState<boolean | null>(null);
   const [allowStrangerInvites, setAllowStrangerInvites] = useState(true);
   const [strangerInvitesError, setStrangerInvitesError] = useState("");
   const [strangerInvitesLoading, setStrangerInvitesLoading] = useState(false);
-  const sessionTimeoutMinutes = useSecurityStore((s) => s.sessionTimeoutMinutes);
-  const setSessionTimeoutMinutes = useSecurityStore((s) => s.setSessionTimeoutMinutes);
+  const systemAuthUnlock = useSecurityStore((s) => s.systemAuthUnlock);
 
   const handleField = useEditableField(
     async (value) => {
@@ -155,6 +157,8 @@ export default function AccountSection() {
       if (me.handle) setHandle(me.handle);
       setHandleIsCustom(!!me.handle_is_custom);
       setEmailVerified(!!me.email_verified);
+      setHandleManaged(!!me.handle_managed);
+      setTwoFactorEnabled(!!me.two_factor_enabled);
       if (typeof me.allow_stranger_invites === "boolean") setAllowStrangerInvites(me.allow_stranger_invites);
     }).catch(() => {});
     setStep("idle");
@@ -208,17 +212,17 @@ export default function AccountSection() {
     mode === "local-nopassword" ? "lucide:key-round" :
     mode === "local" ? "lucide:lock" : "lucide:cloud";
 
-  const lockable = canLockVault(mode);
-  const timeoutSelectValue = sessionTimeoutValue(sessionTimeoutMinutes);
+  const lockable = canLockApp(mode, systemAuthUnlock);
 
   return (
-    <div className="p-6 max-w-lg space-y-4">
+    <div className="p-6 space-y-4">
       <div>
         <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
           {t("settings.account.modeTitle")}
         </h3>
         <div
-          className="rounded-lg px-4 py-3 bg-(--t-bg-elevated) border border-(--t-border)"
+          data-settings-card
+          className={`${SETTINGS_SURFACE} px-4 py-3`}
         >
           <p className="text-xs mb-1 text-(--t-text-dim)">{t("settings.account.currentMode")}</p>
           <div className="flex items-center gap-2">
@@ -233,7 +237,7 @@ export default function AccountSection() {
           <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
             {t("settings.account.handle.title")}
           </h3>
-          <div className="rounded-lg px-4 py-3 space-y-2 bg-(--t-bg-elevated) border border-(--t-border)">
+          <div data-settings-card className={`${SETTINGS_SURFACE} px-4 py-3 space-y-2`}>
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-(--t-text-primary)">
                 {handle ? `@${handle}` : "—"}
@@ -276,22 +280,28 @@ export default function AccountSection() {
                     control is what made the old tier gate unreadable. */}
                 <button
                   type="button"
-                  disabled={!emailVerified}
+                  disabled={!emailVerified || handleManaged}
                   onClick={() => handleField.start(handleIsCustom ? (handle ?? "") : "")}
-                  className="text-xs px-2.5 py-1 rounded-md font-medium bg-(--t-accent) text-white hover:opacity-85 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:opacity-50"
+                  className="text-xs px-2.5 py-1 rounded-md font-medium bg-(--t-accent) text-(--t-on-accent) hover:opacity-85 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:opacity-50"
                 >
                   {handleIsCustom ? t("settings.account.handle.change") : t("settings.account.handle.choose")}
                 </button>
-                <p className="text-xs mt-1.5 text-(--t-text-dim)">{t("settings.account.handle.chooseSub")}</p>
-                <p className="text-xs mt-0.5 text-(--t-text-muted)">{t("settings.account.handle.generatedNote")}</p>
-                {!emailVerified && (
+                {handleManaged ? (
+                  <p className="text-xs mt-1.5 text-(--t-text-dim)">{t("settings.account.handle.managed")}</p>
+                ) : (
+                  <>
+                    <p className="text-xs mt-1.5 text-(--t-text-dim)">{t("settings.account.handle.chooseSub")}</p>
+                    <p className="text-xs mt-0.5 text-(--t-text-muted)">{t("settings.account.handle.generatedNote")}</p>
+                  </>
+                )}
+                {!emailVerified && !handleManaged && (
                   <p className="text-xs mt-1.5 text-(--t-status-error)">{t("settings.account.handle.unverified")}</p>
                 )}
               </div>
             )}
           </div>
 
-          <div className="mt-2 rounded-lg px-4 py-3 flex items-center justify-between gap-4 bg-(--t-bg-elevated) border border-(--t-border)">
+          <div data-settings-card data-setting-row className={`mt-2 ${SETTINGS_SURFACE} px-4 py-3 flex items-center justify-between gap-4`}>
             <div>
               <p className="text-sm font-medium text-(--t-text-primary)">{t("settings.account.strangerInvites.label")}</p>
               <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.account.strangerInvites.desc")}</p>
@@ -313,31 +323,7 @@ export default function AccountSection() {
         <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
           {t("settings.account.sessionSecurity.title")}
         </h3>
-        {lockable ? (
-          <div
-            className="rounded-lg px-4 py-3 space-y-2 bg-(--t-bg-elevated) border border-(--t-border)"
-          >
-            <p className="text-xs text-(--t-text-dim)">
-              {t("settings.account.sessionSecurity.autoLockLabel")}
-            </p>
-            <FormSelect
-              value={timeoutSelectValue}
-              options={sessionTimeoutOptions(t)}
-              ariaLabel={t("settings.account.sessionSecurity.autoLockLabel")}
-              onChange={(value) => {
-                const next = value === "never" ? null : Number(value);
-                setSessionTimeoutMinutes(Number.isFinite(next) ? next : null);
-              }}
-            />
-            <p className="text-xs text-(--t-text-dim)">
-              {t("settings.account.sessionSecurity.autoLockDesc")}
-            </p>
-          </div>
-        ) : (
-          <p className="text-xs text-(--t-text-muted)">
-            {t("settings.account.sessionSecurity.noPasswordHint")}
-          </p>
-        )}
+        <SessionSecuritySettings mode={mode} />
       </div>
 
       {success && <p className="text-xs px-1 text-(--t-status-connected)">{success}</p>}
@@ -361,6 +347,7 @@ export default function AccountSection() {
               onClick={() => setShowChangePassword(true)}
             />
           )}
+          {mode === "server" && <TwoFactorSettings enabled={twoFactorEnabled} onChange={setTwoFactorEnabled} />}
           {mode === "local-nopassword" && (
             <ActionItem
               icon="lucide:lock"
@@ -379,9 +366,7 @@ export default function AccountSection() {
               sub={t("settings.account.lockVault.sub")}
               onClick={() => {
                 setError("");
-                lockVaultSession()
-                  .then(() => window.location.reload())
-                  .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+                lockApp().catch((e) => setError(e instanceof Error ? e.message : String(e)));
               }}
             />
           )}
@@ -393,9 +378,19 @@ export default function AccountSection() {
               danger
               onClick={() => {
                 setError("");
-                logout()
-                  .then(() => window.location.reload())
-                  .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+                requestSignOut();
+              }}
+            />
+          )}
+          {mode === "server" && (
+            <ActionItem
+              icon="lucide:user-x"
+              label={t("shared.deleteAccount.action")}
+              sub={t("shared.deleteAccount.actionSub")}
+              danger
+              onClick={() => {
+                setError("");
+                setShowDeleteAccount(true);
               }}
             />
           )}
@@ -412,6 +407,8 @@ export default function AccountSection() {
         </div>
       )}
 
+      {step === "idle" && mode === "server" && <ActiveSessionsSettings />}
+
       {step === "idle" && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-(--t-text-secondary)">
@@ -419,6 +416,12 @@ export default function AccountSection() {
           </p>
           <VaultBackups currentReadable />
         </div>
+      )}
+
+      {signOutConfirm}
+
+      {showDeleteAccount && (
+        <DeleteAccountModal onCancel={() => setShowDeleteAccount(false)} onDeleted={() => window.location.reload()} />
       )}
 
       {showEditEmail && currentEmail && (
@@ -432,15 +435,13 @@ export default function AccountSection() {
       )}
 
       {showChangePassword && (
-        <ChangeMasterPasswordModal onClose={() => setShowChangePassword(false)} />
+        <ChangeMasterPasswordModal twoFactorEnabled={!!twoFactorEnabled} onClose={() => setShowChangePassword(false)} />
       )}
 
       {step === "confirm-wipe" && (
         <div className="space-y-3">
           <p className="text-xs text-(--t-text-muted)">
-            {t("settings.account.confirmWipe.descPre")}
-            <strong>{t("settings.account.confirmWipe.descBold")}</strong>
-            {t("settings.account.confirmWipe.descPost")}
+            <Trans i18nKey="settings.account.confirmWipe.desc" components={{ strong: <strong /> }} />
           </p>
           <div className="flex gap-2">
             <button
@@ -501,30 +502,27 @@ export default function AccountSection() {
 
 // ─── Plans section ────────────────────────────────────────────────────────────
 
-function formatPlanDate(date: Date | null): string | null {
-  if (!date) return null;
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date);
-}
-
-function PlansSection() {
+export function PlansSection() {
   const { t } = useTranslation();
-  const { tier, trialEndsAt, isTrialActive, isPro, isTeams, isBusiness, usedSeats, totalSeats, subscriptionStatus, subscriptionCancelled, renewsAt, endsAt } = useSubscriptionStore();
+  const plan = usePlanDisplay();
+  const { ownsTeamsPlan, subscriptionStatus, subscriptionCancelled, renewsAt, endsAt } = useSubscriptionStore();
+  const seatsText = seatsUsedText(t, useSeatReadout(), "settings.account.plan.seatsUsed");
+  const platform = usePlatform();
+  const previous = adjacentPlan(plan.plan, -1);
+  const next = adjacentPlan(plan.plan, 1);
+  const planName = (tier: string) => t(`settings.account.plan.name.${tier}`);
 
-  const daysLeft = trialEndsAt
-    ? Math.max(0, Math.ceil((trialEndsAt.getTime() - Date.now()) / 86_400_000))
-    : 0;
-
-  const badgeLabel =
-    isBusiness ? t("settings.account.plan.badge.business") :
-    isTeams ? t("settings.account.plan.badge.teams") :
-    isTrialActive ? t("settings.account.plan.badge.proTrial", { daysLeft }) :
-    tier === "pro" ? t("settings.account.plan.badge.pro") : t("settings.account.plan.badge.free");
-
-  const isPaidPro = isPro && !isTrialActive;
-
-  const badgeColor = isPro ? "#f59e0b" : "var(--t-text-muted)";
-  const renewalDate = formatPlanDate(renewsAt);
-  const cancellationDate = formatPlanDate(endsAt ?? renewsAt);
+  const manageBilling = plan.showManageBilling && (
+    <button
+      onClick={() => openPortal()}
+      className="text-xs text-(--t-text-dim) hover:text-(--t-text-primary) transition-colors"
+    >
+      {t("settings.account.plan.manageBilling")}
+    </button>
+  );
+  const badgeColor = plan.premium ? "#f59e0b" : "var(--t-text-muted)";
+  const renewalDate = formatOptionalDate(renewsAt, SHORT_DATE);
+  const cancellationDate = formatOptionalDate(endsAt ?? renewsAt, SHORT_DATE);
 
   return (
     <div>
@@ -532,29 +530,27 @@ function PlansSection() {
         {t("settings.account.plan.title")}
       </h3>
 
-      <div className="rounded-lg px-4 py-3 bg-(--t-bg-elevated) border border-(--t-border) space-y-3">
+      <div data-settings-card className={`${SETTINGS_SURFACE} px-4 py-3 space-y-3`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Icon
-              icon={isPro ? "lucide:crown" : "lucide:circle-fading-arrow-up"}
+              icon={plan.icon}
               width={14}
               style={{ color: badgeColor }}
             />
-            <span className="text-sm font-medium text-(--t-text-primary)">{badgeLabel}</span>
+            <span data-plan-line className="text-sm font-medium text-(--t-text-primary)">{plan.line}</span>
           </div>
-          <div className="flex items-center gap-2">
-            {isPaidPro && (
-              <button
-                onClick={() => openPortal()}
-                className="text-xs text-(--t-text-dim) hover:text-(--t-text-primary) transition-colors"
-              >
-                {t("settings.account.plan.manageBilling")}
-              </button>
-            )}
-          </div>
+          {!plan.ownLine && <div className="flex items-center gap-2">{manageBilling}</div>}
         </div>
 
-        {isPaidPro && (
+        {plan.ownLine && (
+          <div className="flex items-center justify-between text-xs">
+            <span data-plan-own-line className="text-(--t-text-secondary)">{plan.ownLine}</span>
+            {manageBilling}
+          </div>
+        )}
+
+        {plan.ownBilled && (
           <div className="rounded-md px-3 py-2 bg-(--t-bg-input) text-xs text-(--t-text-muted)">
             {subscriptionCancelled ? (
               <span>
@@ -570,16 +566,16 @@ function PlansSection() {
           </div>
         )}
 
-        {isTeams && totalSeats != null && (
+        {ownsTeamsPlan && seatsText && (
           <div className="flex items-center justify-between text-xs py-0.5">
             <span style={{ color: "var(--t-text-secondary)" }}>{t("settings.account.plan.seats")}</span>
             <span style={{ color: "var(--t-text-primary)", fontVariantNumeric: "tabular-nums" }}>
-              {t("settings.account.plan.seatsUsed", { used: usedSeats ?? "…", total: totalSeats })}
+              {seatsText}
             </span>
           </div>
         )}
 
-        {!isPro && (
+        {plan.showUpgrade && (
           <UpgradeStrip
             label={t("settings.account.plan.upgradeToPro")}
             buttonLabel={t("settings.account.plan.upgrade")}
@@ -587,41 +583,62 @@ function PlansSection() {
           />
         )}
 
-        {isPro && !isTeams && (
+        {plan.upgradeTo === "teams" && (
           <UpgradeStrip
             variant="neutral"
-            label={t("settings.account.plan.upgradeToTeams")}
+            label={t("settings.account.plan.upgradeToTeams", { days: TEAMS_TRIAL_DAYS })}
             buttonLabel={t("settings.account.plan.teamsButton")}
             onClick={() => openCheckout("teams")}
           />
         )}
 
-        {/* Feature comparison */}
-        <div className="border-t border-(--t-border) pt-3 space-y-1.5">
-          {PLAN_FEATURES.map(({ id, free, pro, teams: teamsFlag, business }) => {
-            const active = isBusiness ? business : isTeams ? teamsFlag : isPro ? pro : free;
-            return (
-              <div key={id} className="flex items-center justify-between">
-                <span className="text-xs" style={{ color: active ? "var(--t-text-primary)" : "var(--t-text-muted)" }}>
-                  {t(`settings.account.plan.feature.${id}`)}
-                </span>
-                <Icon
-                  icon={active ? "lucide:check" : "lucide:minus"}
-                  width={12}
-                  style={{ color: active ? "var(--t-status-connected)" : "var(--t-text-dim)" }}
-                />
-              </div>
-            );
-          })}
+        <div className="border-t border-(--t-border) pt-3 space-y-3">
+          <PlanFeatureGroup
+            heading={previous && t("settings.account.plan.everythingIn", { plan: planName(previous) })}
+            features={planFeaturesFor(plan.plan, platform)}
+            included
+          />
+          {next && (
+            <PlanFeatureGroup
+              heading={t("settings.account.plan.nextAdds", { plan: planName(next) })}
+              features={planFeaturesFor(next, platform)}
+              included={false}
+            />
+          )}
+          {previous && <FreeFeaturesLine />}
         </div>
 
-        <button
-          onClick={() => openPortal()}
-          className="text-xs w-full text-center text-(--t-text-dim) hover:text-(--t-text-primary) transition-colors pt-1"
-        >
-          {t("settings.account.plan.viewAllPlans")}
-        </button>
+        {plan.showAllPlans && (
+          <button
+            onClick={() => openPortal()}
+            className="text-xs w-full text-center text-(--t-text-dim) hover:text-(--t-text-primary) transition-colors pt-1"
+          >
+            {t("settings.account.plan.viewAllPlans")}
+          </button>
+        )}
       </div>
+    </div>
+  );
+}
+
+function PlanFeatureGroup({ heading, features, included }: { heading: string | null; features: PlanFeature[]; included: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div data-plan-group={included ? "included" : "next"} className="space-y-1.5">
+      {heading && <p className="text-xs font-medium text-(--t-text-secondary)">{heading}</p>}
+      {features.map((f) => (
+        <div key={f.id} className="flex items-center justify-between gap-3">
+          <span className="text-xs" style={{ color: included ? "var(--t-text-primary)" : "var(--t-text-muted)" }}>
+            {planFeatureLabel(t, f)}
+          </span>
+          <Icon
+            icon={included ? "lucide:check" : "lucide:minus"}
+            width={12}
+            className="shrink-0"
+            style={{ color: included ? "var(--t-status-connected)" : "var(--t-text-dim)" }}
+          />
+        </div>
+      ))}
     </div>
   );
 }

@@ -1,25 +1,15 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import i18n from "@/i18n";
 import { Icon } from "@iconify/react";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { BannerEntry, HistoryEntry, InboxEntry } from "@/stores/notificationStore";
-
-const SEVERITY_ICONS: Record<string, string> = {
-  info: "lucide:info",
-  success: "lucide:circle-check-big",
-  warning: "lucide:triangle-alert",
-  error: "lucide:circle-x",
-};
-
-const SEVERITY_COLORS: Record<string, string> = {
-  info: "var(--t-accent)",
-  success: "var(--t-status-connected)",
-  warning: "var(--t-status-warning)",
-  error: "var(--t-status-error)",
-};
+import { formatRelative } from "@/utils/localeFormat";
+import { useAnchoredPopover } from "@/hooks/useAnchoredPopover";
+import { isMobileShell } from "@/utils/platform";
+import { MobileNotificationBell } from "@/components/mobile/MobileNotificationBell";
+import { SEVERITY_COLORS, SEVERITY_ICONS } from "./severity";
 
 // Which bell is on screen changes when bells mount and unmount: the mobile
 // shell swaps the foreground tab's bell while the SFTP tab's stays mounted
@@ -39,14 +29,6 @@ function subscribeMounts(listener: () => void) {
   return () => {
     mountListeners.delete(listener);
   };
-}
-
-function relativeTime(ms: number): string {
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return i18n.t("notifications.bell.relativeTime.justNow");
-  if (diff < 3_600_000) return i18n.t("notifications.bell.relativeTime.minutesAgo", { count: Math.floor(diff / 60_000) });
-  if (diff < 86_400_000) return i18n.t("notifications.bell.relativeTime.hoursAgo", { count: Math.floor(diff / 3_600_000) });
-  return i18n.t("notifications.bell.relativeTime.daysAgo", { count: Math.floor(diff / 86_400_000) });
 }
 
 function InboxRow({ entry, onAction }: { entry: InboxEntry; onAction: (i: number) => void }) {
@@ -159,13 +141,21 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
         <p className="text-xs text-(--t-text-secondary) truncate">{entry.message}</p>
       </div>
       <span className="text-xs shrink-0" style={{ color: "var(--t-text-dim)" }}>
-        {relativeTime(entry.dismissedAt)}
+        {formatRelative(entry.dismissedAt)}
       </span>
     </div>
   );
 }
 
+/**
+ * The bell. On Android (the mobile shell) it is a 48 dp icon button that opens the
+ * notifications bottom sheet MobileShell renders; desktop keeps the anchored popover.
+ */
 export function NotificationBell() {
+  return isMobileShell() ? <MobileNotificationBell /> : <DesktopNotificationBell />;
+}
+
+function DesktopNotificationBell() {
   const { t } = useTranslation();
   const banners = useNotificationStore((s) => s.banners);
   const history = useNotificationStore((s) => s.history);
@@ -183,7 +173,8 @@ export function NotificationBell() {
   const clearFocus = useUIStore((s) => s.clearNotificationFocus);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const popover = useAnchoredPopover(open, () => setOpen(false), buttonRef);
+  const dropdownRef = popover.panelRef;
 
   const mounts = useSyncExternalStore(subscribeMounts, () => mountVersion);
   useEffect(() => {
@@ -226,20 +217,6 @@ export function NotificationBell() {
     }
     clearFocus();
   }, [open, pos, focusId, inbox, clearFocus]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        buttonRef.current && !buttonRef.current.contains(e.target as Node) &&
-        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
 
   const handleOpen = () => setOpen(!open);
 
@@ -287,11 +264,12 @@ export function NotificationBell() {
         </button>
       </div>
 
-      {open && pos && createPortal(
+      {popover.mounted && pos && createPortal(
         <div
           ref={dropdownRef}
-          className="surface-float"
+          className={`surface-float ${popover.className}`}
           style={{
+            ...popover.style,
             position: "fixed",
             top: pos.top,
             width: "min(20rem, calc(100vw - 1rem))",

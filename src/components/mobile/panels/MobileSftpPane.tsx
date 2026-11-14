@@ -1,43 +1,84 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "@iconify/react";
+import { useLongPress } from "@/components/mobile/useLongPress";
 import { useTranslation } from "react-i18next";
 import { appCacheDir } from "@tauri-apps/api/path";
 import { breadcrumbs, type useSftpDir } from "@/services/useSftpDir";
-import { formatSize, formatPermissions, formatDate, type FileEntry } from "@/components/filetransfer/SFTPTypes";
-import { sftpDownload, sftpDownloadDir } from "@/services/sftp";
-import { useIsAndroid } from "@/utils/platform";
+import { formatSize, formatPermissions, formatModifiedFull, type FileEntry } from "@/components/filetransfer/SFTPTypes";
+import { joinPath } from "@/components/filetransfer/moveTargetCore";
+import { accelFor, tarMode } from "@/components/filetransfer/tarSupport";
+import { PermissionsDialog } from "@/components/filetransfer/PermissionsDialog";
+import { canEditPermissions } from "@/components/filetransfer/permissionsModel";
+import { transferItem } from "@/services/sftpTransferCore";
+import { useIsAndroid, useIsIOS } from "@/utils/platform";
 import { downloadDirGet, downloadDirPick, downloadTempPath, downloadPublish } from "@/services/downloads";
+import { uploadContentFiles, uploadPick, type ContentFile } from "@/services/uploads";
 import { needsPicker } from "@/components/terminal/androidDownloadDir";
 import { useTransferQueueStore } from "@/stores/transferQueueStore";
 import { writeClipboard } from "@/utils/clipboard";
 import type { Connection } from "@/types";
 import { connectionDisplayName } from "@/utils/connectionDisplayName";
+import { AvatarTile } from "@/components/shared/AvatarTile";
+import { DEVICE_TILE_BASE, deviceIcon } from "@/utils/icons";
+import type { MyDevice } from "@/services/myDevices";
 import { ConnectionAvatar } from "@/components/shared/ConnectionAvatar";
 import BottomSheet from "../sheets/BottomSheet";
+import { compareStrings } from "@/utils/localeFormat";
+import { refuseReadOnly, useReadOnlyTip } from "@/services/deviceReadOnly";
+import { PaneDropOverlay } from "@/components/filetransfer/PaneDropOverlay";
+import { ReadOnlyBadge } from "@/components/shared/ReadOnlyBadge";
+import { describeError, type BackendErrorCode } from "@/services/backendErrors";
+import { haptic } from "@/lib/haptics";
+import { appToast } from "@/services/appToast";
+import { useBackInterceptor } from "@/hooks/useBackInterceptor";
+import { sharedAxisPlan, useSwapThrough } from "@/hooks/pageTransition";
+import { PullIndicator, usePullToRefresh } from "../usePullToRefresh";
+import { allSelected, pruneSelection, toggleAll, toggleItem } from "./sftpSelectionCore";
+import { canShareFiles as canShareStagedFiles, shareFiles, shareStageId, shareTotalBytes, shareableFiles, SHARE_CONFIRM_BYTES } from "@/services/share";
+import { SFTP_ICON } from "@/lib/conceptIcons";
 
-function isPermissionDenied(msg: string): boolean {
+// Coded errors arrive translated, so only an uncoded one is matched by its English text.
+function isPermissionDenied(msg: string, code: BackendErrorCode | null): boolean {
+  if (code) return code === "permission-denied";
   const m = msg.toLowerCase();
   return m.includes("permission denied") || m.includes("eacces");
 }
 
 type Controller = ReturnType<typeof useSftpDir>;
+export type PaneDrop = (files: ContentFile[]) => void;
 
+/**
+ * One remote pane. Tap a folder to open it, a file (or its ⋮) for its actions sheet;
+ * long-press a row (or tap its icon) to start selection mode, whose contextual bar is
+ * portalled into `headerSlot`. Back exits selection mode first, then (when `backUp`)
+ * walks up one directory at a time until "/".
+ */
 export default function MobileSftpPane({
-  controller, connection, selected, onToggleSelect, onPickHost, onCopyToOther, otherConnected, onClearSelect,
+  controller, connection, device, selected, onSelectionChange, onPickHost, onCopyToOther, otherConnected, headerSlot, onScreen, backUp, dropRef, dropHover,
 }: {
   controller: Controller;
   connection: Connection | undefined;
+  device?: MyDevice;
   selected: FileEntry[];
-  onToggleSelect: (f: FileEntry) => void;
+  onSelectionChange: (items: FileEntry[]) => void;
   onPickHost: () => void;
-  onCopyToOther: (f: FileEntry) => void;
+  onCopyToOther: (items: FileEntry[]) => void;
   otherConnected: boolean;
-  onClearSelect: () => void;
+  headerSlot: HTMLElement | null;
+  /** The screen is showing (the SFTP tab stays mounted while hidden). */
+  onScreen: boolean;
+  backUp: boolean;
+  dropRef?: Ref<PaneDrop>;
+  dropHover?: boolean;
 }) {
   const { t } = useTranslation();
-  const { phase, sftpId, cwd, entries, listing, listError, navigate, goUp, reconnect, mkdir, touch, rename, remove } = controller;
+  const { phase, retrying, readOnly, sftpId, cwd, entries, listing, landedCwd, listError, listErrorCode, navigate, goUp, refresh, reconnect, mkdir, touch, rename, remove } = controller;
+  const readOnlyTip = useReadOnlyTip(readOnly, device?.name);
+  const chmodable = !!sftpId && !device;
   const runTransfer = useTransferQueueStore((s) => s.runTransfer);
   const isAndroid = useIsAndroid();
+  const isIOS = useIsIOS();
   const [showHidden, setShowHidden] = useState(false);
   const [sheetFor, setSheetFor] = useState<FileEntry | null>(null);
   const [renaming, setRenaming] = useState<FileEntry | null>(null);
@@ -49,144 +90,272 @@ export default function MobileSftpPane({
   const [newFile, setNewFile] = useState(false);
   const [newFileName, setNewFileName] = useState("");
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+  const [selectionMore, setSelectionMore] = useState(false);
   const [detailFor, setDetailFor] = useState<FileEntry | null>(null);
+  const [permissionsFor, setPermissionsFor] = useState<FileEntry[] | null>(null);
+  const [confirmShare, setConfirmShare] = useState<FileEntry[] | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const crumbsRef = useRef<HTMLDivElement | null>(null);
 
-  const downloadSelected = async () => { for (const f of selected) await download(f); };
+  const selecting = selected.length > 0;
+  const startRename = (f: FileEntry) => { setRenaming(f); setRenameVal(f.name); };
+  const clearSelection = () => onSelectionChange([]);
+
+  // A failed operation: error snackbar whose Retry runs it again (and reports again if it fails again).
+  const fail = (e: unknown, retry: () => Promise<unknown>) => {
+    appToast("error", describeError(e, t), { action: { label: t("common.action.retry"), onClick: () => void attempt(retry) } });
+  };
+  const attempt = (op: () => Promise<unknown>) => op().catch((e) => fail(e, op));
+
+  // Selection actions end selection mode, like any M3 contextual action.
+  const downloadSelected = async () => { const items = selected; clearSelection(); for (const f of items) await download(f); };
   const deleteSelected = async () => {
-    for (const f of selected) { try { await remove(f); } catch (e) { alert(String(e)); } }
-    setConfirmBatchDelete(false); onClearSelect();
+    const items = selected;
+    setConfirmBatchDelete(false); clearSelection(); haptic("confirm");
+    for (const f of items) await attempt(() => remove(f));
   };
 
   const visible = useMemo(() => {
     const filtered = showHidden ? entries : entries.filter((e) => !e.name.startsWith("."));
-    return [...filtered].sort((a, b) => (a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name)));
+    return [...filtered].sort((a, b) => (a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : compareStrings(a.name, b.name)));
   }, [entries, showHidden]);
 
   const selectedPaths = useMemo(() => new Set(selected.map((s) => s.path)), [selected]);
 
+  // The selection follows the listing (deleted / renamed entries drop out); leaving the folder ends it.
+  useEffect(() => {
+    if (!selecting || listing) return;
+    const kept = pruneSelection(selected, entries);
+    if (kept !== selected) onSelectionChange(kept);
+  }, [entries, listing]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (selecting) clearSelection(); }, [cwd]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Back: selection mode first, then one directory up (sheets opened above register later and win).
+  useBackInterceptor(onScreen && selecting, clearSelection);
+  useBackInterceptor(backUp && phase.tag === "connected" && cwd !== "/", goUp);
+
+  useSwapThrough(cwd, phase.tag !== "connected" || landedCwd === cwd, () => scrollRef.current,
+    (from, to) => (landedCwd === null ? null : sharedAxisPlan(to.startsWith(from.endsWith("/") ? from : `${from}/`))));
+
+  const pull = usePullToRefresh(scrollRef, { enabled: phase.tag === "connected", busy: listing, onRefresh: refresh });
+
+  // Keep the current folder (the last crumb) in view.
+  useEffect(() => {
+    const el = crumbsRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [cwd]);
+
   const download = async (f: FileEntry) => {
     if (!sftpId) return;
+    const mode = f.isDir ? await tarMode([sftpId]) : "off";
+    const fetchTo = (localPath: string, transferId: string) => transferItem({
+      from: "remote", to: "local", srcSftpId: sftpId, srcPath: f.path, dstPath: localPath, isDir: f.isDir, useTar: mode === "tar", transferId,
+    });
     // Android: stream to a temp path, then publish into the user's SAF download folder
     // (picked once, persisted) so the file lands somewhere visible to the system Files app.
-    if (isAndroid) {
-      let dir = await downloadDirGet();
-      if (needsPicker(dir)) {
-        dir = await downloadDirPick();
-        if (needsPicker(dir)) return; // user cancelled the folder picker
+    // iOS: same path; the folder is always the app's Documents (Files › Voltius SSH), no picker.
+    if (isAndroid || isIOS) {
+      try {
+        let dir = await downloadDirGet();
+        if (needsPicker(dir)) {
+          dir = await downloadDirPick();
+          if (needsPicker(dir)) return; // user cancelled the folder picker
+        }
+      } catch (e) {
+        fail(e, () => download(f));
+        return;
       }
       await runTransfer(f.name, "←", async (tid) => {
         const tmp = await downloadTempPath(tid, f.name);
-        await (f.isDir
-          ? sftpDownloadDir({ sftpId, remotePath: f.path, localPath: tmp, transferId: tid })
-          : sftpDownload({ sftpId, remotePath: f.path, localPath: tmp, transferId: tid }));
+        await fetchTo(tmp, tid);
         await downloadPublish(tmp, f.name);
-      });
+      }, undefined, accelFor(mode, f.isDir));
       return;
     }
-    const base = (await appCacheDir()).replace(/\/$/, "");
-    const localPath = `${base}/${f.name}`;
-    await runTransfer(f.name, "←", (tid) => (f.isDir
-      ? sftpDownloadDir({ sftpId, remotePath: f.path, localPath, transferId: tid })
-      : sftpDownload({ sftpId, remotePath: f.path, localPath, transferId: tid })));
+    await runTransfer(f.name, "←", async (tid) => fetchTo(joinPath(await appCacheDir(), f.name), tid), undefined, accelFor(mode, f.isDir));
   };
 
-  if (!connection) {
+  const upload = async (pick: () => Promise<ContentFile[]> = uploadPick) => {
+    if (!sftpId) return;
+    try {
+      await uploadContentFiles(await pick(), sftpId, cwd, refresh);
+    } catch (e) {
+      fail(e, () => upload(pick));
+    }
+  };
+  const canUpload = isAndroid && phase.tag === "connected" && !!sftpId;
+  useImperativeHandle(dropRef, () => (files: ContentFile[]) => {
+    if (canUpload && !refuseReadOnly(readOnlyTip)) void upload(async () => files);
+  });
+
+  // Share: the files download into the share staging folder (with the usual transfer cards),
+  // then the system chooser gets them. Large sets ask first. Folders can't be shared.
+  const canShareFiles = canShareStagedFiles();
+  const share = async (items: FileEntry[], confirmed = false) => {
+    const files = shareableFiles(items);
+    if (!sftpId || files.length === 0) return;
+    if (!confirmed && shareTotalBytes(files) > SHARE_CONFIRM_BYTES) { setConfirmShare(files); return; }
+    const staged: { path: string; name: string }[] = [];
+    for (const f of files) {
+      await runTransfer(f.name, "←", async (tid) => {
+        const tmp = await downloadTempPath(shareStageId(tid), f.name);
+        await transferItem({ from: "remote", to: "local", srcSftpId: sftpId, srcPath: f.path, dstPath: tmp, isDir: false, useTar: false, transferId: tid });
+        staged.push({ path: tmp, name: f.name });
+      });
+    }
+    if (staged.length < files.length) { appToast("error", t("mobile.share.downloadFailed")); return; }
+    if (!shareFiles(staged.map((x) => x.path), staged.map((x) => x.name), files.length === 1 ? files[0].name : "")) {
+      appToast("error", t("mobile.share.failed"));
+    }
+  };
+
+  if (!connection && !device) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <Icon icon="lucide:folder-open" width={28} className="text-(--t-text-dim)" />
+        <Icon icon={SFTP_ICON} width={28} className="text-(--t-text-dim)" />
         <button data-sftp-pick-host onClick={onPickHost}
-          className="px-4 py-2 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "#fff" }}>
+          className="px-4 py-2 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}>
           {t("mobile.sftp.chooseHost")}
         </button>
       </div>
     );
   }
 
+  const single = selected.length === 1 ? selected[0] : null;
+  const everything = allSelected(selected, visible);
+  // M3 contextual top bar: close, count, then the selection's actions (the rarer ones under ⋮).
+  const selectionBar = selecting && headerSlot && createPortal(
+    <header data-sftp-selection-bar className="shrink-0 flex items-center h-12 pr-1 border-b"
+      style={{ background: "color-mix(in srgb, var(--t-accent) 16%, var(--t-bg-chrome))", borderColor: "var(--t-border)" }}>
+      <BarButton attr="data-sftp-sel-clear" icon="lucide:x" label={t("mobile.sftp.clearSelectionAriaLabel")} onTap={clearSelection} />
+      <span data-sftp-sel-count className="flex-1 min-w-0 truncate text-base font-medium text-(--t-text-primary) tabular-nums">
+        {t("mobile.sftp.selectedCount", { count: selected.length })}
+      </span>
+      <BarButton attr="data-sftp-sel-all" icon={everything ? "lucide:list-x" : "lucide:list-checks"} label={t("mobile.sftp.selectAll")}
+        pressed={everything} onTap={() => onSelectionChange(toggleAll(selected, visible))} />
+      {otherConnected && (
+        <BarButton attr="data-sftp-sel-copy" icon="lucide:arrow-right-left" label={t("mobile.sftp.copyToOtherPane")} onTap={() => onCopyToOther(selected)} />
+      )}
+      <BarButton attr="data-sftp-sel-download" icon="lucide:download" label={t("mobile.sftp.downloadSelectedAriaLabel")} onTap={() => void downloadSelected()} />
+      <BarButton attr="data-sftp-sel-delete" icon="lucide:trash-2" label={t("mobile.sftp.deleteSelectedAriaLabel")} danger disabledReason={readOnlyTip} onTap={() => setConfirmBatchDelete(true)} />
+      <BarButton attr="data-sftp-sel-more" icon="lucide:ellipsis-vertical" label={t("mobile.sftp.moreActions")} onTap={() => setSelectionMore(true)} />
+    </header>,
+    headerSlot,
+  );
+
   return (
-    <div className="h-full flex flex-col min-h-0">
-      <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b" style={{ borderColor: "var(--t-border)" }}>
-        <button data-sftp-pane-host onClick={onPickHost} className="flex items-center gap-1.5 min-w-0">
-          <ConnectionAvatar connection={connection} size={20} />
-          <span className="text-xs font-medium text-(--t-text-primary) truncate">{connectionDisplayName(connection)}</span>
-          <Icon icon="lucide:chevron-down" width={12} className="text-(--t-text-dim) shrink-0" />
+    <div className="relative h-full flex flex-col min-h-0">
+      {dropHover && canUpload && !readOnly && <PaneDropOverlay />}
+      {selectionBar}
+      <div className="shrink-0 flex items-center h-12 border-b" style={{ borderColor: "var(--t-border)" }}>
+        <button data-sftp-pane-host onClick={onPickHost} className="h-12 flex items-center gap-2 min-w-0 pl-3 pr-2 rounded-full">
+          {device ? (
+            <AvatarTile base={DEVICE_TILE_BASE} icon={deviceIcon(device.platform)} iconSize={12} className="w-[1.375rem] h-[1.375rem] rounded-md text-(--t-text-bright)" />
+          ) : (
+            <ConnectionAvatar connection={connection!} size={22} />
+          )}
+          <span className="text-sm font-medium text-(--t-text-primary) truncate">{device ? device.name : connectionDisplayName(connection!)}</span>
+          <Icon icon="lucide:chevron-down" width={14} className="text-(--t-text-dim) shrink-0" />
         </button>
+        {readOnlyTip && <ReadOnlyBadge tip={readOnlyTip} className="ml-1" />}
         <div className="flex-1" />
-        <button data-sftp-hidden onClick={() => setShowHidden((v) => !v)} className="px-2 py-0.5 text-[11px] rounded-lg"
+        <button data-sftp-hidden onClick={() => setShowHidden((v) => !v)} className="h-12 px-3 text-xs rounded-full"
           style={{ color: showHidden ? "var(--t-accent)" : "var(--t-text-dim)" }}>{showHidden ? t("mobile.sftp.hidden") : t("mobile.sftp.visible")}</button>
-        <button data-sftp-create onClick={() => setCreating(true)} className="p-1 rounded-lg text-(--t-text-dim)" aria-label={t("common.action.create")}>
-          <Icon icon="lucide:plus" width={16} />
+        <button data-sftp-create onClick={() => setCreating(true)} disabled={readOnly} className="w-12 h-12 flex items-center justify-center rounded-full text-(--t-text-dim) disabled:opacity-35"
+          aria-label={readOnlyTip ?? t("common.action.create")} title={readOnlyTip}>
+          <Icon icon="lucide:plus" width={20} />
         </button>
       </div>
-      <div className="shrink-0 flex items-center gap-1 px-3 py-1.5 overflow-x-auto border-b" style={{ borderColor: "var(--t-border)" }}>
+      <div ref={crumbsRef} data-sftp-crumbs className="shrink-0 flex items-center h-12 px-1 overflow-x-auto scrollbar-none border-b" style={{ borderColor: "var(--t-border)" }}>
         {breadcrumbs(cwd).map((seg, i, arr) => (
-          <span key={seg.path} className="flex items-center gap-1 shrink-0">
-            <button data-sftp-crumb={seg.path} onClick={() => navigate(seg.path)}
-              className="text-xs font-medium whitespace-nowrap" style={{ color: i === arr.length - 1 ? "var(--t-text-primary)" : "var(--t-text-dim)" }}>
+          <span key={seg.path} className="flex items-center shrink-0">
+            <button data-sftp-crumb={seg.path} onClick={() => navigate(seg.path)} aria-current={i === arr.length - 1 ? "location" : undefined}
+              className="h-12 min-w-12 px-2 rounded-full text-sm font-medium whitespace-nowrap" style={{ color: i === arr.length - 1 ? "var(--t-text-primary)" : "var(--t-text-dim)" }}>
               {seg.name}
             </button>
-            {i < arr.length - 1 && <Icon icon="lucide:chevron-right" width={12} className="text-(--t-text-dim)" />}
+            {i < arr.length - 1 && <Icon icon="lucide:chevron-right" width={14} className="text-(--t-text-dim)" />}
           </span>
         ))}
       </div>
-      <div className="flex-1 overflow-y-auto min-h-0">
-        {phase.tag === "connecting" && (
-          <div className="flex items-center justify-center pt-10 text-sm text-(--t-text-dim) gap-2">
-            <Icon icon="lucide:loader-circle" width={18} className="animate-spin" /> {t("mobile.sftp.connecting")}
-          </div>
-        )}
-        {phase.tag === "error" && (
-          <div className="flex flex-col items-center gap-3 pt-10 px-6 text-center text-(--t-text-dim)">
-            <Icon icon="lucide:wifi-off" width={26} className="text-(--t-status-error)" />
-            <span className="text-sm text-(--t-status-error)">{phase.message}</span>
-            <span className="text-xs text-(--t-text-dim)">{t("mobile.sftp.reconnecting")}</span>
-            <button data-sftp-reconnect onClick={reconnect} className="text-sm px-4 py-2 rounded-xl"
-              style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}>{t("mobile.sftp.reconnectNow")}</button>
-          </div>
-        )}
-        {phase.tag === "connected" && listError && (
-          <div className="flex flex-col items-center gap-2 pt-10 px-6 text-center text-(--t-text-dim)">
-            <Icon icon={isPermissionDenied(listError) ? "lucide:lock" : "lucide:triangle-alert"} width={26} />
-            <span className="text-sm">{isPermissionDenied(listError) ? t("mobile.sftp.permissionDenied") : listError}</span>
-            <button onClick={goUp} className="text-sm px-4 py-2 rounded-xl" style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}>{t("mobile.sftp.goUp")}</button>
-          </div>
-        )}
-        {phase.tag === "connected" && !listError && visible.length === 0 && !listing && (
-          <div className="flex flex-col items-center gap-2 pt-10 text-(--t-text-dim)">
-            <Icon icon="lucide:folder-open" width={26} /><span className="text-sm">{t("mobile.sftp.emptyFolder")}</span>
-          </div>
-        )}
-        {phase.tag === "connected" && !listError && visible.map((f) => (
-          <FileRow key={f.path} file={f} checked={selectedPaths.has(f.path)}
-            onTap={() => (f.isDir ? navigate(f.path) : onToggleSelect(f))}
-            onToggle={() => onToggleSelect(f)}
-            onLong={() => setSheetFor(f)} />
-        ))}
-      </div>
-
-      {selected.length > 0 && (
-        <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-t" style={{ borderColor: "var(--t-border)", background: "var(--t-bg-chrome)" }}>
-          <span className="text-xs font-medium text-(--t-text-primary)">{t("mobile.sftp.selectedCount", { count: selected.length })}</span>
-          <div className="flex-1" />
-          <button data-sftp-sel-download onClick={() => void downloadSelected()} className="p-1.5 rounded-lg text-(--t-text-dim)" aria-label={t("mobile.sftp.downloadSelectedAriaLabel")}>
-            <Icon icon="lucide:download" width={16} />
-          </button>
-          <button data-sftp-sel-delete onClick={() => setConfirmBatchDelete(true)} className="p-1.5 rounded-lg" style={{ color: "var(--t-status-error)" }} aria-label={t("mobile.sftp.deleteSelectedAriaLabel")}>
-            <Icon icon="lucide:trash-2" width={16} />
-          </button>
-          <button data-sftp-sel-clear onClick={onClearSelect} className="p-1.5 rounded-lg text-(--t-text-dim)" aria-label={t("mobile.sftp.clearSelectionAriaLabel")}>
-            <Icon icon="lucide:x" width={16} />
-          </button>
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        <div ref={scrollRef} data-sftp-list className="absolute inset-0 overflow-y-auto" style={{ overscrollBehaviorY: "contain" }}>
+          {phase.tag === "connecting" && (
+            <div className="flex items-center justify-center pt-10 text-sm text-(--t-text-dim) gap-2">
+              <Icon icon="lucide:loader-circle" width={18} className="animate-spin" /> {t("mobile.sftp.connecting")}
+            </div>
+          )}
+          {phase.tag === "error" && (
+            <div className="flex flex-col items-center gap-3 pt-10 px-6 text-center text-(--t-text-dim)">
+              <Icon icon="lucide:wifi-off" width={26} className="text-(--t-status-error)" />
+              <span className="text-sm text-(--t-status-error)">{phase.message}</span>
+              {retrying && <span className="text-xs text-(--t-text-dim)">{t("mobile.sftp.reconnecting")}</span>}
+              <button data-sftp-reconnect onClick={reconnect} className="vt-hit text-sm px-4 py-2 rounded-xl"
+                style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}>{t("mobile.sftp.reconnectNow")}</button>
+            </div>
+          )}
+          {phase.tag === "connected" && listError && (
+            <div className="flex flex-col items-center gap-2 pt-10 px-6 text-center text-(--t-text-dim)">
+              <Icon icon={isPermissionDenied(listError, listErrorCode) ? "lucide:lock" : "lucide:triangle-alert"} width={26} />
+              <span className="text-sm">{isPermissionDenied(listError, listErrorCode) ? t("mobile.sftp.permissionDenied") : listError}</span>
+              <div className="flex gap-2">
+                <button data-sftp-list-retry onClick={refresh} className="vt-hit text-sm px-4 py-2 rounded-xl" style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}>{t("common.action.retry")}</button>
+                <button onClick={goUp} className="vt-hit text-sm px-4 py-2 rounded-xl" style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }}>{t("mobile.sftp.goUp")}</button>
+              </div>
+            </div>
+          )}
+          {phase.tag === "connected" && !listError && visible.length === 0 && !listing && (
+            <div className="flex flex-col items-center gap-2 pt-10 text-(--t-text-dim)">
+              <Icon icon="lucide:folder-open" width={26} /><span className="text-sm">{t("mobile.sftp.emptyFolder")}</span>
+            </div>
+          )}
+          {phase.tag === "connected" && !listError && visible.map((f) => {
+            const toggle = () => onSelectionChange(toggleItem(selected, f));
+            return (
+              <FileRow key={f.path} file={f} checked={selectedPaths.has(f.path)} selecting={selecting}
+                moreLabel={t("mobile.sftp.itemActions", { name: f.name })}
+                onTap={selecting ? toggle : f.isDir ? () => navigate(f.path) : () => setSheetFor(f)}
+                onLong={selecting ? toggle : () => onSelectionChange([f])}
+                onToggle={toggle}
+                onMore={() => setSheetFor(f)} />
+            );
+          })}
         </div>
-      )}
+        {phase.tag === "connected" && landedCwd !== null && landedCwd !== cwd && (
+          <div data-sftp-dir-loading className="absolute inset-x-0 top-10 flex justify-center pointer-events-none text-(--t-text-dim)"
+            style={{ animation: "fadeIn 200ms ease-out 150ms both" }}>
+            <Icon icon="lucide:loader-circle" width={22} className="animate-spin" />
+          </div>
+        )}
+        <PullIndicator phase={pull.phase} indicatorRef={pull.indicatorRef} />
+      </div>
 
       {sheetFor && (
         <BottomSheet title={sheetFor.name} onClose={() => setSheetFor(null)}>
-          {otherConnected && <SheetItem icon="lucide:arrow-right-left" label={t("mobile.sftp.copyToOtherPane")} onTap={() => { const f = sheetFor; setSheetFor(null); onCopyToOther(f); }} />}
+          {otherConnected && <SheetItem icon="lucide:arrow-right-left" label={t("mobile.sftp.copyToOtherPane")} onTap={() => { const f = sheetFor; setSheetFor(null); onCopyToOther([f]); }} />}
           <SheetItem icon="lucide:download" label={t("mobile.sftp.download")} onTap={() => { const f = sheetFor; setSheetFor(null); void download(f); }} />
+          {canShareFiles && !sheetFor.isDir && (
+            <SheetItem attr="share" icon="lucide:share-2" label={t("mobile.share.action")} onTap={() => { const f = sheetFor; setSheetFor(null); void share([f]); }} />
+          )}
           <SheetItem icon="lucide:info" label={t("mobile.sftp.details")} onTap={() => { setDetailFor(sheetFor); setSheetFor(null); }} />
-          <SheetItem icon="lucide:pencil" label={t("common.action.rename")} onTap={() => { setRenaming(sheetFor); setRenameVal(sheetFor.name); setSheetFor(null); }} />
+          <SheetItem icon="lucide:text-cursor-input" label={t("common.action.rename")} disabledReason={readOnlyTip} onTap={() => { startRename(sheetFor); setSheetFor(null); }} />
+          {chmodable && canEditPermissions([sheetFor]) && (
+            <SheetItem icon="lucide:key-round" label={t("fileTransfer.pane.menu.permissions")} disabledReason={readOnlyTip} onTap={() => { setPermissionsFor([sheetFor]); setSheetFor(null); }} />
+          )}
           <SheetItem icon="lucide:clipboard" label={t("mobile.sftp.copyPath")} onTap={() => { void writeClipboard(sheetFor.path); setSheetFor(null); }} />
-          <SheetItem icon="lucide:trash-2" label={t("common.action.delete")} danger onTap={() => { setConfirmDelete(sheetFor); setSheetFor(null); }} />
+          <SheetItem icon="lucide:trash-2" label={t("common.action.delete")} danger disabledReason={readOnlyTip} onTap={() => { setConfirmDelete(sheetFor); setSheetFor(null); }} />
+        </BottomSheet>
+      )}
+      {selectionMore && (
+        <BottomSheet title={t("mobile.sftp.selectedCount", { count: selected.length })} onClose={() => setSelectionMore(false)}>
+          {canShareFiles && selected.every((f) => !f.isDir) && (
+            <SheetItem attr="share" icon="lucide:share-2" label={t("mobile.share.action")} onTap={() => { const items = selected; setSelectionMore(false); clearSelection(); void share(items); }} />
+          )}
+          {single && <SheetItem icon="lucide:text-cursor-input" label={t("common.action.rename")} disabledReason={readOnlyTip} onTap={() => { setSelectionMore(false); startRename(single); clearSelection(); }} />}
+          {single && <SheetItem icon="lucide:info" label={t("mobile.sftp.details")} onTap={() => { setSelectionMore(false); setDetailFor(single); clearSelection(); }} />}
+          {chmodable && canEditPermissions(selected) && (
+            <SheetItem icon="lucide:key-round" label={t("fileTransfer.pane.menu.permissions")} disabledReason={readOnlyTip} onTap={() => { setSelectionMore(false); setPermissionsFor(selected); clearSelection(); }} />
+          )}
+          <SheetItem icon="lucide:clipboard" label={t("mobile.sftp.copyPath")} onTap={() => { setSelectionMore(false); void writeClipboard(selected.map((f) => f.path).join("\n")); clearSelection(); }} />
         </BottomSheet>
       )}
       {renaming && (
@@ -194,18 +363,27 @@ export default function MobileSftpPane({
           <input autoFocus value={renameVal} onChange={(e) => setRenameVal(e.target.value)}
             className="w-full rounded-xl px-3 h-11 text-sm outline-none text-(--t-text-primary) mb-2"
             style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }} />
-          <button data-sftp-rename-go className="w-full px-3 py-3 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "#fff" }}
-            onClick={async () => { const f = renaming; const v = renameVal.trim(); setRenaming(null); if (v && v !== f.name) try { await rename(f, v); } catch (e) { alert(String(e)); } }}>{t("common.action.rename")}</button>
+          <button data-sftp-rename-go className="w-full px-3 py-3 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
+            onClick={async () => { const f = renaming; const v = renameVal.trim(); setRenaming(null); if (v && v !== f.name) await attempt(() => rename(f, v)); }}>{t("common.action.rename")}</button>
         </BottomSheet>
       )}
       {confirmDelete && (
         <BottomSheet title={t("mobile.sftp.deleteConfirmTitle", { name: confirmDelete.name })} onClose={() => setConfirmDelete(null)}>
           <button data-sftp-delete-go className="w-full flex items-center gap-3 px-3 py-3.5 rounded-xl" style={{ color: "var(--t-status-error)" }}
-            onClick={async () => { const f = confirmDelete; setConfirmDelete(null); try { await remove(f); } catch (e) { alert(String(e)); } }}>
+            onClick={async () => { const f = confirmDelete; setConfirmDelete(null); haptic("confirm"); await attempt(() => remove(f)); }}>
             <Icon icon="lucide:trash-2" width={18} /><span className="text-sm font-medium">{t("common.action.delete")}</span>
           </button>
           <button className="w-full px-3 py-3.5 rounded-xl text-sm text-(--t-text-dim)" onClick={() => setConfirmDelete(null)}>{t("common.action.cancel")}</button>
         </BottomSheet>
+      )}
+      {permissionsFor && sftpId && (
+        <PermissionsDialog
+          touch
+          sftpId={sftpId}
+          files={permissionsFor}
+          onClose={() => setPermissionsFor(null)}
+          onApplied={() => { setPermissionsFor(null); refresh(); }}
+        />
       )}
       {detailFor && (
         <BottomSheet title={detailFor.name} onClose={() => setDetailFor(null)}>
@@ -214,8 +392,18 @@ export default function MobileSftpPane({
             <DetailRow label={t("mobile.sftp.detail.type")} value={detailFor.isDir ? t("common.entity.folder") : detailFor.isSymlink ? t("mobile.sftp.typeSymlink") : t("mobile.sftp.typeFile")} />
             {!detailFor.isDir && <DetailRow label={t("mobile.sftp.detail.size")} value={formatSize(detailFor.size)} />}
             {detailFor.permissions != null && <DetailRow label={t("mobile.sftp.detail.permissions")} value={`${formatPermissions(detailFor.permissions)} (0o${detailFor.permissions.toString(8)})`} />}
-            {detailFor.modified != null && <DetailRow label={t("mobile.sftp.detail.modified")} value={formatDate(detailFor.modified)} />}
+            {detailFor.modified != null && <DetailRow label={t("mobile.sftp.detail.modified")} value={formatModifiedFull(detailFor.modified)} />}
           </div>
+        </BottomSheet>
+      )}
+      {confirmShare && (
+        <BottomSheet title={t("mobile.share.largeTitle", { size: formatSize(shareTotalBytes(confirmShare)) })} onClose={() => setConfirmShare(null)}>
+          <div className="px-3 pt-1 pb-2 text-sm text-(--t-text-dim)">{t("mobile.share.largeBody")}</div>
+          <button data-sftp-share-go className="w-full flex items-center gap-3 px-3 py-3.5 rounded-xl text-(--t-text-primary)"
+            onClick={() => { const items = confirmShare; setConfirmShare(null); void share(items, true); }}>
+            <Icon icon="lucide:share-2" width={18} /><span className="text-sm font-medium">{t("mobile.share.action")}</span>
+          </button>
+          <button className="w-full px-3 py-3.5 rounded-xl text-sm text-(--t-text-dim)" onClick={() => setConfirmShare(null)}>{t("common.action.cancel")}</button>
         </BottomSheet>
       )}
       {confirmBatchDelete && (
@@ -231,6 +419,10 @@ export default function MobileSftpPane({
         <BottomSheet title={t("common.action.create")} onClose={() => setCreating(false)}>
           <SheetItem icon="lucide:folder-plus" label={t("mobile.snippets.newFolderTitle")} onTap={() => { setCreating(false); setNewFolder(true); }} />
           <SheetItem icon="lucide:file-plus" label={t("mobile.sftp.newFileOption")} onTap={() => { setCreating(false); setNewFile(true); }} />
+          {canUpload && (
+            <SheetItem attr="upload" icon="lucide:upload" label={t("fileTransfer.pane.menu.uploadFiles")} disabledReason={readOnlyTip}
+              onTap={() => { setCreating(false); void upload(); }} />
+          )}
         </BottomSheet>
       )}
       {newFolder && (
@@ -238,8 +430,8 @@ export default function MobileSftpPane({
           <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder={t("mobile.sftp.folderNamePlaceholder")}
             className="w-full rounded-xl px-3 h-11 text-sm outline-none text-(--t-text-primary) mb-2"
             style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }} />
-          <button data-sftp-mkdir-go className="w-full px-3 py-3 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "#fff" }}
-            onClick={async () => { const n = newFolderName.trim(); setNewFolder(false); setNewFolderName(""); if (n) try { await mkdir(n); } catch (e) { alert(String(e)); } }}>{t("common.action.create")}</button>
+          <button data-sftp-mkdir-go className="w-full px-3 py-3 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
+            onClick={async () => { const n = newFolderName.trim(); setNewFolder(false); setNewFolderName(""); if (n) await attempt(() => mkdir(n)); }}>{t("common.action.create")}</button>
         </BottomSheet>
       )}
       {newFile && (
@@ -247,41 +439,55 @@ export default function MobileSftpPane({
           <input autoFocus value={newFileName} onChange={(e) => setNewFileName(e.target.value)} placeholder={t("mobile.sftp.fileNamePlaceholder")}
             className="w-full rounded-xl px-3 h-11 text-sm outline-none text-(--t-text-primary) mb-2"
             style={{ background: "var(--t-bg-card)", border: "1px solid var(--t-border)" }} />
-          <button data-sftp-touch-go className="w-full px-3 py-3 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "#fff" }}
-            onClick={async () => { const n = newFileName.trim(); setNewFile(false); setNewFileName(""); if (n) try { await touch(n); } catch (e) { alert(String(e)); } }}>{t("common.action.create")}</button>
+          <button data-sftp-touch-go className="w-full px-3 py-3 rounded-xl text-sm font-medium" style={{ background: "var(--t-accent)", color: "var(--t-on-accent)" }}
+            onClick={async () => { const n = newFileName.trim(); setNewFile(false); setNewFileName(""); if (n) await attempt(() => touch(n)); }}>{t("common.action.create")}</button>
         </BottomSheet>
       )}
     </div>
   );
 }
 
-function FileRow({ file, checked, onTap, onToggle, onLong }: { file: FileEntry; checked: boolean; onTap: () => void; onToggle: () => void; onLong: () => void }) {
+function FileRow({ file, checked, selecting, moreLabel, onTap, onLong, onToggle, onMore }: {
+  file: FileEntry; checked: boolean; selecting: boolean; moreLabel: string;
+  onTap: () => void; onLong: () => void; onToggle: () => void; onMore: () => void;
+}) {
   const icon = file.isDir ? "lucide:folder" : file.isSymlink ? "lucide:link" : "lucide:file";
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fired = useRef(false);
-  const clear = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
-  useEffect(() => () => clear(), []);
-  const startLong = () => { fired.current = false; clear(); timer.current = setTimeout(() => { fired.current = true; onLong(); }, 500); };
+  const press = useLongPress(onLong, onTap);
+  // A div, not a button: the row holds its own ⋮ button (per-item actions, M3 list trailing icon).
   return (
-    <button data-sftp-row={file.path}
-      onClick={() => { if (!fired.current) onTap(); fired.current = false; }}
-      onContextMenu={(e) => { e.preventDefault(); fired.current = true; onLong(); }}
-      onTouchStart={startLong} onTouchEnd={clear} onTouchMove={clear} onTouchCancel={clear}
-      className="w-full flex items-center gap-3 px-4 py-3 text-left active:bg-(--t-bg-card) border-b"
-      style={{ borderColor: "var(--t-border)", background: checked ? "var(--t-bg-card)" : undefined }}>
-      <span
-        role="checkbox" aria-checked={checked} data-sftp-select={file.path}
+    <div data-sftp-row={file.path} role="button" tabIndex={0} aria-pressed={selecting ? checked : undefined} {...press}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onTap(); } }}
+      className="w-full flex items-center min-h-14 pl-1 text-left border-b select-none"
+      style={{ borderColor: "var(--t-border)", background: checked ? "color-mix(in srgb, var(--t-accent) 14%, transparent)" : undefined }}>
+      {/* Leading icon: tapping it selects (enters selection mode), like a Gmail avatar. */}
+      <span role="checkbox" aria-checked={checked} data-sftp-select={file.path}
         onClick={(e) => { e.stopPropagation(); onToggle(); }}
-        className="p-1 -m-1 shrink-0">
-        <Icon icon={checked ? "lucide:square-check-big" : "lucide:square"} width={16}
-          style={{ color: checked ? "var(--t-accent)" : "var(--t-text-dim)" }} />
+        className="w-12 h-12 shrink-0 flex items-center justify-center">
+        {selecting
+          ? <Icon icon={checked ? "lucide:circle-check" : "lucide:circle"} width={22} style={{ color: checked ? "var(--t-accent)" : "var(--t-text-dim)" }} />
+          : <Icon icon={icon} width={20} className="text-(--t-text-dim)" />}
       </span>
-      <Icon icon={icon} width={20} className="text-(--t-text-dim) shrink-0" />
-      <span className="flex flex-col min-w-0 flex-1">
+      <span className="flex flex-col min-w-0 flex-1 py-2 pl-1">
         <span className="text-sm text-(--t-text-primary) truncate">{file.name}</span>
         {!file.isDir && <span className="text-[11px] text-(--t-text-dim)">{formatSize(file.size)}</span>}
       </span>
-      {file.isDir && <Icon icon="lucide:chevron-right" width={16} className="text-(--t-text-dim) shrink-0" />}
+      {!selecting && (
+        <button data-sftp-row-actions={file.path} aria-label={moreLabel} onClick={(e) => { e.stopPropagation(); onMore(); }}
+          className="w-12 h-12 shrink-0 flex items-center justify-center rounded-full text-(--t-text-dim)">
+          <Icon icon="lucide:ellipsis-vertical" width={18} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function BarButton({ attr, icon, label, onTap, danger, pressed, disabledReason }: { attr: string; icon: string; label: string; onTap: () => void; danger?: boolean; pressed?: boolean; disabledReason?: string }) {
+  return (
+    <button {...{ [attr]: "" }} onClick={onTap} aria-label={disabledReason ?? label} title={disabledReason ?? label} aria-pressed={pressed}
+      disabled={!!disabledReason}
+      className="w-12 h-12 shrink-0 flex items-center justify-center rounded-full disabled:opacity-35"
+      style={{ color: danger ? "var(--t-status-error)" : "var(--t-text-primary)" }}>
+      <Icon icon={icon} width={20} />
     </button>
   );
 }
@@ -295,10 +501,10 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SheetItem({ icon, label, onTap, danger }: { icon: string; label: string; onTap: () => void; danger?: boolean }) {
+function SheetItem({ icon, label, onTap, danger, attr, disabledReason }: { icon: string; label: string; onTap: () => void; danger?: boolean; attr?: string; disabledReason?: string }) {
   return (
-    <button data-sftp-action={label.toLowerCase().replace(/\s+/g, "-")}
-      className="w-full flex items-center gap-3 px-3 py-3.5 rounded-xl text-left active:bg-(--t-bg-card)"
+    <button data-sftp-action={attr ?? label.toLowerCase().replace(/\s+/g, "-")} disabled={!!disabledReason} title={disabledReason}
+      className="w-full flex items-center gap-3 px-3 py-3.5 rounded-xl text-left active:bg-(--t-bg-card) disabled:opacity-35"
       style={{ color: danger ? "var(--t-status-error)" : "var(--t-text-primary)" }} onClick={onTap}>
       <Icon icon={icon} width={18} /><span className="text-sm font-medium">{label}</span>
     </button>

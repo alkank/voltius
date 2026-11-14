@@ -4,12 +4,16 @@ import BottomSheet from "./BottomSheet";
 import MoveToFolderSheet from "./MoveToFolderSheet";
 import { useKeyStore } from "@/stores/keyStore";
 import { useIdentityStore } from "@/stores/identityStore";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
 import { useFolderStore } from "@/stores/folderStore";
+import { useMobileNavStore } from "@/stores/mobileNavStore";
 import { useAllFolders } from "@/hooks/useAllFolders";
 import { ensurePublicKey } from "@/services/publicKeyStore";
 import { writeClipboard } from "@/utils/clipboard";
+import { canShare, publicKeyShareText, shareText } from "@/services/share";
 import { buildMoveTargets } from "@/components/mobile/folders/mobileFolderCore";
+import { usePermissions } from "@/hooks/usePermission";
+import { compareStrings } from "@/utils/localeFormat";
 import type { SshKey, Identity } from "@/types";
 import { SheetActionRow, type SheetAction } from "./SheetActionRow";
 
@@ -17,31 +21,38 @@ type Mode = "menu" | "confirm-delete" | "move-folder";
 
 const Row = ({ it }: { it: SheetAction }) => <SheetActionRow attr="keychain-action" it={it} />;
 
+/** Rows left out from the edit screen's ⋮: it is the editor, and its form autosaves its own folder. */
+const EDITOR_HIDDEN = new Set(["edit", "move-folder"]);
+
 type Props =
-  | { kind: "key"; item: SshKey; onClose: () => void }
-  | { kind: "identity"; item: Identity; onClose: () => void };
+  | { kind: "key"; item: SshKey; onClose: () => void; fromEditor?: boolean }
+  | { kind: "identity"; item: Identity; onClose: () => void; fromEditor?: boolean };
 
 function toast(message: string, severity: "success" | "error") {
-  useNotificationStore.getState().addToast({ source: { kind: "plugin", id: "core", name: "Voltius" }, type: "toast", message, severity, duration: 2000 });
+  useNotificationStore.getState().addToast({ source: APP_SOURCE, type: "toast", message, severity, duration: 2000 });
 }
 
 export default function KeychainItemActionsSheet(props: Props) {
-  const { kind, item, onClose } = props;
+  const { kind, item, onClose, fromEditor = false } = props;
   const { t } = useTranslation();
   const deleteKey = useKeyStore((s) => s.deleteKey);
   const deleteIdentity = useIdentityStore((s) => s.deleteIdentity);
   const moveObjectsToFolder = useFolderStore((s) => s.moveObjectsToFolder);
+  const push = useMobileNavStore((s) => s.push);
   const allFolders = useAllFolders();
+  const can = usePermissions();
   const [mode, setMode] = useState<Mode>("menu");
+  const vaultId = item.vault_id ?? "personal";
+  const canEdit = can(kind === "key" ? "EDIT_KEYS" : "EDIT_IDENTITIES", vaultId, item.id);
 
   const name = item.name ?? (kind === "key" ? t("mobile.sheets.keychainActions.unnamedKey") : (item as Identity).username);
 
   if (mode === "move-folder") {
     return (
       <MoveToFolderSheet
-        targets={buildMoveTargets(allFolders, "keychain")}
+        targets={buildMoveTargets(allFolders, "keychain", vaultId, compareStrings)}
         currentFolderId={item.folder_id ?? null}
-        onPick={(folderId) => { void (async () => { await moveObjectsToFolder([item.id], kind === "key" ? "key" : "identity", folderId); if (kind === "key") await useKeyStore.getState().loadKeys(); else await useIdentityStore.getState().loadIdentities(); })(); }}
+        onPick={async (folderId) => { await moveObjectsToFolder([item.id], kind === "key" ? "key" : "identity", folderId); if (kind === "key") await useKeyStore.getState().loadKeys(); else await useIdentityStore.getState().loadIdentities(); }}
         onClose={onClose}
       />
     );
@@ -64,6 +75,10 @@ export default function KeychainItemActionsSheet(props: Props) {
   }
 
   const items: SheetAction[] = [
+    ...(canEdit ? [{ icon: "lucide:pencil", label: t("common.action.edit"), slug: "edit", onTap: () => {
+      push(kind === "key" ? { kind: "key-edit", keyId: item.id } : { kind: "identity-edit", identityId: item.id });
+      onClose();
+    } }] : []),
     kind === "key"
       ? { icon: "lucide:clipboard-copy", label: t("mobile.sheets.keychainActions.copyPublicKey"), slug: "copy-public-key", onTap: async () => {
           const pub = await ensurePublicKey(item as SshKey);
@@ -76,13 +91,22 @@ export default function KeychainItemActionsSheet(props: Props) {
           toast(t("mobile.sheets.keychainActions.copiedUsername"), "success");
           onClose();
         } },
-    { icon: "lucide:folder-tree", label: t("mobile.sheets.shared.moveToFolder"), slug: "move-folder", onTap: () => setMode("move-folder") },
-    { icon: "lucide:trash-2", label: t("common.action.delete"), danger: true, slug: "delete", onTap: () => setMode("confirm-delete") },
+    // The public line only: publicKeyShareText refuses anything else, the private half included.
+    ...(kind === "key" && canShare() ? [{ icon: "lucide:share-2", label: t("mobile.share.publicKey"), slug: "share-public-key", onTap: async () => {
+      const pub = publicKeyShareText(await ensurePublicKey(item as SshKey).catch(() => null));
+      onClose();
+      if (!pub) toast(t("mobile.sheets.keychainActions.noPublicKeyStored"), "error");
+      else if (!shareText(pub, name)) toast(t("mobile.share.failed"), "error");
+    } }] : []),
+    ...(canEdit ? [
+      { icon: "lucide:folder-tree", label: t("mobile.sheets.shared.moveToFolder"), slug: "move-folder", onTap: () => setMode("move-folder") },
+      { icon: "lucide:trash-2", label: t("common.action.delete"), danger: true, slug: "delete", onTap: () => setMode("confirm-delete") },
+    ] : []),
   ];
 
   return (
     <BottomSheet title={name} onClose={onClose}>
-      {items.map((it) => <Row key={it.slug} it={it} />)}
+      {items.filter((it) => !fromEditor || !EDITOR_HIDDEN.has(it.slug ?? "")).map((it) => <Row key={it.slug} it={it} />)}
     </BottomSheet>
   );
 }

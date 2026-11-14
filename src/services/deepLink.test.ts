@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { test, expect, beforeEach, vi } from "vitest";
 import { handleDeepLink } from "./deepLink";
 import { useDeepLinkStore } from "@/stores/deepLinkStore";
@@ -14,6 +15,11 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 350));
 beforeEach(() => {
   useDeepLinkStore.setState({ ready: false, queue: [], prompt: null });
   useDeepLinkStore.getState().setUnpromptedHandler(null);
+});
+
+test("a passkey return never joins the queue: it answers a ceremony or is dropped", () => {
+  handleDeepLink("voltius://passkey?c=c0de-0123456789abcdef&s=state");
+  expect(useDeepLinkStore.getState().queue).toHaveLength(0);
 });
 
 test("a link arriving before ready is queued, not prompted", () => {
@@ -232,4 +238,21 @@ test("the same navigate link delivered twice reaches the handler once", () => {
   handleDeepLink("voltius://settings?section=sync");
   handleDeepLink("voltius://settings?section=sync");
   expect(seen).toEqual(["settings"]);
+});
+
+test("takeQueued removes the first intent of a route before the app is ready and leaves the rest", () => {
+  const enroll = { route: "enroll", token: "vte1.a.b.c" } as unknown as DeepLinkIntent;
+  const billing: DeepLinkIntent = { route: "billing" };
+  useDeepLinkStore.setState({ ready: false, queue: [billing, enroll], prompt: null });
+  expect(useDeepLinkStore.getState().takeQueued("enroll")).toBe(enroll);
+  expect(useDeepLinkStore.getState().queue).toEqual([billing]);
+  expect(useDeepLinkStore.getState().takeQueued("enroll")).toBeNull();
+});
+
+test("a cold-start echo of a link taken out of the queue is not queued again", () => {
+  const enroll = { route: "enroll", token: "vte1.a.b.c" } as unknown as DeepLinkIntent;
+  useDeepLinkStore.setState({ ready: false, queue: [enroll], prompt: null });
+  expect(useDeepLinkStore.getState().takeQueued("enroll")).toBe(enroll);
+  useDeepLinkStore.getState().enqueue({ ...enroll });
+  expect(useDeepLinkStore.getState().queue).toEqual([]);
 });

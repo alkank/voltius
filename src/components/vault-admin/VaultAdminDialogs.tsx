@@ -4,23 +4,57 @@ import { Modal, ModalCard } from "@/components/shared/Modal";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { useTeamStore } from "@/stores/teamStore";
 import { useVaultContents } from "@/hooks/useVaultContents";
-import { useVaultAdminActions } from "./useVaultAdminActions";
+import { OffboardingDialog } from "@/components/members/OffboardingDialog";
+import { getMyUserId, type TeamMember } from "@/services/teamService";
+import { logFailure } from "@/lib/logger";
+import { deselectVault, useVaultAdminActions } from "./useVaultAdminActions";
 import { makePrivateMemberMessage, type VaultAdminTarget } from "./vaultAdminTarget";
 
-export type VaultDialog = "rename" | "makePrivate" | "delete" | null;
+export type VaultDialog = "rename" | "makePrivate" | "delete" | "leave" | null;
+
+function LeaveVaultDialog({ teamId, onClose, onDone }: { teamId: string; onClose: () => void; onDone?: () => void }) {
+  const [me, setMe] = useState<TeamMember | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const myId = await getMyUserId();
+      const store = useTeamStore.getState();
+      if (!store.membersByTeam[teamId]) await store.loadMembers(teamId);
+      const member = useTeamStore.getState().membersByTeam[teamId]?.find((m) => m.user_id === myId);
+      if (!live) return;
+      if (member) setMe(member);
+      else onClose();
+    })().catch((e) => { logFailure("leave vault: resolve own membership")(e); if (live) onClose(); });
+    return () => { live = false; };
+  }, [teamId]);
+
+  if (!me) return null;
+  return (
+    <OffboardingDialog
+      members={[me]}
+      teamId={teamId}
+      mode="leave"
+      onClose={onClose}
+      onDone={() => { deselectVault(teamId); onDone?.(); }}
+    />
+  );
+}
 
 export function VaultAdminDialogs({
-  target, dialog, onClose, onRenamed, onDone,
+  target, dialog, onClose, onRenamed, onDone, onConfirmed,
 }: {
   target: VaultAdminTarget;
   dialog: VaultDialog;
   onClose: () => void;
   onRenamed?: (name: string) => void;
   onDone?: () => void;
+  /** The confirm button of a delete / make-private was pressed (the Android page plays a haptic). */
+  onConfirmed?: () => void;
 }) {
   const { t } = useTranslation();
   const { membersByTeam } = useTeamStore();
-  const counts = useVaultContents(target.vaultId ?? undefined);
+  const counts = useVaultContents(target.teamId ?? target.vaultId ?? undefined);
   const { busy, rename, remove, makePrivate } = useVaultAdminActions(target, {
     onRenamed,
     onDone: () => { onClose(); onDone?.(); },
@@ -33,6 +67,10 @@ export function VaultAdminDialogs({
   }, [dialog, target.name]);
 
   if (!dialog) return null;
+
+  if (dialog === "leave") {
+    return target.teamId ? <LeaveVaultDialog teamId={target.teamId} onClose={onClose} onDone={onDone} /> : null;
+  }
 
   if (dialog === "rename") {
     const commit = () => {
@@ -73,11 +111,11 @@ export function VaultAdminDialogs({
     return (
       <ConfirmModal
         title={t("settings.vaults.general.deleteVault.title")}
-        message={t("settings.vaults.general.deleteVault.confirmDesc", { count: items })}
+        message={t(target.teamId ? "settings.vaults.general.deleteVault.confirmDescTeam" : "settings.vaults.general.deleteVault.confirmDesc", { count: items })}
         confirmLabel={t("settings.vaults.general.deleteVault.confirmBtn")}
         busy={busy}
         busyLabel={t("settings.vaults.general.deleteVault.deleting")}
-        onConfirm={() => void remove()}
+        onConfirm={() => { onConfirmed?.(); void remove(); }}
         onCancel={onClose}
       />
     );
@@ -95,7 +133,7 @@ export function VaultAdminDialogs({
       confirmLabel={t("settings.vaults.general.makePrivate.confirmBtn")}
       busy={busy}
       busyLabel={t("settings.vaults.general.makePrivate.converting")}
-      onConfirm={() => void makePrivate()}
+      onConfirm={() => { onConfirmed?.(); void makePrivate(); }}
       onCancel={onClose}
     />
   );

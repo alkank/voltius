@@ -1,0 +1,62 @@
+{
+  "errors": {
+    "permission-denied": "Permission denied",
+    "not-found": "No such file or directory",
+    "already-exists": "A file or folder with that name already exists",
+    "storage-full": "Not enough disk space or quota left",
+    "read-only-filesystem": "The file system is read-only",
+    "connection-refused": "The host refused the connection — check the address and port, and that the service is running",
+    "host-unreachable": "The host is unreachable — check the address and your network connection",
+    "timed-out": "Operation timed out",
+    "connection-lost": "The connection was lost",
+    "connection-lost-resumable": "The connection was lost — retry the transfer to continue where it stopped",
+    "transfer-verify-failed": "The copy didn't match the original, so it was discarded — retry to copy it again",
+    "transfer-source-changed": "The file kept changing while it was copied — retry once it has finished being written",
+    "port-in-use": "Port {{port}} and the ports after it are already in use ({{attempts}} tried)",
+    "bind-address-unavailable": "This computer has no address {{address}}",
+    "remote-forward-denied": "The server refused the remote forward — the port may already be in use there, or forwarding is not allowed",
+    "ssh-legacy-algorithms-required": "The server only offers older algorithms that are off by default ({{offered}}). Turn on \"Legacy Algorithms\" for this host to connect.",
+    "ssh-no-common-algorithm": "The server only offers algorithms Voltius does not support: {{offered}}.",
+    "ssh-key-rejected": "Public key authentication rejected",
+    "ssh-password-rejected": "Password authentication rejected — check the username and password",
+    "ssh-password-expired": "The server requires a new password — sign in once from a terminal and change it there",
+    "ssh-prompt-unanswerable": "The server asked \"{{prompt}}\", which can't be answered automatically",
+    "ssh-no-usable-auth-method": "No usable authentication method — the server only accepts: {{methods}}",
+    "ssh-auth-timeout": "Authentication timed out after {{seconds}}s — the server accepted the connection but never answered. Some older SSH servers stall here; try the host's \"Legacy Algorithms\" option, or another authentication method.",
+    "login-rejected": "The server rejected the username or password",
+    "resource-locked": "The file is locked on the server — someone else may have it open",
+    "vault-locked": "$t(common.error.vaultLocked)",
+    "vault-unreadable": "$t(common.error.vaultUnreadable)",
+    "vault-sign-in-required": "Team vaults require an active server connection. Sign in to continue.",
+    "vault-read-only": "You don't have write access to this vault. Ask a vault manager for a role that can make changes.",
+    "vault-role-read-only": "You don't have write access to this vault (your role: {{role}}). Only owners, managers, and editors can make changes.",
+    "vault-permissions-unavailable": "Unable to verify vault permissions because the keychain is unavailable. Try again.",
+    "vault-permissions-corrupted": "Vault permission data is corrupted. Sign in again to refresh access.",
+    "knock-udp-via-proxy": "UDP knocks can't go through a proxy. Use TCP steps or a direct connection for this host.",
+    "device-file-access-off": "File access is off on that device. Turn it on in Settings › Devices on the device.",
+    "device-access-denied": "The device declined the request to open its files.",
+    "device-approval-timed-out": "Nobody answered the request on the device in time.",
+    "device-busy": "That device has too many file sessions open. Close one and try again.",
+    "device-unreachable": "Can't reach that device. Check that it's on and on the same network.",
+    "device-access-expired": "Access to this device ended. Open it again to ask for permission.",
+    "device-read-only": "That device shares these folders read-only.",
+    "device-forgotten": "You forgot this device, so its files were closed.",
+    "pair": {
+      "ended": {
+        "accountDevice": "The other device is signed in to a Voltius account. Sign in here with the same account instead.",
+        "bothGrouped": "Both devices are already paired with other devices. Leave the group on one of them, then pair again.",
+        "alreadyPaired": "These devices are already paired.",
+        "timedOut": "Pairing timed out.",
+        "cancelled": "Pairing was cancelled.",
+        "busy": "The other device is already pairing with someone else. Try again in a moment.",
+        "tooManyAttempts": "Too many failed attempts. Pairing is switched off. Open Pair a device again to retry.",
+        "failed": "Pairing didn't finish. Try again.",
+        "stopped": "Pairing stopped. Open Pair a device again to retry."
+      }
+    }
+  },
+  "errorAt": {
+    "proxy": "Proxy {{proxy}}: {{cause}}",
+    "jumpHost": "Jump host {{jumpHost}}: {{cause}}"
+  }
+}

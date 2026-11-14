@@ -17,6 +17,7 @@
       "encryptBackup": "Encrypt backup",
       "plaintextSecretsWarning": "This export contains passwords, keys or host notes in plain text. Keep encryption on unless you deliberately need an unencrypted file.",
       "snippetRefMissing": "“{{name}}” runs another snippet ({{target}}) that isn’t part of this export. Include it in the selection, or remove that step.",
+      "exportFailed": "Couldn't export: {{error}}",
       "confirmPasswordPlaceholder": "Confirm password",
       "passwordsDontMatch": "Passwords don't match",
       "building": "Building…",
@@ -26,8 +27,15 @@
       "showPreview": "Show preview",
       "selectedItem_one": "{{count}} selected item",
       "selectedItem_other": "{{count}} selected items",
-      "autoIncludeIdentity": "{{count}} identity",
-      "autoIncludeKey": "{{count}} key",
+      "autoInclude": {
+        "connections_one": "{{count}} connection",
+        "connections_other": "{{count}} connections",
+        "snippets_one": "{{count}} snippet",
+        "snippets_other": "{{count}} snippets"
+      },
+      "autoIncludeHint": "Also included: used by the exported items, so they keep working after import",
+      "relatedCredentials": "Include linked credentials",
+      "relatedCredentialsHint": "The identities and SSH keys these connections use. Leave off to export connection settings only; on import they relink to a matching identity or key already in the vault.",
       "checkboxLabel": {
         "connections_one": "Connection ({{count}})",
         "connections_other": "Connections ({{count}})",
@@ -43,13 +51,16 @@
       "importFrom": "Import from",
       "importInto": "Import into",
       "autoExtractTitle": "Auto-extract from {{label}}",
-      "autoExtractDescription": "Reads and decrypts your local {{label}} data — no manual export needed",
+      "autoExtractDescription": "Reads your local {{label}} data — no manual export needed",
       "extracting": "Extracting…",
       "extractFrom": "Extract from {{label}}",
+      "chooseConfigFolder": "Or choose a {{label}} Config folder…",
       "orImportFromFile": "or import from file",
       "openFileLabel": "Open {{sub}} file…",
       "encryptedBackupTitle": "Encrypted backup — enter your password to unlock",
       "unlock": "Unlock",
+      "configPassphraseTitle": "This SecureCRT configuration has a config passphrase — enter it to import saved passwords",
+      "skipPasswords": "Import without saved passwords",
       "reviewItems_one": "Review {{count}} item",
       "reviewItems_other": "Review {{count}} items",
       "back": "Back",
@@ -60,6 +71,9 @@
       "groupConnections": "Connections",
       "groupKeys": "SSH Keys",
       "groupIdentities": "Identities",
+      "groupLinkedCredentials": "Linked credentials",
+      "linkedTo": "Linked to “{{name}}” in this vault",
+      "linkedNotFound": "Not in this vault — assign it after import",
       "groupPortForwarding": "Port Forwarding",
       "selectAll": "Select all",
       "deselectAll": "Deselect all",
@@ -77,11 +91,23 @@
       "actionSkip": "Skip",
       "actionInclude": "Import",
       "actionOverwrite": "Overwrite",
-      "resultImportedWithErrors": "Imported {{count}} items{{vaultNote}}, {{errors}} failed.",
       "resultImportedSuccess_one": "Successfully imported {{count}} item{{vaultNote}}.",
       "resultImportedSuccess_other": "Successfully imported {{count}} items{{vaultNote}}.",
       "resultVaultNote": " across {{count}} vaults",
-      "resultError": "Error: {{error}}"
+      "resultError": "Error: {{error}}",
+      "resultImportedWithErrors_one": "Imported {{count}} item{{vaultNote}}, {{errors}} failed.",
+      "resultImportedWithErrors_other": "Imported {{count}} items{{vaultNote}}, {{errors}} failed.",
+      "groupNotImported": "Not imported",
+      "viaJump": "via {{hosts}}",
+      "teamKeysWarning": "These private keys will be shared with every member of {{team}}.",
+      "notice": {
+        "pattern": "Pattern: applied to matching hosts, not imported on its own",
+        "match": "Match block: not supported, ignored",
+        "include": "Include could not be read",
+        "includeOutside": "Include outside ~/.ssh: not read",
+        "key": "IdentityFile path uses tokens that cannot be resolved",
+        "proxyCommand": "ProxyCommand is not supported yet"
+      }
     },
     "fileInput": {
       "openFileDefault": "Open file…",
@@ -126,6 +152,54 @@
         "vaults_one": "{{count}} vault",
         "vaults_other": "{{count}} vaults"
       }
+    },
+    "importers": {
+      "voltius": {
+        "sub": "JSON",
+        "placeholder": "Paste Voltius JSON here, or drop a .json file…\n\n{ \"version\": 1, \"connections\": [...] }"
+      },
+      "csv": {
+        "sub": "Spreadsheet",
+        "placeholder": "Paste CSV here, or drop a file…\n\nname,host,port,username,auth_type,tags"
+      },
+      "openssh": {
+        "sub": "~/.ssh/config",
+        "hint": "Reads ~/.ssh/config, its Include files and the keys named by IdentityFile. You can also paste a config or open a file.",
+        "hintMobile": "Paste your ~/.ssh/config or open the file. Keys are matched by file name with the keys already in the vault.",
+        "placeholder": "Host my-server\n  HostName 10.0.0.5\n  User alex\n  IdentityFile ~/.ssh/id_ed25519",
+        "notFound": "No ~/.ssh/config was found on this computer.",
+        "unreadable": "~/.ssh/config could not be read ({{reason}})."
+      },
+      "mobaxterm": {
+        "sub": "Local install · auto-decrypt",
+        "hint": "Requires MobaXterm to be installed (Windows only).",
+        "placeholder": "Drop MobaXterm.ini here, or paste its contents…"
+      },
+      "termius": {
+        "sub": "Local install · auto-extract",
+        "hint": "Requires Termius to be installed and logged in.",
+        "placeholder": "Use Auto Extract for Termius. Pasted legacy Termius dumps are not supported for faithful import."
+      },
+      "zoc": {
+        "sub": "Host Directory · .zhd",
+        "hint": "Find it in Documents\\ZOC9 Files\\Options (Windows) or ~/Library/Application Support/ZOC9 Files/Options (macOS). SSH and serial entries are imported; saved passwords are not.",
+        "placeholder": "Drop HostDirectory.zhd here, or paste its contents…"
+      },
+      "putty": {
+        "sub": ".reg or session",
+        "hint": "Reads saved sessions from the registry on Windows, or from ~/.putty/sessions on Linux and macOS. You can also drop a .reg export or paste session files. SSH and serial sessions, proxies and tunnels are imported; key files are not.",
+        "placeholder": "Drop a PuTTY .reg export here, or paste session files…"
+      },
+      "securecrt": {
+        "sub": "Session .ini · XML export",
+        "hint": "Auto-extract reads SecureCRT's local configuration. You can also drop a session .ini from Config/Sessions, or the XML file from File → Export Settings. SSH and serial sessions are imported with their saved passwords; Telnet, RLogin, Raw and other protocols are skipped.",
+        "placeholder": "Drop a SecureCRT session .ini or an Export Settings .xml here, or paste its contents…"
+      }
+    },
+    "menu": {
+      "export": "Export",
+      "importEllipsis": "Import…",
+      "exportEllipsis": "Export…"
     }
   }
 }

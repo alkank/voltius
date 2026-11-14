@@ -28,16 +28,21 @@ jobs:
 
       - run: node scripts/check-plugin-versions.mjs
 
-  # `pnpm build` runs scripts/build-plugins.mjs, which spawns a child process per
-  # plugin. That spawn is platform-sensitive — on Windows `pnpm` is a .cmd shim —
-  # and until v0.14.0 nothing here ever ran the frontend build on Windows. The
-  # release job was the only place it executed on that platform, so a Windows-only
-  # break stayed invisible until release time and shipped v0.14.0 with NO Windows
-  # installers at all. Frontend-only and no Rust, so it stays cheap.
-  frontend-build-windows:
-    runs-on: windows-latest
+  # Release builds on these OSes compile cfg(target_os) code that the Linux jobs never see,
+  # and `pnpm build` spawns plugin builds differently on Windows; break here, not after the tag.
+  platform-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+
+      # macOS ships bash 3.2, the oldest shell the release bundle check must run under.
+      - name: Bundle check self-test
+        if: runner.os == 'macOS'
+        run: bash scripts/test-check-cli-in-bundle.sh
 
       - uses: pnpm/action-setup@v6
 
@@ -50,12 +55,11 @@ jobs:
 
       - run: pnpm build
 
-      # `pnpm build` exits 0 having built nothing if the plugin loop silently
-      # skips, so assert the artifacts actually landed rather than trusting it.
-      - name: Assert all six plugin bundles were produced
+      # `pnpm build` exits 0 having built nothing if the plugin loop silently skips.
+      - name: Assert all five plugin bundles were produced
         shell: pwsh
         run: |
-          $ids = @('ssh-config','gist-sync','monitoring','docker','process-manager','proxmox')
+          $ids = @('gist-sync','monitoring','docker','process-manager','proxmox')
           foreach ($id in $ids) {
             foreach ($f in @('index.js','manifest.json')) {
               $p = "src-tauri/resources/plugins/$id/$f"
@@ -63,7 +67,45 @@ jobs:
               if ((Get-Item $p).Length -eq 0) { throw "empty $p" }
             }
           }
-          Write-Host "all six plugin bundles present"
+          Write-Host "all five plugin bundles present"
+
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Cargo check
+        run: cargo check --workspace
+
+      # These modules have cfg(windows) tests that only a Windows run executes.
+      - name: Windows-only tests
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          filters=(device_files policy::acl_windows mcp::transport::windows win_security)
+          list=$(cargo test -p voltius --lib -- --list)
+          for f in "${filters[@]}"; do
+            grep -q "$f.*: test" <<< "$list" || { echo "::error::filter '$f' matches no test"; exit 1; }
+          done
+          cargo test -p voltius --lib -- "${filters[@]}"
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+
+      - run: pnpm install
+
+      - run: pnpm test
 
   build:
     runs-on: ubuntu-24.04
@@ -92,15 +134,12 @@ jobs:
 
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev libsecret-1-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev libsecret-1-dev openssh-sftp-server
 
       - run: pnpm install
 
       # Build the frontend first so `dist/` exists for the Tauri build script.
       - run: pnpm build
-
-      - name: Frontend tests
-        run: pnpm test
 
       - name: Rustfmt
         run: cargo fmt --all --check

@@ -1,9 +1,8 @@
-use std::sync::Arc;
-use tokio::io::AsyncReadExt;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, Instant};
 
 use super::{DiskInfo, MetricsSnapshot};
 use crate::clock::now_ms;
+use crate::ssh::session::Machine;
 
 const METRICS_CMD: &str = "cat /proc/stat | head -1; \
      awk '/MemTotal|MemAvailable/{print}' /proc/meminfo; \
@@ -15,8 +14,7 @@ pub struct RemoteMetricsState {
     prev_cpu_total: u64,
     prev_net_rx: u64,
     prev_net_tx: u64,
-    disk_tick: u32,
-    last_disks: Vec<DiskInfo>,
+    prev_at: Option<Instant>,
 }
 
 impl RemoteMetricsState {
@@ -26,44 +24,23 @@ impl RemoteMetricsState {
             prev_cpu_total: 0,
             prev_net_rx: 0,
             prev_net_tx: 0,
-            disk_tick: 0,
-            last_disks: vec![],
+            prev_at: None,
         }
     }
 
-    pub async fn snapshot(
-        &mut self,
-        handle: &Arc<russh::client::Handle<crate::ssh::client::SshClient>>,
-    ) -> Result<MetricsSnapshot, String> {
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| format!("channel error: {e}"))?;
-
-        channel
-            .exec(true, METRICS_CMD)
-            .await
-            .map_err(|e| format!("exec error: {e}"))?;
-
-        let mut stream = channel.into_stream();
-        let mut output = Vec::new();
-
-        let _ = timeout(Duration::from_secs(3), async {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stream.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => output.extend_from_slice(&buf[..n]),
-                }
-            }
-        })
-        .await;
-
-        let text = String::from_utf8_lossy(&output);
-        self.parse(&text)
+    pub async fn snapshot(&mut self, machine: &Machine) -> Result<MetricsSnapshot, String> {
+        let text = machine.stdout(METRICS_CMD, Duration::from_secs(3)).await?;
+        let now = Instant::now();
+        let elapsed = self
+            .prev_at
+            .replace(now)
+            .map_or(Duration::from_secs(1), |at| now - at);
+        self.parse(&text, elapsed)
     }
 
-    fn parse(&mut self, text: &str) -> Result<MetricsSnapshot, String> {
+    fn parse(&mut self, text: &str, elapsed: Duration) -> Result<MetricsSnapshot, String> {
+        let elapsed_ms = elapsed.as_millis().max(1) as u64;
+        let per_sec = |delta: u64| delta.saturating_mul(1000) / elapsed_ms;
         let mut cpu_percent = 0.0f32;
         let mut mem_total_kb = 0u64;
         let mut mem_avail_kb = 0u64;
@@ -109,8 +86,8 @@ impl RemoteMetricsState {
                     .filter_map(|s| s.parse().ok())
                     .collect();
                 if parts.len() >= 2 {
-                    net_rx_per_sec = parts[0].saturating_sub(self.prev_net_rx);
-                    net_tx_per_sec = parts[1].saturating_sub(self.prev_net_tx);
+                    net_rx_per_sec = per_sec(parts[0].saturating_sub(self.prev_net_rx));
+                    net_tx_per_sec = per_sec(parts[1].saturating_sub(self.prev_net_tx));
                     self.prev_net_rx = parts[0];
                     self.prev_net_tx = parts[1];
                 }
@@ -119,28 +96,21 @@ impl RemoteMetricsState {
 
         let mem_used_kb = mem_total_kb.saturating_sub(mem_avail_kb);
 
-        self.disk_tick += 1;
-        let disks = if self.disk_tick >= 10 {
-            self.disk_tick = 0;
-            for line in text.lines() {
-                let line = line.trim();
-                if line.starts_with("DISK ") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 4 {
-                        let total_kb: u64 = parts[1].parse().unwrap_or(0);
-                        let used_kb: u64 = parts[2].parse().unwrap_or(0);
-                        self.last_disks = vec![DiskInfo {
-                            mount: parts[3].to_string(),
-                            used_kb,
-                            total_kb,
-                        }];
-                    }
-                }
-            }
-            Some(self.last_disks.clone())
-        } else {
-            None
-        };
+        let disks: Vec<DiskInfo> = text
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line
+                    .trim()
+                    .strip_prefix("DISK ")?
+                    .split_whitespace()
+                    .collect();
+                (parts.len() >= 3).then(|| DiskInfo {
+                    mount: parts[2].to_string(),
+                    used_kb: parts[1].parse().unwrap_or(0),
+                    total_kb: parts[0].parse().unwrap_or(0),
+                })
+            })
+            .collect();
 
         Ok(MetricsSnapshot {
             ts: now_ms(),
@@ -149,7 +119,45 @@ impl RemoteMetricsState {
             mem_total_kb,
             net_rx_bytes_per_sec: net_rx_per_sec,
             net_tx_bytes_per_sec: net_tx_per_sec,
-            disks,
+            disks: Some(disks),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_sample_carries_the_root_disk() {
+        let mut state = RemoteMetricsState::new();
+        let text = "cpu  10 0 10 80 0 0 0 0\nNET 100 200\nDISK 1000 250 /\n";
+        for _ in 0..2 {
+            let disks = state
+                .parse(text, Duration::from_secs(1))
+                .unwrap()
+                .disks
+                .unwrap();
+            assert_eq!(disks.len(), 1);
+            assert_eq!(
+                (disks[0].mount.as_str(), disks[0].used_kb, disks[0].total_kb),
+                ("/", 250, 1000)
+            );
+        }
+    }
+
+    #[test]
+    fn net_rates_scale_to_the_time_between_samples() {
+        let mut state = RemoteMetricsState::new();
+        state
+            .parse("NET 1000 2000\n", Duration::from_secs(1))
+            .unwrap();
+        let snap = state
+            .parse("NET 1100 2400\n", Duration::from_millis(250))
+            .unwrap();
+        assert_eq!(
+            (snap.net_rx_bytes_per_sec, snap.net_tx_bytes_per_sec),
+            (400, 1600)
+        );
     }
 }

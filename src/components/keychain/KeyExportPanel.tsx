@@ -5,7 +5,7 @@ import { useRipple } from "@/hooks/useRipple";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { addKeyToHost, DEFAULT_EXPORT_SCRIPT } from "@/services/keyExport";
 import { ensurePublicKey } from "@/services/publicKeyStore";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
 import { statusSurface } from "@/components/shared/statusSurface";
 import { chevronRotateStyle } from "@/utils/icons";
 import {
@@ -14,11 +14,14 @@ import {
 } from "@/components/shared/Panel";
 import { BaseCard } from "@/components/shared/BaseCard";
 import { HostPickerPanel } from "@/components/shared/HostPickerPanel";
+import { SlideOver } from "@/components/shared/slideOver";
 import { getConnectionIcon, getConnectionIconColor } from "@/utils/icons";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { KeyCardContent } from "./KeyCards";
 import type { SortMode } from "@/components/shared/ToolbarViewControls";
 import type { SshKey } from "@/types";
+import { connectionDisplayName } from "@/utils/connectionDisplayName";
+import { compareStrings } from "@/utils/localeFormat";
 
 // ─────────────────────────────────────────────────────────────────
 // sortByMode helper (used by KeychainPage for keys/identities)
@@ -27,8 +30,8 @@ import type { SshKey } from "@/types";
 export function sortByMode<T extends { name?: string; created_at: string }>(items: T[], mode: SortMode): T[] {
   return [...items].sort((a, b) => {
     switch (mode) {
-      case "name-asc":  return (a.name ?? "").localeCompare(b.name ?? "");
-      case "name-desc": return (b.name ?? "").localeCompare(a.name ?? "");
+      case "name-asc":  return compareStrings(a.name ?? "", b.name ?? "");
+      case "name-desc": return compareStrings(b.name ?? "", a.name ?? "");
       case "newest":    return b.created_at.localeCompare(a.created_at);
       case "oldest":    return a.created_at.localeCompare(b.created_at);
       default:          return 0;
@@ -79,7 +82,7 @@ export function KeyExportPanel({ sshKey, onClose }: { sshKey: SshKey; onClose: (
       await addKeyToHost({ sshKey, connection: selectedHost, location, filename, script });
       // Said where the eye already is rather than in a panel that is closing.
       useNotificationStore.getState().addToast({
-        source: { kind: "plugin", id: "system", name: "Voltius" },
+        source: APP_SOURCE,
         type: "toast",
         message: t("keychain.exportPanel.successMessage"),
         severity: "success",
@@ -134,7 +137,7 @@ export function KeyExportPanel({ sshKey, onClose }: { sshKey: SshKey; onClose: (
                       />
                       );
                     })()}
-                    <span className="truncate">{selectedHost ? (selectedHost.name ?? `${selectedHost.username}@${selectedHost.host}`) : t("keychain.exportPanel.selectHostPlaceholder")}</span>
+                    <span className="truncate">{selectedHost ? connectionDisplayName(selectedHost) : t("keychain.exportPanel.selectHostPlaceholder")}</span>
                   </div>
                   <Icon icon="lucide:chevron-right" width={14} className="text-(--t-text-muted) shrink-0" />
                 </button>
@@ -189,7 +192,7 @@ export function KeyExportPanel({ sshKey, onClose }: { sshKey: SshKey; onClose: (
             onClick={() => { void handleExport(); }}
             onPointerDown={canExport ? rippleExport : undefined}
             disabled={!canExport}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-opacity bg-(--t-accent) text-white relative overflow-hidden"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-opacity bg-(--t-accent) text-(--t-on-accent) relative overflow-hidden"
             style={{
               opacity: canExport ? 1 : 0.5,
               cursor: canExport ? "pointer" : "not-allowed",
@@ -204,18 +207,14 @@ export function KeyExportPanel({ sshKey, onClose }: { sshKey: SshKey; onClose: (
         </div>
       </PanelShell>
 
-      {/* Select Host slide-over */}
-      <div
-        className="absolute inset-0 transition-transform duration-200 ease-out border-l border-l-(--t-bg-terminal) border-t border-t-(--t-bg-card-hover)"
-        style={{ transform: showHostSelect ? "translateX(0)" : "translateX(100%)" }}
-      >
+      <SlideOver open={showHostSelect} className="border-l border-l-(--t-bg-terminal) border-t border-t-(--t-bg-card-hover)">
         <HostPickerPanel
           selectedHostId={selectedHostId}
           onPick={(h) => { if (h.kind === "remote") setSelectedHostId(h.connection.id); setShowHostSelect(false); }}
           onBack={() => setShowHostSelect(false)}
           vaultId={sshKey.vault_id ?? "personal"}
         />
-      </div>
+      </SlideOver>
     </div>
   );
 }

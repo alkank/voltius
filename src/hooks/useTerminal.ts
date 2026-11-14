@@ -1,26 +1,33 @@
-import { attachTerminalClipboard, type TerminalClipboardHandle } from "@/components/terminal/terminalClipboard";
-import { useEffect, useRef, useCallback } from "react";
-import { Terminal, type IBufferCell, type IBufferRange } from "@xterm/xterm";
+import { activateTerminal, disposeClosedTerminals, reattachTerminal, setTerminalVisible, useTerminalMount, type CachedTerminal } from "@/components/terminal/terminalContainer";
+import { useEffect, useCallback } from "react";
+import { Terminal, type IBufferCell, type IBufferLine, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import { claimWebglRenderer } from "@/utils/webglAddon";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { onSshOutput, onSshClosed, onSshCwd } from "@/services/ssh";
+import { onSshOutput, onSshClosed, onSshCwd, onSshMuxMode, sshSetOutputPaused, sshSetTerminalColors } from "@/services/ssh";
+import { createOutputFlow, type OutputFlow } from "@/components/terminal/outputFlow";
+import { suppressTerminalQueries } from "@/components/terminal/terminalQueries";
+import { createWrappedLinkProvider } from "@/components/terminal/wrappedLinks";
+import { createCommandTracker, type CommandRegion, type CommandTracker } from "@/components/terminal/commandMarks";
+import { attachKeywordHighlighter, eraseRange, type KeywordHighlighter } from "@/components/terminal/keywordHighlighter";
+import { currentTerminalColors } from "@/utils/terminalColors";
 import { localReady, onLocalOutput, onLocalClosed } from "@/services/local";
 import { onSerialOutput, onSerialClosed } from "@/services/serial";
 import { sendSessionInput as sendSessionInputRaw, sendSessionResize } from "@/services/sessionInput";
 import { log } from "@/lib/logger";
 import { useThemeStore } from "@/stores/themeStore";
 import { useUIStore } from "@/stores/uiStore";
-import { useTerminalSettingsStore } from "@/stores/terminalSettingsStore";
 import { getToggle, useToggleSettingsStore } from "@/stores/toggleSettingsStore";
 import { matchShortcut } from "@/stores/shortcutStore";
+import { primaryOnly } from "@/utils/primaryModifier";
+import { matchPanelShortcut } from "@/hooks/panelShortcuts";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useTerminalCwdStore } from "@/stores/terminalCwdStore";
 import { broadcastActiveForSession, findLeaf, getPaneSessionIds, useLayoutStore } from "@/stores/layoutStore";
 import { broadcastTargets } from "@/services/broadcast";
-import { useCommandHistoryStore } from "@/stores/commandHistoryStore";
+import { forgetSession, useCommandHistoryStore, type EchoProbe } from "@/stores/commandHistoryStore";
+import { terminalEchoProbe } from "@/components/terminal/inputEcho";
 import { consumeLatchForChar } from "@/stores/modifierLatchStore";
 import { sampleLineDensities, scrollDeltaForRatio, type TerminalMinimapCell, type TerminalMinimapSample } from "@/components/terminal/minimapMath";
 import { wheelToRows } from "@/components/terminal/terminalWheelCore";
@@ -29,8 +36,11 @@ import { handleDuplicateShortcut } from "@/services/duplicateSession";
 import type { TerminalTheme } from "@/themes/types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { terminalFontStack } from "@/utils/fontStack";
-import { applyTerminalTheme, clampTerminalLineHeight, subscribeTerminalCursor, subscribeTerminalTheme } from "@/utils/terminalTheme";
+import { applyTerminalTheme, subscribeTerminalCursor, terminalOptionsFor, subscribeTerminalTheme } from "@/utils/terminalTheme";
 import { getPlatform } from "@/utils/platform";
+import { createOutputDecoder, encodeTerminalInput, type OutputDecoder } from "@/utils/terminalEncoding";
+import i18n from "@/i18n";
+import { pasteClipboardImage } from "@/services/terminalImagePaste";
 
 interface UseTerminalOptions {
   sessionId: string;
@@ -60,6 +70,11 @@ function sendResize(sessionId: string, sessionType: "ssh" | "local" | "serial", 
   });
 }
 
+/** Dim marker line written into the buffer when a session ends. */
+function closedBanner(key: string): string {
+  return `\r\n\x1b[90m--- ${i18n.t(key)} ---\x1b[0m\r\n`;
+}
+
 function isHttpUrl(uri: string) {
   try {
     const url = new URL(uri);
@@ -70,7 +85,7 @@ function isHttpUrl(uri: string) {
 }
 
 // Single opener for every link path in a terminal: the regex matcher
-// (WebLinksAddon), OSC 8 hyperlinks (linkHandler), and the alt+click capture
+// (createWrappedLinkProvider), OSC 8 hyperlinks (linkHandler), and the alt+click capture
 // that runs while a TUI holds the mouse.
 function openTerminalLink(event: MouseEvent, uri: string) {
   if (!event.altKey || !isHttpUrl(uri)) return;
@@ -138,12 +153,16 @@ export interface TerminalMinimapSnapshot {
   rows: number;
   cols: number;
   version: number;
+  /** Bumps only when the buffer's text may have changed (output, buffer switch, resize), not on scroll. */
+  contentVersion: number;
 }
 
 interface MinimapState {
   snapshot: TerminalMinimapSnapshot;
   subscribers: Set<() => void>;
   frame: number | null;
+  /** Content changed since the last snapshot. */
+  contentDirty: boolean;
 }
 
 export interface TerminalMinimapController {
@@ -154,18 +173,18 @@ export interface TerminalMinimapController {
   focus: () => void;
 }
 
-type CacheEntry = {
-  terminal: Terminal;
-  fitAddon: FitAddon;
+type CacheEntry = CachedTerminal & {
   searchAddon: SearchAddon;
   search: SearchState;
   minimap: MinimapState;
+  commands: CommandTracker;
+  highlighter: KeywordHighlighter | null;
+  echoProbe: EchoProbe;
   sessionType: "ssh" | "local" | "serial";
   connectedRef: { current: boolean };
-  /** Clipboard handle of the mount this terminal is currently attached to. Lives
-   *  on the entry, not on the hook: a mount that switches session keeps its refs,
-   *  so a hook-owned handle would send this terminal's Ctrl+V to the new session. */
-  clip: TerminalClipboardHandle | null;
+  /** The session's terminal encoding (undefined = UTF-8), for input and output alike. */
+  encoding: string | undefined;
+  outputDecoder: OutputDecoder;
   /** Mirror of the useTerminal `inputGate` so module-level senders (writeToSession)
    *  honor the same multiplayer control-holder gate as the onData handler. */
   inputGateRef: { current: (() => boolean) | undefined };
@@ -196,18 +215,21 @@ function notifySearch(entry: CacheEntry) {
 
 function minimapSnapshot(entry: CacheEntry): TerminalMinimapSnapshot {
   const buffer = entry.terminal.buffer.active;
+  const prev = entry.minimap.snapshot;
   return {
     bufferLength: buffer.length,
     viewportY: buffer.viewportY,
     baseY: buffer.baseY,
     rows: entry.terminal.rows,
     cols: entry.terminal.cols,
-    version: entry.minimap.snapshot.version + 1,
+    version: prev.version + 1,
+    contentVersion: prev.contentVersion + (entry.minimap.contentDirty ? 1 : 0),
   };
 }
 
 function notifyMinimap(entry: CacheEntry) {
   entry.minimap.snapshot = minimapSnapshot(entry);
+  entry.minimap.contentDirty = false;
   entry.minimap.subscribers.forEach((fn) => fn());
 }
 
@@ -286,7 +308,9 @@ function noteRestoreOutput(sessionId: string): void {
   timers.settle = setTimeout(() => applyRestoreScroll(sessionId), RESTORE_SETTLE_MS);
 }
 
-function scheduleMinimapNotify(entry: CacheEntry) {
+/** `contentChanged` false = only the viewport moved, so the minimap can redraw from cached samples. */
+function scheduleMinimapNotify(entry: CacheEntry, contentChanged: boolean) {
+  if (contentChanged) entry.minimap.contentDirty = true;
   if (entry.minimap.frame !== null) return;
   entry.minimap.frame = requestAnimationFrame(() => {
     entry.minimap.frame = null;
@@ -383,7 +407,7 @@ function scrollMinimapToRatio(entry: CacheEntry, ratio: number) {
   const buffer = entry.terminal.buffer.active;
   const delta = scrollDeltaForRatio(ratio, buffer.length, entry.terminal.rows, buffer.viewportY);
   entry.terminal.scrollLines(delta);
-  scheduleMinimapNotify(entry);
+  scheduleMinimapNotify(entry, false);
 }
 
 function searchDecorations() {
@@ -467,17 +491,24 @@ export function refitSession(sessionId: string): void {
  *  Mirrors the onData path: honors the multiplayer input gate, respects connected state,
  *  records history, encodes + sends. Does not replicate the split-pane broadcast branch
  *  (mobile sends to the active session only). */
+/** Whether typed input would reach the session now: connected, and not held by a multiplayer gate. */
+export function sessionAcceptsInput(sessionId: string): boolean {
+  const entry = terminalCache.get(sessionId);
+  if (!entry) return false;
+  if (entry.inputGateRef.current && !entry.inputGateRef.current()) return false;
+  return entry.connectedRef.current;
+}
+
+function feedHistory(sessionId: string, probe: EchoProbe, kind: "addInput" | "addShellMark", data: string): void {
+  const sess = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
+  if (sess) useCommandHistoryStore.getState()[kind](sessionId, sess.connectionName, sess.connectionId, data, probe);
+}
+
 export function writeToSession(sessionId: string, data: string): void {
   const entry = terminalCache.get(sessionId);
-  if (!entry) return;
-  if (entry.inputGateRef.current && !entry.inputGateRef.current()) return;
-  if (!entry.connectedRef.current) return;
-  const sess = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
-  if (sess) {
-    useCommandHistoryStore.getState().addInput(sessionId, sess.connectionName, sess.connectionId, data);
-  }
-  const bytes = new TextEncoder().encode(data);
-  sendSessionInput(sessionId, entry.sessionType, bytes);
+  if (!entry || !sessionAcceptsInput(sessionId)) return;
+  feedHistory(sessionId, entry.echoProbe, "addInput", data);
+  sendSessionInput(sessionId, entry.sessionType, encodeTerminalInput(data, entry.encoding));
 }
 
 /** Whether the session's xterm is in application-cursor-keys mode (DECCKM).
@@ -495,14 +526,11 @@ export interface TerminalApi {
   viewportTop(): number;
   /** The live `.xterm-screen` element (for cell-metric measurement), or null. */
   screenEl(): HTMLElement | null;
-  /** Rendered text of an absolute buffer line (trimmed-right false). */
-  lineText(line: number): string;
-  select(col: number, line: number, len: number): void;
-  selectLines(start: number, end: number): void;
-  selectAll(): void;
-  clearSelection(): void;
-  getSelection(): string;
-  getSelectionPosition(): IBufferRange | undefined;
+  bufferLength(): number;
+  line(i: number): IBufferLine | undefined;
+  font(): { family: string; size: number };
+  scrollToLine(line: number): void;
+  mouseMode(): boolean;
   paste(text: string): void;
 }
 
@@ -524,13 +552,11 @@ export function getTerminalApi(sessionId: string): TerminalApi | null {
     rows: () => term.rows,
     viewportTop: () => term.buffer.active.viewportY,
     screenEl: () => term.element?.querySelector<HTMLElement>(".xterm-screen") ?? null,
-    lineText: (line) => term.buffer.active.getLine(line)?.translateToString(false) ?? "",
-    select: (col, line, len) => term.select(col, line, len),
-    selectLines: (start, end) => term.selectLines(start, end),
-    selectAll: () => term.selectAll(),
-    clearSelection: () => term.clearSelection(),
-    getSelection: () => term.getSelection(),
-    getSelectionPosition: () => term.getSelectionPosition(),
+    bufferLength: () => term.buffer.active.length,
+    line: (i) => term.buffer.active.getLine(i),
+    font: () => ({ family: term.options.fontFamily ?? "monospace", size: term.options.fontSize ?? 14 }),
+    scrollToLine: (line) => term.scrollToLine(line),
+    mouseMode: () => term.modes.mouseTrackingMode !== "none",
     paste: (text) => term.paste(text),
   };
 }
@@ -562,11 +588,20 @@ export function readTerminalSnapshot(sessionId: string, maxLines = 200): string 
  */
 export function readTerminalSelection(sessionId: string): string {
   const entry = terminalCache.get(sessionId);
-  if (!entry) return "";
-  return entry.terminal.getSelection();
+  return entry ? selectionOf(entry) : "";
+}
+
+function selectionOf(entry: CacheEntry): string {
+  return entry.clip?.selectionText() ?? entry.terminal.getSelection();
 }
 
 /** Test seam: replace the module-private terminal cache. Do not use in app code. */
+/** The session's prompts and commands, oldest first, as reported by OSC 133. Empty
+ *  for shells that send no marks. */
+export function getCommandRegions(sessionId: string): CommandRegion[] {
+  return terminalCache.get(sessionId)?.commands.regions() ?? [];
+}
+
 export function __setTerminalCacheForTest(next: typeof terminalCache): void {
   terminalCache.clear();
   for (const [k, v] of next) terminalCache.set(k, v);
@@ -583,7 +618,7 @@ export function getTerminalSearchController(sessionId: string): TerminalSearchCo
       const cur = entry.search.snapshot;
       const wasOpen = cur.open;
       // Only pre-fill from a single-line terminal selection on the first open.
-      const selection = entry.terminal.getSelection();
+      const selection = selectionOf(entry);
       const initialQuery =
         !wasOpen && selection && !selection.includes("\n") ? selection : cur.query;
       entry.search.snapshot = {
@@ -657,7 +692,7 @@ function claimChord(e: KeyboardEvent): false {
 
 /** Ctrl+G / Shift+Ctrl+G — the search widget's find-next / find-previous chord. */
 export function isTerminalSearchNavKey(e: KeyboardEvent): boolean {
-  return e.ctrlKey && !e.altKey && (e.key === "g" || e.key === "G");
+  return primaryOnly(e) && !e.altKey && (e.key === "g" || e.key === "G");
 }
 
 /**
@@ -678,23 +713,19 @@ export function handleTerminalSearchNav(sessionId: string, e: KeyboardEvent): bo
   return true;
 }
 
-useSessionStore.subscribe((state) => {
-  const currentIds = new Set(state.sessions.map((s) => s.id));
-  for (const [id, entry] of terminalCache) {
-    if (!currentIds.has(id)) {
-      entry.dispose();
-      terminalCache.delete(id);
-    }
-  }
+useSessionStore.subscribe((state, prev) => {
+  disposeClosedTerminals(terminalCache, state.sessions);
 
   // Local sessions ride the same transition as SSH: the terminal mounts while
   // the session is still "connecting", so treating it as connected before the
   // backend registered it sent resizes at a session id the backend answered
   // with "Session not found".
   for (const [id, entry] of terminalCache) {
-    if (entry.sessionType === "serial") continue;
     const session = state.sessions.find((s) => s.id === id);
     const nowConnected = session?.status === "connected";
+    // A character cut off by the drop must not prefix the reconnect's output.
+    if (!nowConnected && prev.sessions.find((s) => s.id === id)?.status === "connected") entry.outputDecoder.reset();
+    if (entry.sessionType === "serial") continue;
     if (nowConnected && !entry.connectedRef.current) {
       entry.connectedRef.current = true;
       entry.fitAddon.fit();
@@ -708,8 +739,6 @@ useSessionStore.subscribe((state) => {
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encoding, onResize }: UseTerminalOptions) {
-  const mountCleanupRef = useRef<(() => void) | null>(null);
-
   // Keep the cached entry's callback refs current on every render
   useEffect(() => {
     const entry = terminalCache.get(sessionId);
@@ -720,79 +749,25 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
     }
   });
 
-  // Container-specific listeners, registered on each mount and torn down when
-  // the ref detaches. The teardown also pulls the terminal element out of the
-  // container: a pane that switches session keeps the same container node, so
-  // leaving the old element behind would show the previous session's buffer.
-  const bindContainer = useCallback((entry: CacheEntry, container: HTMLDivElement) => {
-    const { terminal, fitAddon } = entry;
-    const clip = attachTerminalClipboard(terminal, container, { osc52: true });
-    entry.clip = clip;
-
-    const handleWindowResize = () => fitAddon.fit();
-    window.addEventListener("resize", handleWindowResize);
-
-    let fitTimer: ReturnType<typeof setTimeout> | null = null;
-    const resizeObserver = new ResizeObserver(() => {
-      if (fitTimer !== null) clearTimeout(fitTimer);
-      fitTimer = setTimeout(() => { fitTimer = null; fitAddon.fit(); }, 50);
-    });
-    resizeObserver.observe(container);
-
-    mountCleanupRef.current = () => {
-      clip.dispose();
-      if (entry.clip === clip) entry.clip = null;
-      window.removeEventListener("resize", handleWindowResize);
-      resizeObserver.disconnect();
-      if (fitTimer !== null) clearTimeout(fitTimer);
-      terminal.element?.remove();
-      mountCleanupRef.current = null;
-    };
-  }, []);
-
-  const attach = useCallback(
-    (container: HTMLDivElement | null) => {
-      // React hands the ref a null when the callback identity changes (session
-      // switch on a live pane) as well as on unmount — both mean "detach".
-      if (!container) {
-        mountCleanupRef.current?.();
-        return;
-      }
-      if (mountCleanupRef.current) return;
-
+  const attach = useTerminalMount(
+    (container): CacheEntry => {
       const existing = terminalCache.get(sessionId);
 
       // ── Reuse existing terminal ───────────────────────────────────────────
       if (existing) {
-        const { terminal, fitAddon } = existing;
         existing.inputGateRef.current = inputGate?.current;
         existing.onClosedRef.current = onClosed;
         existing.onResizeRef.current = onResize;
-
-        if (terminal.element) container.appendChild(terminal.element);
-
-        fitAddon.fit();
-
-        bindContainer(existing, container);
-        return;
+        reattachTerminal(existing, container);
+        return existing;
       }
 
       // ── Create new terminal ───────────────────────────────────────────────
       const activeTheme = useThemeStore.getState().getActiveTheme();
-      const { scrollbackLines: scrollback, cursorStyle } = useTerminalSettingsStore.getState();
       const term = new Terminal({
+        ...terminalOptionsFor(activeTheme),
         altClickMovesCursor: false,
-        // macOS has no Shift bypass for mouse-reporting apps; Alt+click is the only one.
-        macOptionClickForcesSelection: true,
-        cursorBlink: getToggle("cursor-blink"),
-        cursorStyle,
-        fontSize: activeTheme.terminalFontSize,
-        lineHeight: clampTerminalLineHeight(activeTheme.terminalLineHeight),
-        fontFamily: terminalFontStack(activeTheme.terminalFontFamily),
-        scrollback,
-        theme: activeTheme.terminal,
         overviewRuler: { width: 4 },
-        allowProposedApi: true,
         // Some remote prompts/programs (e.g. sudo password entry) don't
         // support bracketed paste and echo the \x1b[200~/201~ markers back
         // literally, corrupting the buffer. Let users opt out entirely.
@@ -846,12 +821,12 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
             tooltip.style.transform = "translateY(0)";
           });
         }
-        linkTooltip.textContent = "Alt+click to open";
+        linkTooltip.textContent = i18n.t("terminal.xterm.linkTooltip");
         linkTooltip.style.left = `${event.clientX + 12}px`;
         linkTooltip.style.top = `${event.clientY + 12}px`;
       };
 
-      term.loadAddon(new WebLinksAddon(openTerminalLink, {
+      term.registerLinkProvider(createWrappedLinkProvider(term, openTerminalLink, {
         hover: showLinkTooltip,
         leave: hideLinkTooltip,
       }));
@@ -867,9 +842,6 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         leave: hideLinkTooltip,
       };
 
-      const encoder = new TextEncoder();
-      const decoder = encoding ? new TextDecoder(encoding) : null;
-
       // Build the cache entry first so closures below can reference it
       const entry: CacheEntry = {
         terminal: term,
@@ -877,15 +849,29 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         searchAddon,
         search: { snapshot: { ...EMPTY_SNAPSHOT }, subscribers: new Set() },
         minimap: {
-          snapshot: { bufferLength: 0, viewportY: 0, baseY: 0, rows: term.rows, cols: term.cols, version: 0 },
+          snapshot: { bufferLength: 0, viewportY: 0, baseY: 0, rows: term.rows, cols: term.cols, version: 0, contentVersion: 0 },
           subscribers: new Set(),
           frame: null,
+          contentDirty: true,
         },
+        commands: createCommandTracker({
+          mark: (line) => {
+            const buf = term.buffer.active;
+            if (buf.type !== "normal") return null;
+            return term.registerMarker(line === undefined ? 0 : line - buf.baseY - buf.cursorY) ?? null;
+          },
+          col: () => term.buffer.active.cursorX,
+          now: Date.now,
+        }),
+        highlighter: null,
+        echoProbe: terminalEchoProbe(term),
         sessionType,
         // Serial is live the moment its port opens (the store marks it
         // connected before the terminal mounts); ssh and local flip in the
         // store subscription above, once the backend owns the session.
         connectedRef: { current: sessionType === "serial" },
+        encoding,
+        outputDecoder: createOutputDecoder(encoding),
         clip: null,
         inputGateRef: { current: inputGate?.current },
         onClosedRef: { current: onClosed },
@@ -901,27 +887,23 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
       });
 
       const scrollDispose = term.onScroll(() => {
-        scheduleMinimapNotify(entry);
+        scheduleMinimapNotify(entry, false);
         notifyScrollListeners();
       });
-      const bufferChangeDispose = term.buffer.onBufferChange(() => scheduleMinimapNotify(entry));
+      const bufferChangeDispose = term.buffer.onBufferChange(() => scheduleMinimapNotify(entry, true));
 
       // Intercept app shortcuts before xterm processes them
       term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
         const layout = useLayoutStore.getState();
         const isSplitPaneTerminal = layout.splitTabActive && getPaneSessionIds(layout.root).includes(sessionId);
-        if (isSplitPaneTerminal && e.ctrlKey && e.shiftKey && e.key === "Enter") {
+        if (isSplitPaneTerminal && primaryOnly(e) && e.shiftKey && e.key === "Enter") {
           if (e.type === "keydown") {
             const activePaneId = layout.activePaneId;
             if (activePaneId) layout.setMaximized(layout.maximizedPaneId === activePaneId ? null : activePaneId);
           }
           return false;
         }
-        if (isSplitPaneTerminal && e.key === "Escape" && layout.maximizedPaneId) {
-          if (e.type === "keydown") useLayoutStore.getState().setMaximized(null);
-          return false;
-        }
-        if (isSplitPaneTerminal && e.ctrlKey && e.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        if (isSplitPaneTerminal && primaryOnly(e) && e.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
           if (e.type === "keydown") {
             const direction = e.key === "ArrowLeft" ? "left" : e.key === "ArrowRight" ? "right" : e.key === "ArrowUp" ? "up" : "down";
             focusPaneInDirection(direction);
@@ -947,33 +929,25 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
           if (!handleTerminalSearchNav(sessionId, e)) return true;
           return claimChord(e);
         }
-        if (matchShortcut("history", e)) {
-          if (e.type === "keydown") useUIStore.getState().toggleRightPanel("history");
-          return false;
-        }
-        if (matchShortcut("snippets", e)) {
-          if (e.type === "keydown") useUIStore.getState().toggleRightPanel("snippets");
-          return false;
-        }
-        if (matchShortcut("panel-themes", e)) {
-          if (e.type === "keydown") useUIStore.getState().toggleRightPanel("themes");
+        const panelSection = matchPanelShortcut(e);
+        if (panelSection) {
+          if (e.type === "keydown") useUIStore.getState().toggleRightPanel(panelSection);
           return false;
         }
         if (handleDuplicateShortcut(e, sessionId)) return false;
         return true;
       });
 
-      // Route already-encoded input bytes to the PTY, fanning out to every pane
-      // when split-pane broadcast is active. Shared by typed input (onData) and
-      // synthesized alt-screen scroll arrows so both honor broadcast identically.
-      const routeInputBytes = (bytes: Uint8Array) => {
+      // Route input to the PTY, fanning out to every pane (each in its own encoding) under split-pane
+      // broadcast. Shared by typed input and synthesized alt-screen scroll arrows.
+      const routeInput = (data: string) => {
         if (broadcastActiveForSession(sessionId)) {
           for (const target of broadcastTargets()) {
-            sendSessionInput(target.id, target.type === "serial" ? "serial" : target.type as "ssh" | "local", bytes);
+            sendSessionInput(target.id, target.type === "serial" ? "serial" : target.type as "ssh" | "local", encodeTerminalInput(data, target.encoding));
           }
           return;
         }
-        sendSessionInput(sessionId, sessionType, bytes);
+        sendSessionInput(sessionId, sessionType, encodeTerminalInput(data, encoding));
       };
 
       // Alternate-screen scroll: full-screen apps (nano/less/vim) run in the
@@ -1008,7 +982,7 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
             alt: false,
             appCursor: term.modes.applicationCursorKeysMode,
           }).repeat(Math.abs(rows));
-          routeInputBytes(encoder.encode(seq));
+          routeInput(seq);
         }
         return false;
       });
@@ -1051,11 +1025,7 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         ta.spellcheck = false;
       });
 
-      try {
-        term.loadAddon(new WebglAddon());
-      } catch {
-        // WebGL not available, use default canvas renderer
-      }
+      claimWebglRenderer(term);
 
       // OSC 7 — shell-reported cwd (file://host/path). Used by the right-panel
       // SFTP tab's "follow cwd" feature. Silently no-ops for shells that don't
@@ -1087,6 +1057,29 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         return true;
       });
 
+      const oscMarkDispose = term.parser.registerOscHandler(133, (data) => {
+        entry.commands.handle(data);
+        feedHistory(sessionId, entry.echoProbe, "addShellMark", data);
+        return true;
+      });
+
+      entry.highlighter = attachKeywordHighlighter({
+        term,
+        spans: (top, bottom, bufferEnd) => entry.commands.outputSpans(top, bottom, bufferEnd),
+        isVisible: () => !entry.hidden,
+      });
+
+      // Erase in Display disposes the markers on the lines it wipes, so both mark holders hear of it first.
+      const eraseDispose = term.parser.registerCsiHandler({ final: "J" }, (params) => {
+        const buf = term.buffer.active;
+        if (buf.type !== "normal") return false;
+        const mode = Number(params[0] ?? 0);
+        const cursor = buf.baseY + buf.cursorY;
+        entry.commands.erased(mode === 3 ? buf.cursorY : cursor);
+        entry.highlighter?.erasing(...eraseRange(mode, buf.baseY, cursor));
+        return false;
+      });
+
       const onDataDispose = term.onData((data) => {
         if (inputGate && !inputGate.current?.()) return;
         if (!entry.connectedRef.current) return;
@@ -1096,48 +1089,51 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         const latched = consumeLatchForChar(data);
         if (latched !== null) data = latched;
 
-        const sess = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
-        if (sess) {
-          useCommandHistoryStore
-            .getState()
-            .addInput(sessionId, sess.connectionName, sess.connectionId, data);
-        }
-
-        routeInputBytes(encoder.encode(data));
+        feedHistory(sessionId, entry.echoProbe, "addInput", data);
+        routeInput(data);
       });
 
+      let queryGuard: IDisposable | null = null;
       const unlistenPromises: Promise<UnlistenFn>[] = [];
+      const writeOutput = (data: Uint8Array, flow?: OutputFlow) => {
+        const text = entry.outputDecoder.decode(data);
+        flow?.written(text.length);
+        term.write(text, () => {
+          flow?.processed(text.length);
+          scheduleMinimapNotify(entry, true);
+        });
+      };
 
       if (sessionType === "local") {
         const localListeners = [
-          onLocalOutput(sessionId, (data) => { term.write(decoder ? decoder.decode(data) : data, () => scheduleMinimapNotify(entry)); }),
-          onLocalClosed(sessionId, () => {
-            term.write("\r\n\x1b[90m--- Session closed ---\x1b[0m\r\n");
-            entry.onClosedRef.current?.(false);
+          onLocalOutput(sessionId, writeOutput),
+          onLocalClosed(sessionId, (cleanExit) => {
+            term.write(closedBanner("terminal.xterm.sessionClosed"));
+            entry.onClosedRef.current?.(cleanExit);
           }),
         ];
         unlistenPromises.push(...localListeners);
-        // A PTY writes its banner and first prompt before these listeners are
-        // registered — Tauri drops an emit with no listener, which left the
-        // terminal blank behind a live shell. The backend holds that output
-        // until this ack, then replays it.
+        // The backend holds the shell's banner and first prompt until this ack.
         void Promise.all(localListeners)
           .then(() => localReady(sessionId))
           .catch((err) => log.debug(`local session ${sessionId} readiness ack failed`, err));
       } else if (sessionType === "serial") {
         unlistenPromises.push(
-          onSerialOutput(sessionId, (data) => { term.write(decoder ? decoder.decode(data) : data, () => scheduleMinimapNotify(entry)); }),
+          onSerialOutput(sessionId, writeOutput),
         );
         unlistenPromises.push(
           onSerialClosed(sessionId, () => {
-            term.write("\r\n\x1b[90m--- Serial connection closed ---\x1b[0m\r\n");
+            term.write(closedBanner("terminal.xterm.serialClosed"));
             entry.onClosedRef.current?.(false);
           }),
         );
       } else {
+        const sshFlow = createOutputFlow((paused) => {
+          sshSetOutputPaused(sessionId, paused).catch(() => {});
+        });
         unlistenPromises.push(
           onSshOutput(sessionId, (data) => {
-            term.write(decoder ? decoder.decode(data) : data, () => scheduleMinimapNotify(entry));
+            writeOutput(data, sshFlow);
             noteRestoreOutput(sessionId);
           }),
         );
@@ -1153,11 +1149,16 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
             if (cwd) useTerminalCwdStore.getState().setCwd(sessionId, cwd);
           }),
         );
+        unlistenPromises.push(
+          onSshMuxMode(sessionId, (mode) => {
+            if (mode.control && !queryGuard) queryGuard = suppressTerminalQueries(term);
+          }),
+        );
       }
 
       const onResizeDispose = term.onResize(({ cols, rows }) => {
         entry.onResizeRef.current?.(cols, rows);
-        scheduleMinimapNotify(entry);
+        scheduleMinimapNotify(entry, true);
         if (!entry.connectedRef.current) return;
         sendResize(sessionId, sessionType, cols, rows);
       });
@@ -1169,6 +1170,9 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         onDataDispose.dispose();
         onResizeDispose.dispose();
         oscCwdDispose.dispose();
+        oscMarkDispose.dispose();
+        forgetSession(sessionId);
+        eraseDispose.dispose();
         searchResultsDispose.dispose();
         scrollDispose.dispose();
         bufferChangeDispose.dispose();
@@ -1177,12 +1181,14 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
         entry.minimap.subscribers.clear();
         hideLinkTooltip();
         Promise.all(unlistenPromises).then((fns) => fns.forEach((fn) => fn()));
+        queryGuard?.dispose();
+        entry.highlighter?.dispose();
         term.dispose();
       };
 
-      bindContainer(entry, container);
+      return entry;
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    { osc52: true, pasteImage: sessionType === "ssh" ? () => pasteClipboardImage(sessionId) : undefined },
     [sessionId, sessionType, encoding],
   );
 
@@ -1203,6 +1209,18 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
     });
   }, [sessionId]);
 
+  useEffect(() => {
+    if (sessionType === "local" || sessionType === "serial") return;
+    let last = JSON.stringify(currentTerminalColors());
+    return useThemeStore.subscribe(() => {
+      const colors = currentTerminalColors();
+      const next = JSON.stringify(colors);
+      if (!colors || next === last) return;
+      last = next;
+      sshSetTerminalColors(sessionId, colors).catch(() => {});
+    });
+  }, [sessionId, sessionType]);
+
   // Live cursor style/blink updates
   useEffect(() => {
     return subscribeTerminalCursor(() => terminalCache.get(sessionId)?.terminal);
@@ -1220,15 +1238,9 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
     return () => window.removeEventListener("theme-preview", handler);
   }, [sessionId]);
 
-  // Mount-only cleanup — does NOT dispose the terminal (cache survives unmount)
-  useEffect(() => {
-    return () => {
-      mountCleanupRef.current?.();
-    };
-  }, []);
-
-  const focus = useCallback(() => {
-    terminalCache.get(sessionId)?.terminal.focus();
+  const activate = useCallback(() => {
+    const entry = terminalCache.get(sessionId);
+    if (entry) activateTerminal(entry);
   }, [sessionId]);
 
   const fit = useCallback(() => {
@@ -1243,5 +1255,12 @@ export function useTerminal({ sessionId, sessionType, onClosed, inputGate, encod
     sendResize(sessionId, sessionType, term.cols, term.rows);
   }, [sessionId, sessionType]);
 
-  return { attach, focus, fit };
+  const setVisible = useCallback((visible: boolean) => {
+    const entry = terminalCache.get(sessionId);
+    if (!entry) return;
+    setTerminalVisible(entry, visible);
+    if (visible) entry.highlighter?.refresh();
+  }, [sessionId]);
+
+  return { attach, activate, fit, setVisible };
 }

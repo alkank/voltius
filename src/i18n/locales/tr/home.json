@@ -5,25 +5,13 @@
       "afternoon": "İyi günler",
       "evening": "İyi akşamlar"
     },
-    "search": {
-      "placeholder": "Sunucularda, oturumlarda ve kod parçacıklarında ara…"
-    },
-    "stat": {
-      "vaults": "kasa",
-      "hosts": "sunucu",
-      "activeSessions": "etkin oturum",
-      "portForwards": "port yönlendirme"
-    },
     "quickActions": {
       "export": "Dışa aktar",
       "import": "İçe aktar"
     },
     "recentHosts": {
       "title": "Son kullanılan sunucular",
-      "seeAll": "Tümünü gör",
-      "prevPage": "Önceki sayfa",
-      "nextPage": "Sonraki sayfa",
-      "pageNumber": "Sayfa {{number}}"
+      "seeAll": "Tümünü gör"
     },
     "allHosts": {
       "back": "Geri",
@@ -33,7 +21,16 @@
     "hostCard": {
       "pin": "Sabitle",
       "unpin": "Sabitlemeyi kaldır",
-      "baud": "{{rate}} baud"
+      "serial": "seri",
+      "baud": "{{rate}} baud",
+      "pinHost": "{{name}} sabitle",
+      "unpinHost": "{{name}} sabitlemesini kaldır",
+      "status": {
+        "up": "Erişilebilir",
+        "down": "Erişilemiyor",
+        "unknown": "Durum bilinmiyor",
+        "knock": "Port knocking yapılana kadar kapalı"
+      }
     },
     "serialFallback": "Seri",
     "vaultCard": {
@@ -41,6 +38,24 @@
       "hostCount_other": "{{count}} sunucu",
       "empty": "Henüz sunucu yok",
       "more": "+{{count}} daha"
+    },
+    "firstRun": {
+      "title": "İlk sunucunuza bağlanın",
+      "body": "Hemen bir terminal açmak için bir adres yazın veya saklamak için sunucu olarak ekleyin.",
+      "addressPlaceholder": "kullanici@sunucu veya kullanici@sunucu:2222",
+      "addressLabel": "Sunucu adresi",
+      "addressHint": "kullanici@sunucu biçimini kullanın; port 22 değilse :port ekleyin. Oturum davet kodları da burada çalışır.",
+      "join": "Katıl",
+      "importOther": "Başka bir uygulamadan içe aktar",
+      "localTerminal": "Yerel terminal aç",
+      "importSshConfig_one": "~/.ssh/config dosyasından {{count}} sunucuyu içe aktar",
+      "importSshConfig_other": "~/.ssh/config dosyasından {{count}} sunucuyu içe aktar"
+    },
+    "connect": {
+      "label": "Bir sunucuya bağlan",
+      "placeholder": "user@host, sunucu adı veya davet kodu",
+      "search": "Ara",
+      "searchEverything": "Her yerde ara"
     }
   }
 }

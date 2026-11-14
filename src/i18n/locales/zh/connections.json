@@ -25,8 +25,10 @@
       "manageInKeychain": "在密钥链中管理",
       "hostsChaining": "主机链",
       "environmentVariables": "环境变量",
-      "preCommandPlaceholder": "前置命令",
-      "postCommandPlaceholder": "后置命令",
+      "preCommandPlaceholder": "会话前置命令",
+      "postCommandPlaceholder": "会话后置命令",
+      "sessionCommands": "会话命令",
+      "sessionCommandsHint": "会话打开后在会话中运行，并在标签页关闭时运行。",
       "hostCommand": {
         "useSnippet": "使用代码片段",
         "useInline": "使用内联命令",
@@ -47,10 +49,14 @@
       "sectionCredentials": "凭据",
       "sectionIdentity": "身份",
       "sectionNotes": "备注",
-      "notesPlaceholder": "提醒、维护窗口、团队上下文…（与主机同步）",
       "protocol": "协议",
       "protocolSsh": "SSH / SFTP",
       "protocolFtp": "FTP",
+      "protocolWebdav": "WebDAV",
+      "webdavUrl": "服务器 URL",
+      "webdavUrlPlaceholder": "https://cloud.example.com/remote.php/dav/files/me/",
+      "webdavUrlInvalid": "请输入 http:// 或 https:// 地址，不要包含用户名、密码、? 或 #",
+      "webdavPlaintextWarning": "未加密——密码将以明文发送。如果服务器支持，请使用 https://。",
       "hostIp": "主机 / IP",
       "hostPlaceholder": "192.168.1.1",
       "legacyAlgorithms": "传统算法",
@@ -69,7 +75,34 @@
       "keychainIdentity": "密钥链身份",
       "passphrase": "口令",
       "optional": "（可选）",
-      "keyPassphrasePlaceholder": "密钥口令"
+      "keyPassphrasePlaceholder": "密钥口令",
+      "proxy": {
+        "label": "代理",
+        "inherit": "继承（{{label}}）",
+        "modes": {
+          "direct": "直连",
+          "system": "系统",
+          "socks5": "SOCKS5",
+          "http": "HTTP",
+          "https": "HTTPS"
+        },
+        "host": "代理主机",
+        "port": "代理端口",
+        "hostMissing": "代理设置为 {{kind}}，但未填写主机",
+        "portInvalid": "端口必须介于 1 到 65535 之间",
+        "username": "代理用户名",
+        "password": "代理密码",
+        "passwordSaved": "••• 已保存"
+      },
+      "connectAsHost": "主机凭据",
+      "sharedWithTeam": "与团队共享",
+      "youConnectAs": "你的连接身份",
+      "change": "更改",
+      "connectAsYours": "{{username}} · 你的，仅你可见",
+      "connectAsTeam": "{{username}} · 团队身份",
+      "connectAsAsk": "连接时会询问你",
+      "connectAsUnavailable": "你选择的身份不可用",
+      "connectNeedsHost": "输入主机后即可连接"
     },
     "distroIconPicker": {
       "title": "图标",
@@ -144,7 +177,9 @@
       "title": "身份",
       "noIdentityInline": "无身份——内联凭据",
       "badgeKey": "密钥",
-      "badgePwd": "密码"
+      "badgePwd": "密码",
+      "sharedGroup": "{{vault}} 保险库 · 共享",
+      "ownGroup": "你的身份 · 仅你可见"
     },
     "jumpHostsPanel": {
       "dragToReorderAriaLabel": "拖拽排序",
@@ -166,6 +201,40 @@
       "sectionSerialPort": "串口",
       "customBaudButton": "自定义",
       "presetBaudButton": "预设"
+    },
+    "vaultIdentity": {
+      "title": "你在 {{vault}} 的身份",
+      "subtitle": "仅你自己。队友永远看不到。",
+      "useOn": "用于没有共享凭据的 {{vault}} 主机",
+      "none": "无默认",
+      "noneHint": "没有凭据的主机会像现在一样询问你",
+      "footnote": "有共享凭据的主机保持不变。可用“以…身份连接”为单个主机覆盖。"
+    },
+    "knock": {
+      "title": "端口敲门",
+      "enable": "连接前先敲门",
+      "hint": "在每次 SSH、SFTP 和端口转发连接之前，从本设备经由此主机的代理发送。",
+      "viaBastion": "此主机通过 {{name}} 连接，因此 Voltius 会按 {{name}} 自己的敲门设置对其敲门。",
+      "sequence": "序列",
+      "reorderHint": "按住并拖动以重新排序 · 按此顺序发送",
+      "port": "端口",
+      "dragToReorder": "拖动以重新排序",
+      "remove": "移除端口",
+      "addPort": "添加端口",
+      "timing": "时间",
+      "delay": "敲门间隔",
+      "settle": "最后一次敲门后等待",
+      "window": "防火墙窗口",
+      "windowHint": "敲门后防火墙保持 SSH 开放的时长。可达性指示点只在此窗口内探测，因此主机卡片绝不会自行敲门。未知时请留空。",
+      "issue": {
+        "empty": "请至少添加一个端口。",
+        "port": "端口必须介于 1 到 65535 之间。",
+        "udp-proxy": "UDP 敲门无法通过此主机的代理。请使用 TCP 步骤或直接连接。",
+        "udp-system": "如果使用系统代理，UDP 敲门会失败。"
+      },
+      "serverTooOld": "此 Voltius 服务器版本过旧，无法为团队保险库中的主机存储端口敲门序列。请让管理员更新服务器后再在此使用端口敲门。",
+      "sequenceUnavailable": "此设备上没有该主机的敲门序列。",
+      "sequenceInvalid": "此主机的敲门序列无效。请在该主机的“端口敲门”设置中修正。"
     }
   }
 }

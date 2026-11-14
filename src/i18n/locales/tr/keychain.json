@@ -11,10 +11,7 @@
       "privateKey": "Özel anahtar",
       "publicKey": "Açık anahtar",
       "passphrase": "Parola ifadesi",
-      "addToHost": "Sunucuya ekle",
-      "disableCloudSync": "Bulut eşitlemeyi devre dışı bırak",
-      "enableCloudSync": "Bulut eşitlemeyi etkinleştir",
-      "cloudSyncDisabledTitle": "Bulut eşitleme devre dışı"
+      "addToHost": "Sunucuya ekle"
     },
     "toolbar": {
       "filterPlaceholder": "Filtrele...",
@@ -36,8 +33,6 @@
         "moveItemsTo_other": "{{count}} öğeyi şuraya taşı",
         "copyItemsTo_one": "{{count}} öğeyi şuraya kopyala",
         "copyItemsTo_other": "{{count}} öğeyi şuraya kopyala",
-        "enableCloudSync": "Bulut eşitlemeyi etkinleştir ({{count}})",
-        "disableCloudSync": "Bulut eşitlemeyi devre dışı bırak ({{count}})",
         "exportPublicKeys_one": "{{count}} açık anahtarı dışa aktar",
         "exportPublicKeys_other": "{{count}} açık anahtarı dışa aktar",
         "deleteItems_one": "{{count}} öğeyi sil",
@@ -98,7 +93,9 @@
       "unknownType": "Bilinmeyen tür",
       "invalidKey": "Geçersiz anahtar",
       "invalidPublicKey": "SSH açık anahtarı değil — tek satırda \"ssh-ed25519 AAAA… açıklama\" biçimi bekleniyor. Kaydedilemez ve bir sunucuya eklenemez.",
-      "keyPassphrasePlaceholder": "Anahtar parola ifadesi"
+      "keyPassphrasePlaceholder": "Anahtar parola ifadesi",
+      "incompleteKey": "Eksik anahtar",
+      "unrecognizedKey": "Tanınmayan anahtar biçimi"
     },
     "identityForm": {
       "titleEdit": "Kimliği düzenle",

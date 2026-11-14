@@ -1,22 +1,9 @@
-import { getVersion } from "@tauri-apps/api/app";
 import i18n from "@/i18n";
 import { appFetch } from "@/services/http";
+import { refuseIfPlanRequired } from "@/services/planRequired";
 import { getJwt, getServerUrl, isJwtExpiredOrExpiring, tryRefreshJwt } from "@/services/authTokens";
-
-// Cached: the app version cannot change while the process runs. Caching the
-// in-flight *promise* (not just the resolved value) means concurrent callers
-// share one getVersion() call instead of each firing their own. A rejection
-// clears the cache so the next call retries rather than inheriting a
-// poisoned value forever — see src/stores/marketplaceStore.ts for the sibling
-// pattern this follows.
-let versionPromise: Promise<string | null> | null = null;
-function clientVersion(): Promise<string | null> {
-  versionPromise ??= getVersion().catch(() => {
-    versionPromise = null; // retry next call rather than caching the failure
-    return null;
-  });
-  return versionPromise;
-}
+import { clientHeaders } from "@/services/clientHeaders";
+import type { RuleEntry } from "@/services/permissions";
 
 export type TeamObjectType =
   | "connection"
@@ -36,6 +23,8 @@ export interface TeamObjectRecord<T = unknown> {
   updated_at: string;
   updated_by: string;
   deleted_at?: string | null;
+  rule_set_id?: string | null;
+  my_permissions?: number;
 }
 
 export interface TeamSecretRecord {
@@ -53,6 +42,8 @@ export interface UpsertTeamObject<T = unknown> {
   name?: string | null;
   folder_id?: string | null;
   metadata: T;
+  rule_set_id?: string | null;
+  rules_from_folder?: string;
 }
 
 export interface UpsertTeamSecret {
@@ -89,24 +80,24 @@ async function ensureOk(res: Response, messageKey: string, opts?: { ignoreStatus
   throw apiError(i18n.t(messageKey, { status: res.status }), { status: res.status });
 }
 
-async function fetchTeamApi(path: string, init: RequestInit): Promise<Response> {
+async function requireServerUrl(): Promise<string> {
   const serverUrl = await getServerUrl();
   if (!serverUrl) throw apiError(i18n.t("common.error.notConnectedToServer"), { offline: true });
+  return serverUrl;
+}
+
+async function fetchTeamApi(path: string, init: RequestInit, opts?: { passPaymentRequired?: boolean }): Promise<Response> {
+  const serverUrl = await requireServerUrl();
 
   let jwt = await getJwt();
   if (!jwt || isJwtExpiredOrExpiring(jwt)) jwt = await tryRefreshJwt();
   if (!jwt) throw new Error(i18n.t("common.error.sessionExpired"));
 
-  const version = await clientVersion();
+  const capability = await clientHeaders();
   const makeHeaders = (token: string) => ({
+    ...capability,
     ...(init.headers as Record<string, string>),
     Authorization: `Bearer ${token}`,
-    // Lets a server opt into refusing writes from builds that predate the
-    // encrypted metadata format (#229). Compatibility only — spoofable, and
-    // never used for authorization. Omitted (rather than a fabricated
-    // sentinel) when the version can't be resolved: an absent header reads
-    // honestly as "unknown", unlike a lied-about "0.0.0".
-    ...(version !== null ? { "X-Client-Version": version } : {}),
   });
 
   let res = await appFetch(`${serverUrl}${path}`, { ...init, headers: makeHeaders(jwt) });
@@ -116,7 +107,7 @@ async function fetchTeamApi(path: string, init: RequestInit): Promise<Response> 
     res = await appFetch(`${serverUrl}${path}`, { ...init, headers: makeHeaders(newJwt) });
   }
   if (res.status === 403) throw apiError(i18n.t("common.error.noPermissionTeamVaultOp"), { status: res.status });
-  if (res.status === 402) throw apiError(i18n.t("common.error.teamVaultRequiresSubscription"), { status: res.status });
+  if (res.status === 402 && !opts?.passPaymentRequired) throw apiError(i18n.t("common.error.teamVaultRequiresSubscription"), { status: res.status });
   if (res.status === 426) throw apiError(i18n.t("common.error.clientTooOldForTeamVault"), { status: res.status });
   if (res.status === 429) {
     const retryAfter = parseInt(res.headers.get("Retry-After") ?? "60", 10);
@@ -143,6 +134,44 @@ export async function upsertTeamObject(teamId: string, object: UpsertTeamObject)
 export async function deleteTeamObject(teamId: string, objectId: string): Promise<void> {
   const res = await fetchTeamApi(`/v1/teams/${teamId}/objects/${objectId}`, { method: "DELETE" });
   await ensureOk(res, "common.error.failedToDeleteTeamObject");
+}
+
+async function ruleSetRequest(teamId: string, path: string, init: RequestInit, messageKey: string): Promise<Response> {
+  const res = await fetchTeamApi(`/v1/teams/${teamId}/rule-sets${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json" },
+  }, { passPaymentRequired: true });
+  refuseIfPlanRequired(res);
+  if (res.status === 413) throw apiError(i18n.t("common.error.tooManyRuleEntries"), { status: 413 });
+  await ensureOk(res, messageKey);
+  return res;
+}
+
+export async function createRuleSet(teamId: string, entries: RuleEntry[]): Promise<string> {
+  const res = await ruleSetRequest(teamId, "", { method: "POST", body: JSON.stringify({ entries }) }, "common.error.failedToSaveRuleSet");
+  return ((await res.json()) as { id: string }).id;
+}
+
+export async function copyRuleSet(teamId: string, setId: string): Promise<string> {
+  const res = await ruleSetRequest(teamId, `/${setId}/copy`, { method: "POST" }, "common.error.failedToSaveRuleSet");
+  return ((await res.json()) as { id: string }).id;
+}
+
+export interface RuleSetSnapshot {
+  entries: RuleEntry[];
+  updatedAt: string | null;
+}
+
+export async function getRuleSet(teamId: string, setId: string): Promise<RuleSetSnapshot> {
+  const res = await ruleSetRequest(teamId, `/${setId}`, { method: "GET" }, "common.error.failedToLoadRuleSet");
+  const body = (await res.json()) as { entries: RuleEntry[]; updated_at?: string };
+  return { entries: body.entries, updatedAt: body.updated_at ?? null };
+}
+
+// A stale `expectedUpdatedAt` is refused with 409; servers predating it ignore the field.
+export async function putRuleSet(teamId: string, setId: string, entries: RuleEntry[], expectedUpdatedAt: string | null = null): Promise<void> {
+  const body = expectedUpdatedAt === null ? { entries } : { entries, expected_updated_at: expectedUpdatedAt };
+  await ruleSetRequest(teamId, `/${setId}`, { method: "PUT", body: JSON.stringify(body) }, "common.error.failedToSaveRuleSet");
 }
 
 /**
@@ -196,6 +225,41 @@ export async function deleteTeamObjectPref(teamId: string, objectId: string): Pr
   });
   await ensureOk(res, "common.error.failedToDeleteTeamObjectPref", { ignoreStatus: 404 });
 }
+
+export interface IdentityPicksRecord {
+  objects: { object_id: string; identity_id: string; updated_at: string }[];
+  defaults: { team_id: string; identity_id: string; updated_at: string }[];
+}
+
+export async function fetchServerMeta(messageKey: string): Promise<Record<string, unknown>> {
+  const res = await appFetch(`${await requireServerUrl()}/v1/meta`, { method: "GET" });
+  await ensureOk(res, messageKey);
+  return res.json();
+}
+
+export async function listIdentityPicks(): Promise<IdentityPicksRecord | null> {
+  const meta = await fetchServerMeta("common.error.failedToListIdentityPicks");
+  if (meta.identity_picks !== true) return null;
+  const res = await fetchTeamApi("/v1/my/identity-picks", { method: "GET" });
+  await ensureOk(res, "common.error.failedToListIdentityPicks");
+  return res.json();
+}
+
+async function writeIdentityPick(path: string, identityId: string | null): Promise<void> {
+  const res = await fetchTeamApi(
+    `/v1/my/identity-picks/${path}`,
+    identityId === null
+      ? { method: "DELETE" }
+      : { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ identity_id: identityId }) },
+  );
+  await ensureOk(res, "common.error.failedToSaveIdentityPick");
+}
+
+export const setObjectPick = (objectId: string, identityId: string | null) =>
+  writeIdentityPick(`objects/${encodeURIComponent(objectId)}`, identityId);
+
+export const setTeamDefaultPick = (teamId: string, identityId: string | null) =>
+  writeIdentityPick(`teams/${teamId}`, identityId);
 
 export async function listTeamSecrets(teamId: string): Promise<TeamSecretRecord[]> {
   const res = await fetchTeamApi(`/v1/teams/${teamId}/secrets`, { method: "GET" });

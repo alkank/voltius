@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cardGridProps } from "@/components/shared/cardGrid";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { SectionHeader } from "@/components/shared/SectionHeader";
 import { useTranslation } from "react-i18next";
-import i18n from "@/i18n";
 import { Icon } from "@iconify/react";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { useSnippetStore } from "@/stores/snippetStore";
@@ -18,6 +20,7 @@ import { usePageBulkActions } from "@/hooks/usePageBulkActions";
 import { useDragToFolder } from "@/hooks/useDragToFolder";
 import { folderDragHandlers } from "@/utils/folderDragHandlers";
 import { useFolderNavigation } from "@/hooks/useFolderNavigation";
+import { useNewFolder } from "@/hooks/useNewFolder";
 import { useEffectivePinnedPredicate } from "@/hooks/useEffectivePinned";
 import { useAllSnippets } from "@/hooks/useAllSnippets";
 import { useAllSnippetFolders } from "@/hooks/useAllSnippetFolders";
@@ -30,7 +33,7 @@ import {
   parseVariables,
   needsUserInput,
 } from "@/services/snippetParser";
-import { snippetScriptText, snippetSearchText } from "@/services/snippetSteps";
+import { snippetMatcher, snippetScriptText } from "@/services/snippetSteps";
 import { runSnippetIntoSessions } from "@/services/snippetRun";
 import { snippetToForm } from "@/utils/snippetForm";
 import { usePageClipboard } from "@/hooks/usePageClipboard";
@@ -45,6 +48,7 @@ import { clipboardMenuItems } from "@/utils/clipboardMenuItems";
 import { SidePanelLayout } from "@/components/shared/SidePanelLayout";
 import { useEditPanel } from "@/hooks/useEditPanel";
 import { useSyncedFormKey } from "@/hooks/useSyncedFormKey";
+import { useCloseWhenGone } from "@/hooks/useCloseWhenGone";
 import { SnippetsToolbar } from "./SnippetsToolbar";
 import { CommunityBrowser } from "./community/CommunityBrowser";
 import { ShareSnippetModal } from "./community/ShareSnippetModal";
@@ -52,21 +56,24 @@ import { SnippetCard } from "./SnippetCard";
 import { SnippetForm } from "./SnippetForm";
 import { FolderCard } from "@/components/folders/FolderCard";
 import { FolderEditPanel } from "@/components/folders/FolderEditPanel";
+import { FolderEmptyState } from "@/components/folders/FolderEmptyState";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import type { Snippet, Folder, SnippetFormData, Connection } from "@/types";
 import type { SortMode } from "@/components/shared/ToolbarViewControls";
 import { buildTeamVaultTransferPlan, type TransferOperation } from "@/services/teamVaultPermissions";
 import { useSnippetRecentStore, type RecentSnippetExecution, type RecentTarget } from "@/stores/snippetRecentStore";
 import { selectRecentSnippetEntries } from "@/utils/snippetRecent";
-import { descendantFolders, itemsInFolderSubtree } from "@/utils/folderTree";
+import { descendantFolders, foldersOutsideSubtree, itemsInFolderSubtree, folderItemCounter } from "@/utils/folderTree";
+import { exceptItems, folderAwareKeys, selectFollowing } from "@/utils/cardInteraction";
 import { folderDeleteMessages } from "@/utils/folderDeleteMessages";
 import { useVaultOptions } from "@/hooks/useVaultOptions";
 import { useScopedFolders } from "@/hooks/useScopedFolders";
-import { useDefaultVaultId } from "@/hooks/useWritableVaultIds";
 import { FolderBreadcrumb } from "@/components/folders/FolderBreadcrumb";
 import { FolderEjectZone } from "@/components/folders/FolderEjectZone";
 import { cloneFolderTree, copyFolderSubtree } from "@/utils/folderCopy";
 import { moveFolderTreeToVault } from "@/utils/folderMove";
+import { copyingRulesOf } from "@/services/ruleSetIntent";
+import { compareStrings, formatRelative } from "@/utils/localeFormat";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,26 +89,12 @@ function isContextuallyRelevant(snippet: Snippet, conn: Connection | undefined):
 
 function sortSnippets(list: Snippet[], mode: SortMode): Snippet[] {
   return [...list].sort((a, b) => {
-    if (mode === "name-asc")  return a.name.localeCompare(b.name);
-    if (mode === "name-desc") return b.name.localeCompare(a.name);
+    if (mode === "name-asc")  return compareStrings(a.name, b.name);
+    if (mode === "name-desc") return compareStrings(b.name, a.name);
     if (mode === "newest")    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     if (mode === "oldest")    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     return 0;
   });
-}
-
-function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts;
-  const s = Math.floor(diff / 1000);
-  if (s < 5) return i18n.t("snippets.page.relativeTime.justNow");
-  if (s < 60) return i18n.t("snippets.page.relativeTime.secondsAgo", { count: s });
-  const m = Math.floor(s / 60);
-  if (m < 60) return i18n.t("snippets.page.relativeTime.minutesAgo", { count: m });
-  const h = Math.floor(m / 60);
-  if (h < 24) return i18n.t("snippets.page.relativeTime.hoursAgo", { count: h });
-  const d = Math.floor(h / 24);
-  if (d < 7) return i18n.t("snippets.page.relativeTime.daysAgo", { count: d });
-  return new Date(ts).toLocaleDateString();
 }
 
 // ─── Recent section ────────────────────────────────────────────────────────────
@@ -184,7 +177,7 @@ function RecentCard({ entry, snippet, layout, onReplay, onRemove }: RecentCardPr
                 <p className="text-sm font-bold truncate text-(--t-text-bright) flex-1 min-w-0">{label}</p>
                 {modeBadge}
               </div>
-              <p className="text-xs text-(--t-text-muted) truncate">{formatRelativeTime(entry.timestamp)}</p>
+              <p className="text-xs text-(--t-text-muted) truncate">{formatRelative(entry.timestamp, { seconds: true, maxDays: 7 })}</p>
             </div>
           </div>
 
@@ -221,7 +214,7 @@ function RecentCard({ entry, snippet, layout, onReplay, onRemove }: RecentCardPr
           <Icon icon={hostIcon} width={10} className="shrink-0 text-(--t-text-dim)" />
           <span className="text-xs text-(--t-text-muted) truncate">{host}</span>
           <span className="text-xs text-(--t-text-dim)">·</span>
-          <span className="text-xs text-(--t-text-dim)">{formatRelativeTime(entry.timestamp)}</span>
+          <span className="text-xs text-(--t-text-dim)">{formatRelative(entry.timestamp, { seconds: true, maxDays: 7 })}</span>
         </div>
       </div>
 
@@ -231,21 +224,6 @@ function RecentCard({ entry, snippet, layout, onReplay, onRemove }: RecentCardPr
         {replayButton}
       </div>
     </BaseCard>
-  );
-}
-
-// ─── Section header ────────────────────────────────────────────────────────────
-
-function SectionHeader({ label, count }: { label: string; count?: number }) {
-  return (
-    <div className="flex items-center justify-between mb-2">
-      <p className="text-xs font-bold uppercase tracking-widest text-(--t-text-dim)">
-        {label}
-        {count !== undefined && (
-          <span className="ml-2 font-normal normal-case tracking-normal">{count}</span>
-        )}
-      </p>
-    </div>
   );
 }
 
@@ -266,41 +244,6 @@ function SkeletonList() {
     </div>
   );
 }
-
-// ─── Empty state ──────────────────────────────────────────────────────────────
-
-function EmptyState({ onAdd }: { onAdd: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 text-center py-16">
-      <div
-        className="flex items-center justify-center rounded-3xl w-[5.333rem] h-[5.333rem] text-(--t-text-dim)"
-        style={{
-          background: "linear-gradient(135deg, var(--t-bg-elevated) 0%, var(--t-bg-card) 100%)",
-          border: "1px solid var(--t-border)",
-        }}
-      >
-        <Icon icon="lucide:braces" width={36} />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <span className="text-base font-semibold text-(--t-text-primary)">{t("snippets.page.emptyState.title")}</span>
-        <span className="text-sm text-(--t-text-dim) max-w-[18rem]">
-          {t("snippets.page.emptyState.subtitle")}
-        </span>
-      </div>
-      <button
-        onClick={onAdd}
-        className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-colors bg-(--t-bg-elevated) text-(--t-accent) border border-(--t-border-hover)"
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--t-bg-card-hover)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "var(--t-bg-elevated)")}
-      >
-        <Icon icon="lucide:plus" width={15} />
-        {t("snippets.page.emptyState.cta")}
-      </button>
-    </div>
-  );
-}
-
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
@@ -325,7 +268,6 @@ export function SnippetsPage() {
   const selectedVaultIds = useVaultStore((s) => s.selectedVaultIds);
   const accessibleVaultIds = useAccessibleVaultIds();
   const scopedVaultId = useScopedVaultId();
-  const defaultVaultId = useDefaultVaultId();
   const can = usePermissions();
 
   const vaultOptions = useVaultOptions();
@@ -356,8 +298,9 @@ export function SnippetsPage() {
   const openSnippet = useCallback((item: Snippet | "new") => {
     snippetIsDirtyRef.current = false;
     formSessionKeyRef.current = item === "new" ? `new-${Date.now()}` : item.id;
+    folderEp.closeEdit();
     ep.openEdit(item);
-  }, [ep.openEdit]);
+  }, [ep.openEdit, folderEp.closeEdit]);
 
   useEffect(() => {
     if (snippetsPendingAction?.action === "create") {
@@ -368,6 +311,8 @@ export function SnippetsPage() {
   const liveEditingSnippet = ep.editing && ep.editing !== "new"
     ? (snippets.find((s) => s.id === (ep.editing as Snippet).id) ?? (ep.editing as Snippet))
     : null;
+  useCloseWhenGone(liveEditingSnippet?.id, snippets.some((s) => s.id === liveEditingSnippet?.id), ep.closeEdit);
+  useCloseWhenGone(editingFolder?.id, folders.some((f) => f.id === editingFolder?.id), folderEp.closeEdit);
   const snippetFormVersion = useSyncedFormKey(
     liveEditingSnippet?.updated_at,
     ep.panelOpen && ep.editing !== "new",
@@ -392,7 +337,8 @@ export function SnippetsPage() {
     navigateTo,
     navigateToRoot,
     onFolderDeleted,
-  } = useFolderNavigation(scopedFolders);
+  } = useFolderNavigation(scopedFolders, "snippet");
+  const { folderBlocked, newFolder } = useNewFolder("snippet", folderPath);
 
   useEffect(() => {
     void loadSnippets();
@@ -405,20 +351,17 @@ export function SnippetsPage() {
   const hasSearch = search.length > 0;
 
   // Base filter: search + vault access
-  const filtered = useMemo(() => sortSnippets(
-    snippets.filter((s) => {
-      const svid = s.vault_id ?? "personal";
-      if (accessibleVaultIds.length > 0 && !accessibleVaultIds.includes(svid)) return false;
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return (
-        s.name.toLowerCase().includes(q) ||
-        snippetSearchText(s).toLowerCase().includes(q) ||
-        s.tags.some((t) => t.toLowerCase().includes(q))
-      );
-    }),
-    sortMode,
-  ), [snippets, search, sortMode, accessibleVaultIds]);
+  const filtered = useMemo(() => {
+    const matches = snippetMatcher(search);
+    return sortSnippets(
+      snippets.filter((s) => {
+        const svid = s.vault_id ?? "personal";
+        if (accessibleVaultIds.length > 0 && !accessibleVaultIds.includes(svid)) return false;
+        return matches(s);
+      }),
+      sortMode,
+    );
+  }, [snippets, search, sortMode, accessibleVaultIds]);
 
   // Snippets visible in the current view (respects folder navigation)
   const viewSnippets = useMemo(() => {
@@ -427,28 +370,24 @@ export function SnippetsPage() {
     return filtered.filter((s) => !s.folder_id || !allFolderIds.has(s.folder_id));
   }, [filtered, hasSearch, activeFolderId, allFolderIds]);
 
-  const filteredIds = useMemo(
-    () => [...visibleFolders.map((f) => f.id), ...viewSnippets.map((s) => s.id)],
-    [visibleFolders, viewSnippets],
-  );
-
   const isPinnedFn = useEffectivePinnedPredicate();
   const favorites = useMemo(
     () => (!hasSearch && !activeFolderId) ? filtered.filter((s) => isPinnedFn(s, "snippet")) : [],
     [filtered, hasSearch, activeFolderId, isPinnedFn],
+  );
+  const mainSnippets = useMemo(() => exceptItems(viewSnippets, favorites), [viewSnippets, favorites]);
+  const shownSnippets = useMemo(() => [...favorites, ...mainSnippets], [favorites, mainSnippets]);
+
+  const filteredIds = useMemo(
+    () => [...favorites, ...visibleFolders, ...mainSnippets].map((x) => x.id),
+    [favorites, visibleFolders, mainSnippets],
   );
   const scopedRecentEntries = useMemo(
     () => selectRecentSnippetEntries(recentEntries, filtered),
     [recentEntries, filtered],
   );
 
-  const folderCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const s of snippets) {
-      if (s.folder_id) counts[s.folder_id] = (counts[s.folder_id] ?? 0) + 1;
-    }
-    return counts;
-  }, [snippets]);
+  const folderCount = useMemo(() => folderItemCounter(snippets, scopedFolders), [snippets, scopedFolders]);
 
   // ── Drag selection ───────────────────────────────────────────────────────
 
@@ -468,23 +407,18 @@ export function SnippetsPage() {
     [visibleFolders, selectedIdSet],
   );
 
+  const editSnippet = (id: string) => { const s = shownSnippets.find((s) => s.id === id); if (s) openSnippet(s); };
+  const editFolder = (folder: Folder) => { ep.closeEdit(); folderEp.transitionToExisting(folder); };
+  const panelOpen = ep.panelOpen || folderEp.panelOpen;
+
   const { focusedId, setFocusedId } = useListKeyNav({
     orderedIds: filteredIds,
     selectedIdSet,
     selectSingle,
     setSelection,
     itemAreaRef,
-    layoutMode: "list",
-    onEnter: (id) => {
-      const folder = visibleFolders.find((f) => f.id === id);
-      if (folder) { navigateInto(folder); return; }
-      const s = viewSnippets.find((s) => s.id === id);
-      if (s) openSnippet(s);
-    },
-    onEdit: (id) => {
-      const s = viewSnippets.find((s) => s.id === id);
-      if (s) openSnippet(s);
-    },
+    layoutMode,
+    ...folderAwareKeys(visibleFolders, { open: navigateInto, edit: editFolder }, { enter: editSnippet, edit: editSnippet }),
     onDuplicate: (id) => {
       const s = snippets.find((s) => s.id === id);
       if (s) void handleDuplicate(s);
@@ -589,18 +523,18 @@ export function SnippetsPage() {
   const bulkContextMenuItems = useMemo<ContextMenuItem[] | undefined>(() => {
     if (selectedIdSet.size <= 1) return undefined;
     const ids = [...selectedIdSet];
-    const selectedSnippets = viewSnippets.filter((s) => selectedIdSet.has(s.id));
+    const selectedSnippets = shownSnippets.filter((s) => selectedIdSet.has(s.id));
     const selectedSnippetFolderIds = selectedFolders.map((f) => f.id);
     const { isObjectSynced } = useSyncPrefsStore.getState();
     const allSynced = selectedSnippets.every((s) => isObjectSynced(s.id, "snippet"));
-    const allCanEdit = selectedSnippets.every((s) => can("EDIT_SNIPPETS", s.vault_id ?? "personal"));
+    const allCanEdit = selectedSnippets.every((s) => can("EDIT_SNIPPETS", s.vault_id ?? "personal", s.id));
     const bulkVaultChildren = (operation: TransferOperation): ContextMenuItem[] => vaultOptions
       .filter((v) => [...selectedSnippets.map((s) => s.vault_id ?? "personal"), ...selectedFolders.map((f) => f.vault_id ?? "personal")].some((sourceVaultId) => sourceVaultId !== v.id))
       .filter((v) => buildTeamVaultTransferPlan({
         operation,
         targetVaultId: v.id,
         selected: { snippetIds: selectedSnippets.map((s) => s.id), snippetFolderIds: selectedSnippetFolderIds },
-        can: (permission, vaultId) => can(permission, vaultId),
+        can,
         connections: [],
         identities: [],
         keys: [],
@@ -641,7 +575,7 @@ export function SnippetsPage() {
         children: copyChildren,
       }] : []),
       {
-        label: allSynced ? t("snippets.page.bulk.disableCloudSync", { count: ids.length }) : t("snippets.page.bulk.enableCloudSync", { count: ids.length }),
+        label: allSynced ? t("common.objectSync.disableCount", { count: ids.length }) : t("common.objectSync.enableCount", { count: ids.length }),
         icon: allSynced ? "lucide:cloud-off" : "lucide:cloud",
         onClick: () => {
           const store = useSyncPrefsStore.getState();
@@ -668,7 +602,7 @@ export function SnippetsPage() {
       },
     ];
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIdSet, viewSnippets, selectedFolders, excludedIds, syncTypes, can, vaultOptions, snippets, folders, t]);
+  }, [selectedIdSet, shownSnippets, selectedFolders, excludedIds, syncTypes, can, vaultOptions, snippets, folders, t]);
 
   // ── Injection ────────────────────────────────────────────────────────────
 
@@ -717,7 +651,7 @@ export function SnippetsPage() {
   }
 
   async function handleDuplicate(snippet: Snippet) {
-    await createSnippet({
+    await createSnippet(copyingRulesOf({
       name: `${snippet.name} (copy)`,
       steps: snippet.steps,
       description: snippet.description,
@@ -727,7 +661,7 @@ export function SnippetsPage() {
       only_for_connection_tags: [...snippet.only_for_connection_tags],
       only_for_distros: [...snippet.only_for_distros],
       vault_id: snippet.vault_id,
-    });
+    }, snippet.id));
   }
 
   async function handleToggleFavorite(snippet: Snippet) {
@@ -795,12 +729,12 @@ export function SnippetsPage() {
 
   async function handleCopyToVault(snippet: Snippet, vaultId: string) {
     const destHasName = snippets.some((s) => (s.vault_id ?? "personal") === vaultId && s.name === snippet.name);
-    await createSnippet({
+    await createSnippet(copyingRulesOf({
       ...snippetToForm(snippet),
       name: destHasName ? `${snippet.name} (copy)` : snippet.name,
       vault_id: vaultId,
       favorite: false,
-    });
+    }, snippet.id));
   }
 
   // ── Folder vault move / copy ──────────────────────────────────────────────
@@ -843,7 +777,7 @@ export function SnippetsPage() {
       for (const s of treeSnippets) {
         const newFolderId = s.folder_id ? (folderIdMap.get(s.folder_id) ?? newRootId) : newRootId;
         const destHasSnippetName = snippets.some((x) => (x.vault_id ?? "personal") === vaultId && x.name === s.name);
-        await createSnippet({ ...snippetToForm(s), name: destHasSnippetName ? `${s.name} (copy)` : s.name, folder_id: newFolderId, vault_id: vaultId, favorite: false });
+        await createSnippet(copyingRulesOf({ ...snippetToForm(s), name: destHasSnippetName ? `${s.name} (copy)` : s.name, folder_id: newFolderId, vault_id: vaultId, favorite: false }, s.id));
       }
     } catch (err) { console.error(err); }
   }
@@ -860,14 +794,14 @@ export function SnippetsPage() {
     folderId: string | null,
     opts: { vaultId?: string; keepName?: boolean } = {},
   ) {
-    return createSnippet({
+    return createSnippet(copyingRulesOf({
       ...snippetToForm(snippet),
       // default name suffix kept in English until all creation sites are localized together (see i18n issue #14)
       name: opts.keepName ? snippet.name : `${snippet.name} (copy)`,
       folder_id: folderId ?? undefined,
       vault_id: opts.vaultId ?? snippet.vault_id,
       favorite: false,
-    });
+    }, snippet.id));
   }
 
   /** Deep-clones a folder subtree under `parentFolderId`, into `vaultId` when given. */
@@ -906,12 +840,7 @@ export function SnippetsPage() {
 
   async function handleCreateFolder() {
     ep.closeEdit();
-    const folder = await saveFolder({
-      name: "New Folder" /* persisted English default; menu label is localized */,
-      object_type: "snippet",
-      parent_folder_id: activeFolderId ?? undefined,
-      vault_id: defaultVaultId,
-    });
+    const folder = await saveFolder(newFolder(t("snippets.toolbar.newFolder")));
     folderEp.transitionToExisting(folder);
   }
 
@@ -926,7 +855,7 @@ export function SnippetsPage() {
 
   function renderCard(s: Snippet) {
     const svid = s.vault_id ?? "personal";
-    const canEdit = can("EDIT_SNIPPETS", svid);
+    const canEdit = can("EDIT_SNIPPETS", svid, s.id);
     const otherVaults = vaultOptions.filter((v) => v.id !== svid);
     const syncEnabled = useSyncPrefsStore.getState().isObjectSynced(s.id, "snippet");
     return (
@@ -941,15 +870,11 @@ export function SnippetsPage() {
         dimmed={!isContextuallyRelevant(s, activeConn) || cutIds.has(s.id)}
         layout={layoutMode}
         onEdit={() => openSnippet(s)}
-        onSelect={(id, e) => {
-          handleItemSelect(id, e);
-          if (!e.ctrlKey && !e.metaKey && !e.shiftKey) openSnippet(s);
-        }}
+        onSelect={selectFollowing(handleItemSelect, panelOpen, () => openSnippet(s))}
         onInsert={(sessionIds) => void handleTrigger(s, false, sessionIds)}
         onExecute={(sessionIds) => void handleTrigger(s, true, sessionIds)}
         onDuplicate={() => void handleDuplicate(s)}
         onDelete={() => void deleteSnippet(s.id)}
-        onToggleFavorite={() => void handleToggleFavorite(s)}
         bulkContextMenuItems={bulkContextMenuItems}
         vaults={otherVaults}
         canEdit={canEdit}
@@ -966,21 +891,23 @@ export function SnippetsPage() {
     <>
     <SidePanelLayout
       panelOpen={ep.panelOpen || folderEp.panelOpen}
-      panelWidth={360}
+      panelWidth={editingFolder !== null ? 320 : 360}
       panel={
         editingFolder !== null ? (
           <FolderEditPanel
             key={editingFolder.id}
             folder={editingFolder}
-            onUpdate={(id, data) => void updateFolder(id, data)}
+            onUpdate={updateFolder}
             onDelete={(f) => setConfirmDeleteFolder(f)}
             onClose={folderEp.closeEdit}
-            canEdit
-            syncObjectType="snippet"
+            onOpen={() => { navigateInto(editingFolder); folderEp.closeEdit(); }}
+            onSelectSelf={() => selectSingle(editingFolder.id)}
+            parentOptions={foldersOutsideSubtree(scopedFolders, editingFolder.id)}
             vaults={vaultOptions.filter((v) => v.id !== (editingFolder.vault_id ?? "personal"))}
             onMoveToVault={(vaultId) => void handleMoveFolderToVault(editingFolder, vaultId)}
             onCopyToVault={(vaultId) => void handleCopyFolderToVault(editingFolder, vaultId)}
             onExport={() => useUIStore.getState().openImportExport("export", { bulk: { snippets: snippets.filter((s) => s.folder_id === editingFolder.id).map((s) => s.id) } })}
+            onShare={() => setSharing({ snippets: snippets.filter((s) => s.folder_id === editingFolder.id && !s.deleted_at), packName: editingFolder.name })}
           />
         ) : ep.editing !== null ? (
           <SnippetForm
@@ -1007,6 +934,7 @@ export function SnippetsPage() {
         onLayoutModeChange={setLayoutMode}
         onNewSnippet={() => openSnippet("new")}
         onNewFolder={() => void handleCreateFolder()}
+        newFolderBlocked={folderBlocked}
       />
 
       {tab === "community" ? (
@@ -1036,8 +964,13 @@ export function SnippetsPage() {
         <div ref={itemAreaRef} data-drag-surface="true">
           {loading ? (
             <SkeletonList />
-          ) : snippets.length === 0 ? (
-            <EmptyState onAdd={() => openSnippet("new")} />
+          ) : !hasSearch && filtered.length === 0 && scopedFolders.length === 0 ? (
+            <EmptyState
+              icon="lucide:braces"
+              title={t("snippets.page.emptyState.title")}
+              body={t("snippets.page.emptyState.subtitle")}
+              action={{ label: t("snippets.page.emptyState.cta"), onClick: () => openSnippet("new") }}
+            />
           ) : (
             <div className="space-y-6">
 
@@ -1070,8 +1003,7 @@ export function SnippetsPage() {
                     </button>
                   </div>
                   <div
-                    className={layoutMode === "grid" ? "grid gap-4" : "flex flex-col gap-1"}
-                    style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" } : undefined}
+                    {...cardGridProps(layoutMode, "card")}
                   >
                     {(showAllRecent ? scopedRecentEntries : scopedRecentEntries.slice(0, RECENT_PREVIEW_COUNT)).map((entry) => (
                       <RecentCard
@@ -1101,31 +1033,31 @@ export function SnippetsPage() {
               {favorites.length > 0 && (
                 <div>
                   <SectionHeader label={t("snippets.page.pinned")} count={favorites.length} />
-                  <div className={layoutMode === "grid" ? "grid gap-4" : "flex flex-col gap-1"} style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" } : undefined}>{favorites.map(renderCard)}</div>
+                  <div {...cardGridProps(layoutMode, "card")}>{favorites.map(renderCard)}</div>
                 </div>
               )}
 
               {/* ── Folders ── */}
               {visibleFolders.length > 0 && (
                 <div>
-                  <SectionHeader label={t("snippets.page.folders")} />
-                  <div className="flex flex-col gap-1.5">
+                  <SectionHeader label={t("snippets.page.folders")} count={visibleFolders.length} />
+                  <div {...cardGridProps(layoutMode, "card")}>
                     {visibleFolders.map((folder) => (
                       <FolderCard
                         key={folder.id}
                         folder={folder}
-                        itemCount={folderCounts[folder.id] ?? 0}
-                        layout="list"
+                        itemCount={folderCount(folder.id)}
+                        layout={layoutMode}
                         isSelected={editingFolder?.id === folder.id || selectedIdSet.has(folder.id)}
                         isFocused={focusedId === folder.id}
                         isDragOver={dragOverFolderId === folder.id}
                         dimmed={cutIds.has(folder.id)}
-                        onClick={() => navigateInto(folder)}
+                        onOpen={() => navigateInto(folder)}
                         onRename={(f, newName) => void updateFolder(f.id, { name: newName, object_type: f.object_type, parent_folder_id: f.parent_folder_id })}
                         onDelete={(f) => setConfirmDeleteFolder(f)}
-                        onSelect={(id) => { if (!selectedIdSet.has(id)) selectSingle(id); }}
-                        onEdit={() => { ep.closeEdit(); folderEp.transitionToExisting(folder); }}
-                        canEdit
+                        onSelect={selectFollowing(handleItemSelect, panelOpen, () => editFolder(folder))}
+                        onEdit={() => editFolder(folder)}
+                        canEdit={can("EDIT_FOLDERS", folder.vault_id ?? "personal", folder.id)}
                         onPointerDown={(e) => handleFolderDragStart(e, folder.id)}
                         {...folderDropProps(folder.id)}
                         vaults={vaultOptions.filter((v) => v.id !== (folder.vault_id ?? "personal"))}
@@ -1153,42 +1085,25 @@ export function SnippetsPage() {
               )}
 
               {/* ── Snippets in current view ── */}
-              {viewSnippets.length > 0 ? (
+              {mainSnippets.length > 0 ? (
                 <div>
                   {!hasSearch && (visibleFolders.length > 0 || favorites.length > 0 || activeFolderId) && (
                     <SectionHeader
                       label={activeFolderId ? t("snippets.page.snippetsSection") : t("snippets.page.other")}
-                      count={viewSnippets.length}
+                      count={mainSnippets.length}
                     />
                   )}
-                  <div className={layoutMode === "grid" ? "grid gap-4" : "flex flex-col gap-1"} style={layoutMode === "grid" ? { gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" } : undefined}>{viewSnippets.map(renderCard)}</div>
+                  <div {...cardGridProps(layoutMode, "card")}>{mainSnippets.map(renderCard)}</div>
                 </div>
-              ) : !hasSearch && filtered.length > 0 && activeFolderId ? (
-                <div className="flex flex-col items-center justify-center py-12 gap-3">
-                  <Icon icon="lucide:folder-open" width={32} className="text-(--t-text-dim)" />
-                  <p className="text-sm text-(--t-text-dim)">{t("snippets.page.folderEmpty")}</p>
-                  <button
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-(--t-bg-elevated) text-(--t-accent) border border-(--t-border-hover)"
-                    onClick={() => openSnippet("new")}
-                  >
-                    <Icon icon="lucide:plus" width={12} />
-                    {t("snippets.page.addSnippet")}
-                  </button>
-                </div>
+              ) : !hasSearch && activeFolderId ? (
+                <FolderEmptyState actions={canCreate ? [{ label: t("snippets.page.addSnippet"), onClick: () => openSnippet("new") }] : []} />
               ) : hasSearch && filtered.length === 0 ? (
-                <div className="flex flex-col items-center gap-3 py-12">
-                  <Icon icon="lucide:search-x" width={28} className="text-(--t-text-dim)" />
-                  <p className="text-sm text-(--t-text-dim)">{t("snippets.page.noSearchResults", { search })}</p>
-                  <button
-                    onClick={() => setSearch("")}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-(--t-bg-elevated) text-(--t-text-secondary) border border-(--t-border-hover)"
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--t-bg-card-hover)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "var(--t-bg-elevated)")}
-                  >
-                    <Icon icon="lucide:x" width={11} />
-                    {t("snippets.page.clearSearch")}
-                  </button>
-                </div>
+                <EmptyState
+                  size="section"
+                  icon="lucide:search-x"
+                  title={t("snippets.page.noSearchResults", { search })}
+                  action={{ label: t("snippets.page.clearSearch"), onClick: () => setSearch(""), icon: "lucide:x" }}
+                />
               ) : null}
 
             </div>
@@ -1203,7 +1118,7 @@ export function SnippetsPage() {
           onClose={closeBgMenu}
           items={[
             ...(canCreate ? [{ label: t("snippets.toolbar.newSnippet"), icon: "lucide:braces", onClick: () => openSnippet("new") } as const] : []),
-            { label: t("snippets.toolbar.newFolder"), icon: "lucide:folder-plus", onClick: () => void handleCreateFolder() },
+            { label: t("snippets.toolbar.newFolder"), icon: "lucide:folder-plus", onClick: () => void handleCreateFolder(), disabledReason: folderBlocked },
             ...(useVaultClipboardStore.getState().clipboard?.tab === "snippets"
               ? [{ label: t("common.action.paste"), icon: "lucide:clipboard", shortcut: getShortcutHint("paste"), onClick: () => window.dispatchEvent(new CustomEvent("voltius:clipboard-paste")) } as const]
               : []),

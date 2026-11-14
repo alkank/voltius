@@ -52,6 +52,17 @@ describe("sseFetch", () => {
     }));
   });
 
+  test("a 204 response resolves with a null body", async () => {
+    const p = sseFetch("https://api.test/v1", { method: "DELETE" });
+    await Promise.resolve(); await Promise.resolve();
+    emit("open", { status: 204, headers: [] });
+    emit("closed", { error: null });
+    const res = await p;
+    expect(res.status).toBe(204);
+    expect(res.ok).toBe(true);
+    await expect(res.text()).resolves.toBe("");
+  });
+
   test("non-2xx yields a Response with the real status and the error body", async () => {
     const p = sseFetch("https://api.test/v1", { method: "POST", body: "{}" });
     await Promise.resolve(); await Promise.resolve();
@@ -81,6 +92,23 @@ describe("sseFetch", () => {
     await Promise.resolve();
     expect(invoke).toHaveBeenCalledWith("http_sse_stop", expect.any(Object));
     await expect(bodyPromise).rejects.toThrow(/Aborted/);
+  });
+
+  test("aborting before the response opens rejects and stops the stream", async () => {
+    const ctrl = new AbortController();
+    const p = sseFetch("https://api.test/v1", { signal: ctrl.signal });
+    await Promise.resolve(); await Promise.resolve();
+    expect(invoke).toHaveBeenCalledWith("http_sse_start", expect.any(Object));
+    ctrl.abort();
+    await expect(p).rejects.toThrow(/Aborted/);
+    expect(invoke).toHaveBeenCalledWith("http_sse_stop", expect.any(Object));
+  });
+
+  test("an already-aborted signal rejects without starting the stream", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(sseFetch("https://api.test/v1", { signal: ctrl.signal })).rejects.toThrow(/Aborted/);
+    expect(invoke).not.toHaveBeenCalledWith("http_sse_start", expect.any(Object));
   });
 
   test("a mid-stream transport error errors the body instead of closing it cleanly", async () => {

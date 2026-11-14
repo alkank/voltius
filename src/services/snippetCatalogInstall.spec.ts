@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import type { CatalogEntry } from "./snippetCatalog";
 import { bundleFromEntries } from "./snippetCatalogInstall";
@@ -59,9 +60,9 @@ describe("bundleFromEntries → runImport", () => {
     const ctx = {
       vault_id: "personal", tag: "", skipDupes: false,
       existingConnections: [], existingKeys: [], existingIdentities: [],
-      existingSnippets: [], existingPfRules: [],
+      existingSnippets: [], existingPfRules: [], existingFolders: [],
       folderEidMap: new Map(), snippetFolderEidMap: new Map(), keyEidMap: new Map(),
-      identityEidMap: new Map(), connectionEidMap: new Map(),
+      identityEidMap: new Map(), connectionEidMap: new Map(), snippetEidMap: new Map(),
       stores: {
         saveFolder: async () => ({ id: "folder-main" }),
         saveSnippetFolder: async (d: Record<string, unknown>) => ({ id: "folder-1", ...d }),

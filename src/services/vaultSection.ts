@@ -83,8 +83,9 @@ export function pruneVaultTombstones(section: VaultsSection, now: number = Date.
 export function vaultsSectionFrom(vaults: Vault[], deletedVaults: VaultsSection): VaultsSection {
   const section: VaultsSection = { ...deletedVaults };
   for (const vault of vaults) {
-    if (vault.id === "personal") continue;
-    section[vault.id] = buildRow(vault.name, vault.updatedAt ?? EPOCH, vault.teamId);
+    // Older clients add a synced "personal" row as a second vault, so only a changed one travels.
+    if (vault.id === "personal" && !vault.updatedAt) continue;
+    section[vault.id] = buildRow(vault.teamId ? "" : vault.name, vault.updatedAt ?? EPOCH, vault.teamId);
   }
   return pruneVaultTombstones(section);
 }

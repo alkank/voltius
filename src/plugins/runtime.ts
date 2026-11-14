@@ -1,17 +1,21 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { settleWithin } from "@/lib/settleWithin";
 import { closePfTunnel, getPfState, openPfTunnel } from "@/services/portForwardingTunnels";
 import { whenLoginSyncSettled } from "@/services/loginSyncGate";
 import { resolvePort } from "@/plugins/domains/ports";
 import { runSnippetSequence, previewSnippetSequence } from "@/services/snippetSequence";
 import type { RunTarget } from "@/services/sftpTarget";
+import { readSyncProviderInputs, type LoadedPluginSource } from "@/services/syncProviderInputs";
+import { buildSyncProviders, toSyncProviderSummary } from "@/services/syncProviders";
 import { writeClipboard } from "@/utils/clipboard";
+import { createTextDecoder, encodeTerminalInput } from "@/utils/terminalEncoding";
 import { log as appLog } from "@/lib/logger";
 import i18n from "@/i18n";
-import { useConnectionStore, connectionToFormData } from "@/stores/connectionStore";
+import { useConnectionStore, connectionToFormData, findAnyConnection } from "@/stores/connectionStore";
 import { useIdentityStore } from "@/stores/identityStore";
 import { useKeyStore } from "@/stores/keyStore";
-import { localConnect, localSendInput } from "@/services/local";
+import { localSendInput } from "@/services/local";
 import { onSessionOutput, sendSessionInput } from "@/services/sessionInput";
 import { readTerminalSnapshot, readTerminalSelection, getAppCursorMode } from "@/hooks/useTerminal";
 import { usePluginStore } from "@/stores/pluginStore";
@@ -22,19 +26,19 @@ import { useUIContributionStore } from "@/stores/uiContributionStore";
 import { usePluginStateStore } from "@/stores/pluginStateStore";
 import { useNotificationStore } from "@/stores/notificationStore";
 import type { NotificationSource } from "@/stores/notificationStore";
-import { useSessionStore } from "@/stores/sessionStore";
+import { useSessionStore, addSession, localSessionDraft, settleLocalSpawn, spawnLocalSession } from "@/stores/sessionStore";
 import { useTeamStore } from "@/stores/teamStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useFolderStore } from "@/stores/folderStore";
 import { useSnippetFolderStore } from "@/stores/snippetFolderStore";
 import { useVaultStore } from "@/stores/vaultStore";
+import { vaultOptionsFrom } from "@/hooks/useVaultOptions";
 import { usePortForwardingStore } from "@/stores/portForwardingStore";
 import { useTransferQueueStore } from "@/stores/transferQueueStore";
 import { useHostPingStore } from "@/stores/hostPingStore";
-import { getSyncState, onSyncStateChange, ENTITY_FILES, getExcludedObjectIds, getPluginSkippedSyncFiles, writeFilteredSettings, type BlobPayload } from "@/services/sync";
+import { getSyncState, onSyncStateChange, getExcludedObjectIds, getPluginSkippedSyncFiles, writeFilteredSettings, openRemoteBlob, forEachRemoteBlob, mergeBlobPayload, importMergedPayload, serialMerge, blobDeviceId, notifyRemotePayloadMerged, type BlobPayload } from "@/services/sync";
 import { useThemeStore } from "@/stores/themeStore";
 import { useSyncPrefsStore } from "@/stores/syncPrefsStore";
-import { mergeEntities, mergeSecrets } from "@/services/crdt";
 import type {
   UISlot,
   ContributedAction,
@@ -46,11 +50,12 @@ import * as keyService from "@/services/keys";
 import * as identityService from "@/services/identities";
 import { addKeyToHost } from "@/services/keyExport";
 import { isValidSshPublicKey } from "@/services/sshPublicKey";
-import type { Connection } from "@/types";
-import { storePluginSecret, getPluginSecret, deletePluginSecret, storeSecret, deleteSecret } from "@/services/vault";
+import type { Connection, ConnectionFormData, TerminalSession } from "@/types";
+import { storePluginSecret, getPluginSecret, deletePluginSecret, storeSecret, deleteLocalSecret } from "@/services/vault";
+import { reportUploadFailure } from "@/services/secretRouting";
 import { appFetch } from "@/services/http";
 import { sseFetch } from "@/services/sseFetch";
-import { registerLxcExecSession } from "@/services/proxmox";
+import { registerExecSession } from "@/services/execSession";
 import { PLUGIN_AUDIT_ACTIONS } from "@/services/auditContext";
 import { auditContextForVaultId } from "@/services/auditContextResolver";
 import { reportPluginAuditEvent } from "@/services/auditReporter";
@@ -65,6 +70,9 @@ import {
   type PluginView, type SourceView,
 } from "./domains/plugins";
 import { exportObjects, importObjects } from "./domains/importexport";
+import { sshConfigSyncNow } from "@/services/sshConfig/sync";
+import { ownedFieldsChanged } from "@/services/sshConfig/hostFields";
+import { managedOwnedOf } from "@/stores/sshConfigStore";
 import type { MarketplacePlugin } from "@/stores/marketplaceStore";
 import type { DomainResult } from "./domains/result";
 import type { AuditLog } from "@/services/auditService";
@@ -106,6 +114,8 @@ import {
   focus as focusPaneOf,
   listTabs,
   moveToPane,
+  renamePane,
+  renameTab,
   splitWith,
   type PanePorts,
 } from "./domains/panes";
@@ -127,6 +137,7 @@ import {
   type SharingPorts,
 } from "./domains/sharing";
 import { broadcastActiveForSession, useLayoutStore } from "@/stores/layoutStore";
+import { hasInputControl } from "@/services/broadcast";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
 import { useTeamVaultStateStore } from "@/stores/teamVaultStateStore";
 import { highestOwnerTier, membersOfTeams } from "@/services/teamSharing";
@@ -137,6 +148,11 @@ import { getMyUserId, getVaultKeyHolders } from "@/services/teamService";
 import { fetchTeamData } from "@/services/teamVaultSync";
 import { injectPluginStyle, removePluginStyle } from "./importPluginModule";
 import { assertValidPluginId, isValidPluginId } from "./pluginId";
+import { isRetiredPlugin } from "./retired";
+import { base64ToBytes, bytesToBase64, hexToBytes } from "@/utils/base64";
+import { base64ToByteArray } from "@/services/teamVaultSyncCore";
+import { closeSessionTabs } from "@/services/closeSession";
+import { primaryModifierLabel, primaryOnly } from "@/utils/primaryModifier";
 
 const STREAM_PERM: Record<StreamKind, string> = {
   metrics: "metrics:read",
@@ -165,14 +181,6 @@ interface SessionSnapshot {
   connectionName: string;
   type: string;
   localShell?: string;
-}
-
-function findConnection(connectionId: string) {
-  const { connections, teamConnections } = useConnectionStore.getState();
-  return (
-    connections.find((c) => c.id === connectionId) ??
-    Object.values(teamConnections).flat().find((c) => c.id === connectionId)
-  );
 }
 
 /** In-memory team connections, keyed off the teams the user is actually in so a
@@ -257,7 +265,7 @@ function ensureLifecycleSetup() {
     for (const [sid, snap] of currentMap) {
       const prev = prevSessions.get(sid);
       if (snap.status === "connected" && prev?.status !== "connected") {
-        const conn = findConnection(snap.connectionId);
+        const conn = findAnyConnection(snap.connectionId);
         if (conn) _onConnectionEstablished.forEach((cb) => safeCall(cb, conn as PluginConnection));
         const session: PluginSession = { id: sid, ...snap };
         _onSessionConnected.forEach((cb) => safeCall(cb, session));
@@ -268,7 +276,7 @@ function ensureLifecycleSetup() {
       if (snap.status !== "connected") continue;
       const curr = currentMap.get(sid);
       if (!curr || curr.status === "disconnected") {
-        const conn = findConnection(snap.connectionId);
+        const conn = findAnyConnection(snap.connectionId);
         if (conn) _onConnectionClosed.forEach((cb) => safeCall(cb, conn as PluginConnection));
         const session: PluginSession = { id: sid, ...snap };
         _onSessionDisconnected.forEach((cb) => safeCall(cb, session));
@@ -287,14 +295,6 @@ function ensureLifecycleSetup() {
     prevSessions = currentMap;
     prevActiveId = activeSessionId;
   });
-}
-
-/** Resolves with `p`, or with `orElse` if `p` rejects or outlasts `ms`. */
-function settleWithin<T>(p: Promise<T>, ms: number, orElse: T): Promise<T> {
-  return Promise.race([
-    p.catch(() => orElse),
-    new Promise<T>((r) => setTimeout(() => r(orElse), ms)),
-  ]);
 }
 
 async function ensureQuitHandler() {
@@ -426,7 +426,7 @@ function parseKeybinding(raw: string): Omit<PluginKeybinding, "execute" | "plugi
 
 function formatPluginKeybinding(kb: Omit<PluginKeybinding, "execute" | "pluginId">): string {
   const parts: string[] = [];
-  if (kb.ctrl) parts.push("Ctrl");
+  if (kb.ctrl) parts.push(primaryModifierLabel(kb.key));
   if (kb.meta) parts.push("Meta");
   if (kb.shift) parts.push("Shift");
   parts.push(kb.key === " " ? "Space" : kb.key);
@@ -437,13 +437,11 @@ function ensureKeybindHandler() {
   if (_keybindHandlerInstalled) return;
   _keybindHandlerInstalled = true;
   document.addEventListener("keydown", (e) => {
-    const ctrl = e.ctrlKey;
-    const meta = e.metaKey;
+    const primary = primaryOnly(e);
     for (const kb of _pluginKeybindings.values()) {
-      const ctrlMatch = kb.ctrl ? (ctrl || meta) : (!ctrl && !meta);
-      const metaMatch = !kb.ctrl && kb.meta ? meta : true; // if ctrl already covered
+      const modsMatch = kb.ctrl ? primary : kb.meta ? e.metaKey : !e.ctrlKey && !e.metaKey;
       if (
-        ctrlMatch && metaMatch &&
+        modsMatch &&
         e.shiftKey === kb.shift &&
         (e.key === kb.key || e.key.toUpperCase() === kb.key)
       ) {
@@ -534,17 +532,9 @@ const objectPorts: ObjectPorts = {
       ]),
     );
   },
-  can: (permission, vaultId) => canFromStores(_myUserId)(permission as Permission, vaultId),
+  can: (permission, vaultId, objectId) => canFromStores(_myUserId)(permission as Permission, vaultId, objectId),
   isTeamVault: isTeamVaultId,
-  vaults: () => {
-    const vaults = useVaultStore.getState().vaults;
-    const linked = new Set(vaults.map((v) => v.teamId).filter(Boolean));
-    return [
-      { id: "personal", name: "Personal" },
-      ...vaults.filter((v) => v.id !== "personal").map((v) => ({ id: v.teamId ?? v.id, name: v.name })),
-      ...useTeamStore.getState().teams.filter((t) => !linked.has(t.id)).map((t) => ({ id: t.id, name: t.name })),
-    ];
-  },
+  vaults: () => vaultOptionsFrom(useVaultStore.getState().vaults, useTeamStore.getState().teams),
   /**
    * Every vault the user has, not the page's current filter: there is no view
    * here, so nothing is off-screen. Only `rootVaultIds` reads this, to tell a
@@ -650,7 +640,7 @@ const snippetPorts: SnippetPorts = {
         if (s) targets.push({ kind: "session", sessionId: s.id, sessionType: s.type, label: s.connectionName });
         else unknown.push(ref.session_id);
       } else if (ref.connection_id) {
-        const c = findConnection(ref.connection_id);
+        const c = findAnyConnection(ref.connection_id);
         if (c) targets.push({ kind: "connection", connection: c });
         else unknown.push(ref.connection_id);
       }
@@ -690,6 +680,20 @@ const historyPorts: HistoryPorts = {
   list: () => useCommandHistoryStore.getState().entries,
 };
 
+/** The session shape plugins see; `list` and `getActive` must not drift apart. */
+function toPluginSession(s: TerminalSession): PluginSession {
+  return {
+    id: s.id,
+    connectionId: s.connectionId,
+    connectionName: s.connectionName,
+    status: s.status,
+    type: s.type,
+    localShell: s.localShell,
+    title: s.title,
+    locked: s.locked,
+  };
+}
+
 // Mirrors the titlebar's own click handlers (TitleBar.tsx:130 and :162): a
 // focused pane that leaves the SFTP panel open or the nav on Vaults is focused
 // in the store and invisible on screen.
@@ -697,7 +701,7 @@ const panePorts: PanePorts = {
   splitTabs: () => useLayoutStore.getState().splitTabs,
   activeSplitTabId: () => useLayoutStore.getState().activeSplitTabId,
   splitTabActive: () => useLayoutStore.getState().splitTabActive,
-  sessions: () => useSessionStore.getState().sessions.map((s) => ({ id: s.id, connectionName: s.connectionName })),
+  sessions: () => useSessionStore.getState().sessions.map(toPluginSession),
   activeSessionId: () => useSessionStore.getState().activeSessionId,
   activateSplitTab: (tabId) => useLayoutStore.getState().activateSplitTab(tabId),
   createSplitTab: (target, incoming, position) => useLayoutStore.getState().createSplitTab(target, incoming, position),
@@ -718,6 +722,8 @@ const panePorts: PanePorts = {
     useSessionStore.getState().setActive(sessionId);
     useUIStore.getState().setActiveNav("terminal");
   },
+  renameSession: (sessionId, title) => useSessionStore.getState().renameSession(sessionId, title),
+  renameSplitTab: (tabId, name) => useLayoutStore.getState().renameSplitTab(tabId, name),
   isMobile: () => isMobileShell(),
 };
 
@@ -820,10 +826,16 @@ function busEmit(pluginId: string, event: string, data?: unknown): void {
 
 // ─── Plugin storage (JSON in app data) ───────────────────────────────────
 
+async function storageRead<T>(command: string, pluginId: string, key: string): Promise<T | null> {
+  const raw = await invoke<string | null>(command, { pluginId, key });
+  return raw ? (JSON.parse(raw) as T) : null;
+}
+
+const storageGetStrict = <T>(pluginId: string, key: string) => storageRead<T>("plugin_storage_read_strict", pluginId, key);
+
 async function storageGet<T>(pluginId: string, key: string): Promise<T | null> {
   try {
-    const raw = await invoke<string | null>("plugin_storage_get", { pluginId, key });
-    return raw ? (JSON.parse(raw) as T) : null;
+    return await storageRead<T>("plugin_storage_get", pluginId, key);
   } catch {
     return null;
   }
@@ -922,7 +934,8 @@ const inactiveError = (id: string): string => `Plugin "${id}" is disabled or unl
 async function writeSessionBytes(sessionId: string, text: string): Promise<void> {
   const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
   if (!session) throw new Error(`Session "${sessionId}" not found`);
-  await sendSessionInput(sessionId, session.type as "ssh" | "local" | "serial", new TextEncoder().encode(text));
+  if (!hasInputControl(sessionId)) throw new Error(`Session "${sessionId}" is controlled by another participant`);
+  await sendSessionInput(sessionId, session.type as "ssh" | "local" | "serial", encodeTerminalInput(text, session.encoding));
 }
 
 function createPluginAPI(manifest: PluginManifest): PluginAPI {
@@ -982,7 +995,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
   const cryptoApi = createCryptoAPI();
   const i18nApi = createI18nAPI();
   const proxmoxApi = createProxmoxAPI();
-  const sftpApi = createSftpAPI(findConnection);
+  const sftpApi = createSftpAPI(findAnyConnection);
   _sftpDisposers.set(id, () => sftpApi.dispose());
   const dockerApi = createDockerAPI(streamsApi);
   const vaultsApi = createVaultsAPI(vaultPorts);
@@ -1010,14 +1023,14 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
           throw new Error("publicKey is not a valid SSH public key");
         }
         const key = await keyService.saveKey({ name: data.name, key_type: data.key_type, tags: data.tags ?? [] });
-        await storeSecret(`key:${key.id}:private`, privateKey);
-        if (publicKey) await storeSecret(`key:${key.id}:public`, publicKey);
+        await storeSecret(`key:${key.id}:private`, privateKey).catch(reportUploadFailure("plugin: keys.create"));
+        if (publicKey) await storeSecret(`key:${key.id}:public`, publicKey).catch(reportUploadFailure("plugin: keys.create"));
         return key as PluginKey;
       },
       async delete(keyId) {
         requirePerm(manifest, "keys:write");
-        await deleteSecret(`key:${keyId}:private`).catch(() => {});
-        await deleteSecret(`key:${keyId}:public`).catch(() => {});
+        await deleteLocalSecret(`key:${keyId}:private`).catch(() => {});
+        await deleteLocalSecret(`key:${keyId}:public`).catch(() => {});
         await keyService.deleteKey(keyId);
       },
       async addToHost({ keyId, connectionId, location, filename }) {
@@ -1077,6 +1090,9 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         const existing = await connectionService.listConnections();
         const conn = existing.find((c) => c.id === connId);
         if (!conn) throw new Error(`Connection ${connId} not found`);
+        if (ownedFieldsChanged(conn, data as Partial<ConnectionFormData>, managedOwnedOf(connId)).length > 0) {
+          throw new Error("Managed by ~/.ssh/config; detach it first");
+        }
         // connection_update is a near-total replace: every field absent from the
         // payload is wiped, so a partial patch has to ride the full record.
         const base = connectionToFormData(conn);
@@ -1237,7 +1253,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         return useTransferQueueStore.getState().transfers.map((t) => ({
           id: t.id, label: t.label, direction: t.direction, status: t.status,
           transferred: t.transferred, total: t.total,
-          speed: t.speed, eta: t.eta, error: t.error,
+          speed: t.speed, eta: t.eta, error: t.error, skipped: t.skipped,
           owner: t.owner?.clientName || undefined,
         }));
       },
@@ -1259,7 +1275,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         requireGated("health:read");
         const { statuses, latencies } = useHostPingStore.getState();
         return Object.entries(statuses).map(([connectionId, status]) => ({
-          connectionId, status, latencyMs: latencies[connectionId],
+          connectionId, status: status === "knock" ? "unknown" : status, latencyMs: latencies[connectionId],
         }));
       },
     },
@@ -1284,6 +1300,14 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
       focus(sessionId, maximize) {
         requirePerm(manifest, "panes:write");
         return focusPaneOf(panePorts, sessionId, maximize);
+      },
+      rename(sessionId, title) {
+        requirePerm(manifest, "panes:write");
+        return renamePane(panePorts, sessionId, title);
+      },
+      renameTab(tabId, title) {
+        requirePerm(manifest, "panes:write");
+        return renameTab(panePorts, tabId, title);
       },
     },
 
@@ -1347,6 +1371,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
           error: s.error,
           cloudActive: s.cloudActive,
           blobSizeBytes: s.blobSizeBytes,
+          providers: buildSyncProviders(readSyncProviderInputs(loadedPluginSource)).map(toSyncProviderSummary),
         };
       },
     },
@@ -1545,7 +1570,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         }
         if (!whileActive("audit.record")) return;
 
-        const conn = connectionId ? findConnection(connectionId) : undefined;
+        const conn = connectionId ? findAnyConnection(connectionId) : undefined;
         // A scope matching no connection may still be a team id: the membership
         // verbs scope on the team, and only a team context is forwarded to the
         // team server. Promote ONLY on kind === "team" — for an unknown id
@@ -1803,29 +1828,14 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
     sessions: {
       list() {
         requirePerm(manifest, "sessions:read");
-        return useSessionStore.getState().sessions.map((s) => ({
-          id: s.id,
-          connectionId: s.connectionId,
-          connectionName: s.connectionName,
-          status: s.status,
-          type: s.type,
-          localShell: s.localShell,
-        }));
+        return useSessionStore.getState().sessions.map(toPluginSession);
       },
       getActive() {
         requirePerm(manifest, "sessions:read");
         const { sessions, activeSessionId } = useSessionStore.getState();
         if (!activeSessionId) return null;
         const s = sessions.find((x) => x.id === activeSessionId);
-        if (!s) return null;
-        return {
-          id: s.id,
-          connectionId: s.connectionId,
-          connectionName: s.connectionName,
-          status: s.status,
-          type: s.type,
-          localShell: s.localShell,
-        };
+        return s ? toPluginSession(s) : null;
       },
       onConnected(cb) {
         requirePerm(manifest, "sessions:read");
@@ -1861,7 +1871,9 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
       },
       async close(sessionId) {
         requirePerm(manifest, "sessions:write");
-        await useSessionStore.getState().disconnect(sessionId);
+        const result = closeSessionTabs([sessionId]);
+        if (result.kept.length > 0) throw new Error(`tab_locked: session "${sessionId}" is locked by the user`);
+        await result.settled;
       },
     },
 
@@ -1882,7 +1894,7 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         requireGated("terminal:stream");
         const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
         if (!session) throw new Error(`Session "${sessionId}" not found`);
-        const decoder = new TextDecoder();
+        const decoder = createTextDecoder(session.encoding);
         return onSessionOutput(sessionId, session.type, (data) => cb(decoder.decode(data, { stream: true })));
       },
     },
@@ -1964,6 +1976,10 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         requirePerm(manifest, "ui");
         return i18nApi.t(key, vars);
       },
+      formatRelativeTime(time) {
+        requirePerm(manifest, "ui");
+        return i18nApi.formatRelativeTime(time);
+      },
       getLocale() {
         requirePerm(manifest, "ui");
         return i18nApi.getLocale();
@@ -2016,18 +2032,11 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         // (sessions:write only covers connecting *saved connections*), so this lives
         // here rather than in the pure domains/proxmox.ts invoke wrapper. The mobile
         // Proxmox screen calls this same api.proxmox.lxc.openShell — see
-        // @/services/proxmox.ts's registerLxcExecSession for the shared bookkeeping.
+        // @/services/execSession.ts's registerExecSession for the shared bookkeeping.
         openShell: async (sessionId, vmid, vmName) => {
           requireGated("proxmox:manage");
           const execSessionId = await proxmoxApi.lxc.openShell(sessionId, vmid);
-          const parent = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
-          await registerLxcExecSession({
-            execSessionId,
-            parentSessionId: sessionId,
-            connectionId: parent?.connectionId ?? "",
-            vmid,
-            vmName,
-          });
+          await registerExecSession(execSessionId, `pct: ${vmName ?? vmid}`, { kind: "lxc", vmid, parentSessionId: sessionId });
           return execSessionId;
         },
         snapshots: {
@@ -2128,61 +2137,18 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
 
           if (target.isRemote) {
             const execSessionId = await dockerApi.exec.open(target, containerId);
-            const parent = useSessionStore.getState().sessions.find((s) => s.id === target.sessionId);
-            useSessionStore.setState((s) => ({
-              sessions: [
-                ...s.sessions,
-                {
-                  id: execSessionId,
-                  connectionId: parent?.connectionId ?? "",
-                  connectionName: label,
-                  status: "connecting" as const,
-                  type: "ssh" as const,
-                  containerExec: { kind: "docker" as const, containerId, parentSessionId: target.sessionId },
-                },
-              ],
-              activeSessionId: execSessionId,
-            }));
-            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-            useSessionStore.setState((s) => ({
-              sessions: s.sessions.map((sess) =>
-                sess.id === execSessionId ? { ...sess, status: "connected" as const } : sess,
-              ),
-            }));
+            await registerExecSession(execSessionId, label, { kind: "docker", containerId, parentSessionId: target.sessionId });
             return execSessionId;
           }
 
           const newSessionId = crypto.randomUUID();
-          useSessionStore.setState((s) => ({
-            sessions: [
-              ...s.sessions,
-              {
-                id: newSessionId,
-                connectionId: "local",
-                connectionName: label,
-                status: "connecting" as const,
-                type: "local" as const,
-                localShell: target.localShell ?? undefined,
-              },
-            ],
-            activeSessionId: newSessionId,
-          }));
-          try {
-            await localConnect(newSessionId, 80, 24, target.localShell ?? undefined);
-            await localSendInput(newSessionId, new TextEncoder().encode(`docker exec -it ${containerId} sh\r`));
-            useSessionStore.setState((s) => ({
-              sessions: s.sessions.map((sess) =>
-                sess.id === newSessionId ? { ...sess, status: "connected" as const } : sess,
-              ),
-            }));
-          } catch (e) {
-            useSessionStore.setState((s) => ({
-              sessions: s.sessions.map((sess) =>
-                sess.id === newSessionId ? { ...sess, status: "error" as const } : sess,
-              ),
-            }));
-            throw e;
-          }
+          addSession(useSessionStore.setState, localSessionDraft(newSessionId, target.localShell ?? undefined, label));
+          await settleLocalSpawn(
+            newSessionId,
+            spawnLocalSession(newSessionId, target.localShell ?? undefined).then(() =>
+              localSendInput(newSessionId, new TextEncoder().encode(`docker exec -it ${containerId} sh\r`)),
+            ),
+          );
           return newSessionId;
         },
       },
@@ -2247,22 +2213,12 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
       async getBlob(key) {
         requirePerm(manifest, "sync:read");
         const raw = await storageGet<string>(id, `__sync__${key}`);
-        if (!raw) return null;
-        const binary = atob(raw);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        return bytes;
+        return raw ? base64ToBytes(raw) : null;
       },
       async setBlob(key, data) {
         requirePerm(manifest, "sync:write");
         if (data.length > 1024 * 1024) throw new Error("PluginStorageError: blob exceeds 1MB limit");
-        // Chunked to avoid blocking the main thread on large payloads
-        const CHUNK = 8192;
-        let binary = "";
-        for (let i = 0; i < data.length; i += CHUNK) {
-          binary += String.fromCharCode(...data.subarray(i, i + CHUNK));
-        }
-        await storageSet(id, `__sync__${key}`, btoa(binary));
+        await storageSet(id, `__sync__${key}`, bytesToBase64(data));
       },
       onRemoteChange(key, cb) {
         requirePerm(manifest, "sync:read");
@@ -2270,17 +2226,13 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         storageGet<string>(id, `__sync__${key}`).then((v) => { lastKnownRaw = v; }).catch(() => {});
 
         const unsub = onSyncStateChange(async () => {
-          if (getSyncState().status !== "success") return;
+          const { status } = getSyncState();
+          if (status !== "success" && status !== "partial") return;
           try {
             const current = await storageGet<string>(id, `__sync__${key}`);
             if (current !== lastKnownRaw) {
               lastKnownRaw = current;
-              if (current) {
-                const binary = atob(current);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                cb(bytes);
-              }
+              if (current) cb(base64ToBytes(current));
             }
           } catch {}
         });
@@ -2299,9 +2251,8 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
       async exportState(encKey, deviceId) {
         requirePerm(manifest, "sync:write");
         await writeFilteredSettings();
-        const encKeyBytes = Array.from(new Uint8Array(encKey.match(/.{2}/g)!.map((b) => parseInt(b, 16))));
         const blob: number[] = await invoke("backup_export", {
-          encKey: encKeyBytes,
+          encKey: hexToBytes(encKey),
           accountId: "gist-sync",
           deviceId,
           // Strip cloud-off objects (and their secrets) from third-party sync
@@ -2312,65 +2263,46 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
           excludedIds: getExcludedObjectIds(),
           skipFiles: getPluginSkippedSyncFiles(),
         });
-        const CHUNK = 8192;
-        let binary = "";
-        const bytes = new Uint8Array(blob);
-        for (let i = 0; i < bytes.length; i += CHUNK) {
-          binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-        }
-        return btoa(binary);
+        return bytesToBase64(blob);
       },
 
       async importStates(encKey, blobs) {
         requirePerm(manifest, "sync:write");
-        let { files: mergedFiles, secrets: mergedSecrets, secret_clocks: mergedSecretClocks } =
-          await invoke<BlobPayload>("state_export_raw");
-        mergedSecretClocks ??= {};
+        const { failed, bestThemeRaw, bestThemeUpdatedAt } = await serialMerge(async () => {
+          const encKeyBytes = hexToBytes(encKey);
+          let merged: BlobPayload = await invoke<BlobPayload>("state_export_raw");
+          const opened: Array<{ deviceId: string | null; remote: BlobPayload }> = [];
 
-        const parse = (s: string) => {
-          try { return JSON.parse(s ?? "[]"); } catch { return []; }
-        };
+          let bestThemeRaw = null as string | null;
+          let bestThemeUpdatedAt = null as string | null;
+          const excludedIds = getExcludedObjectIds();
+          const failed = await forEachRemoteBlob(blobs.map((b64, i) => ({ b64, i })), ({ i }) => `gist blob ${i + 1}`, async ({ b64 }) => {
+            const bytes = base64ToByteArray(b64);
+            const remote = await openRemoteBlob([encKeyBytes], bytes, excludedIds);
+            merged = mergeBlobPayload(merged, remote).payload;
+            opened.push({ deviceId: blobDeviceId(bytes), remote });
 
-        let bestThemeRaw: string | null = null;
-        let bestThemeUpdatedAt: string | null = null;
-
-        for (const b64 of blobs) {
-          const blobBytes: number[] = Array.from(
-            Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)),
-          );
-          const encKeyBytes = Array.from(new Uint8Array(encKey.match(/.{2}/g)!.map((b) => parseInt(b, 16))));
-          const remote = await invoke<BlobPayload>("backup_decrypt", {
-            encKey: encKeyBytes,
-            blob: blobBytes,
+            const themeRaw = remote.files["theme.json"];
+            if (themeRaw) {
+              try {
+                const { updatedAt } = JSON.parse(themeRaw) as { updatedAt?: string };
+                if (updatedAt && (!bestThemeUpdatedAt || updatedAt > bestThemeUpdatedAt)) {
+                  bestThemeUpdatedAt = updatedAt;
+                  bestThemeRaw = themeRaw;
+                }
+              } catch {}
+            }
           });
-          const newFiles: Record<string, string> = {};
-          for (const file of ENTITY_FILES) {
-            newFiles[file] = JSON.stringify(
-              mergeEntities(parse(mergedFiles[file]), parse(remote.files[file] ?? "[]")),
-            );
+          if (failed.length > 0) {
+            appLog.warn(`[plugin:${id}] sync.importStates: skipped ${failed.length} of ${blobs.length} device blob(s) that could not be read`);
+            // Nothing readable is most likely a wrong key: surface it rather than report success.
+            if (failed.length === blobs.length) throw failed[0].error;
           }
-          // Per-secret LWW merge: freshest write across devices wins (issue #35).
-          const secretMerge = mergeSecrets(
-            mergedSecrets,
-            mergedSecretClocks,
-            remote.secrets,
-            remote.secret_clocks ?? {},
-          );
-          mergedSecrets = secretMerge.secrets;
-          mergedSecretClocks = secretMerge.clocks;
-          mergedFiles = newFiles;
 
-          const themeRaw = remote.files["theme.json"];
-          if (themeRaw) {
-            try {
-              const { updatedAt } = JSON.parse(themeRaw) as { updatedAt?: string };
-              if (updatedAt && (!bestThemeUpdatedAt || updatedAt > bestThemeUpdatedAt)) {
-                bestThemeUpdatedAt = updatedAt;
-                bestThemeRaw = themeRaw;
-              }
-            } catch {}
-          }
-        }
+          await importMergedPayload(merged);
+          for (const { deviceId, remote } of opened) if (deviceId) notifyRemotePayloadMerged(deviceId, remote);
+          return { failed, bestThemeRaw, bestThemeUpdatedAt };
+        });
 
         // Inbound half of what getPluginSkippedSyncFiles enforces outbound: a
         // device that opted themes out of sync must not have them overwritten
@@ -2392,10 +2324,10 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
           } catch {}
         }
 
-        await invoke("state_import", { files: mergedFiles, secrets: mergedSecrets, secretClocks: mergedSecretClocks });
         for (const reload of Object.values(RELOADABLE_STORES)) {
           await reload();
         }
+        return { unreadable: failed.map((f) => f.source.i) };
       },
     },
 
@@ -2437,6 +2369,11 @@ function createPluginAPI(manifest: PluginManifest): PluginAPI {
         requireGated("importexport:write");
         if (!whileActive("importExport.import")) return { ok: false, error: inactiveError(id) };
         return importObjects(opts);
+      },
+      async sshConfigSync() {
+        requireGated("importexport:write");
+        if (!whileActive("importExport.sshConfigSync")) return { ok: false, error: inactiveError(id) };
+        return sshConfigSyncNow();
       },
     },
 
@@ -2503,6 +2440,7 @@ export function loadPlugin(
   // keychain prefix, contributed-id prefixes. Every loader wraps this in a
   // try/catch that warns and skips, so a malformed id costs that one plugin.
   assertValidPluginId(manifest.id);
+  if (isRetiredPlugin(manifest.id)) throw new Error(`Plugin "${manifest.id}" is retired`);
   if (_registry.has(manifest.id)) {
     console.warn(`[plugin-runtime] Plugin "${manifest.id}" already loaded — skipping`);
     return;
@@ -2620,6 +2558,16 @@ export function getLoadedPlugins(): PluginManifest[] {
     .map((e) => e.manifest);
 }
 
+export function isPluginActive(pluginId: string): boolean {
+  return _registry.get(pluginId)?.active ?? false;
+}
+
+export const loadedPluginSource: LoadedPluginSource = {
+  loaded: getLoadedPlugins,
+  isActive: isPluginActive,
+  exposed: getExposedApi,
+};
+
 /** Read a plugin's storage value — for use by trusted UI code (e.g. auto-generated settings). */
 export function pluginStorageGet<T>(pluginId: string, key: string): Promise<T | null> {
   return storageGet<T>(pluginId, key);
@@ -2628,6 +2576,12 @@ export function pluginStorageGet<T>(pluginId: string, key: string): Promise<T | 
 /** Write a plugin's storage value — for use by trusted UI code (e.g. auto-generated settings). */
 export function pluginStorageSet<T>(pluginId: string, key: string, value: T): Promise<void> {
   return storageSet<T>(pluginId, key, value);
+}
+
+export const pluginStorageGetStrict = storageGetStrict;
+
+export function pluginStorageClear(pluginId: string): Promise<void> {
+  return invoke("plugin_storage_clear", { pluginId });
 }
 
 /** Read a plugin's exposed public API (via `api.plugins.expose`) — for use by

@@ -1,7 +1,7 @@
 import { writeClipboard } from "../../utils/clipboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -11,28 +11,25 @@ import { useHostPingStore } from "@/stores/hostPingStore";
 import { useMcpOwnershipStore } from "@/stores/mcpOwnershipStore";
 import { McpMark, mcpOwnerTitle, mcpTint } from "@/components/shared/McpMark";
 import { useToggle } from "@/stores/toggleSettingsStore";
-import { findLeaf, getPaneSessionIds, useLayoutStore, type SplitPosition } from "@/stores/layoutStore";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { findLeaf, findSessionPane, useLayoutStore, type SplitPosition } from "@/stores/layoutStore";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useTeamSessionStore } from "@/stores/teamSessionStore";
-import { useAllConnections } from "@/hooks/useAllConnections";
+import { useConnection } from "@/hooks/useAllConnections";
 import { getConnectionIcon, getConnectionIconColor, getDistroColor, getDistroIcon, getDistroLabel } from "@/utils/icons";
 import { sshGetSystemInfo, type SystemInfo } from "@/services/ssh";
-import { closeSession } from "@/services/closeSession";
+import { closeSessionTabs } from "@/services/closeSession";
+import { TabCloseControl } from "@/components/shared/TabCloseControl";
 import { sessionMenuItems } from "@/utils/sessionMenuItems";
 import { sessionLabel } from "@/utils/sessionLabel";
+import { sessionUserAtHost } from "@/components/terminal/sessionOverlay";
 import { focusSession } from "@/hooks/useTerminal";
 import { InlineNameEditor } from "@/components/shared/InlineNameEditor";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { SessionTypeBadge } from "@/components/panes/SessionTypeBadge";
 import { latencyColor, sessionStatusTone } from "@/utils/statusTone";
 import type { TerminalSession } from "@/types";
-
-function sessionBadge(session: TerminalSession, t: TFunction): string {
-  if (session.type === "ssh") return t("panes.badge.ssh");
-  if (session.type === "serial") return t("panes.badge.serial");
-  if (session.type === "multiplayer") return t("panes.badge.multiplayer");
-  return t("panes.badge.local");
-}
+import { useCopiedFlash } from "@/hooks/useCopiedFlash";
 
 interface ConnectedSystemInfo {
   os_name: string;
@@ -89,8 +86,7 @@ const tooltipStyle: React.CSSProperties = {
 
 export function PaneHeader({ paneId, session, active }: { paneId: string; session: TerminalSession; active: boolean }) {
   const { t } = useTranslation();
-  const connections = useAllConnections();
-  const connection = connections.find((c) => c.id === session.connectionId);
+  const connection = useConnection(session.connectionId);
   const latencyMs = useHostPingStore((s) => s.latencies[session.connectionId]);
   const pingStatus = useHostPingStore((s) => s.statuses[session.connectionId]);
   const [pingEnabled] = useToggle("reachability");
@@ -106,19 +102,17 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
   const { pos, open, close } = useContextMenu();
 
   // Copy user@host
-  const [copied, setCopied] = useState(false);
+  const { copied, flash: flashCopied } = useCopiedFlash(1200);
   const [renaming, setRenaming] = useState(false);
   // Closing the editor hands the keyboard back to this pane's terminal.
   const endRename = () => {
     setRenaming(false);
     focusSession(session.id);
   };
-  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Distro popover
   const [showDistroInfo, setShowDistroInfo] = useState(false);
-  const [copiedDistro, setCopiedDistro] = useState(false);
-  const copiedDistroTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { copied: copiedDistro, flash: flashCopiedDistro } = useCopiedFlash(1200);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [localSystemInfo, setLocalSystemInfo] = useState<ConnectedSystemInfo | null>(null);
   const systemInfoFetchedRef = useRef(false);
@@ -143,7 +137,7 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
   const subtitle = session.type === "serial" && session.serialConfig
     ? `${session.serialConfig.port} · ${session.serialConfig.baud}`
     : session.type === "ssh" && connection
-      ? `${connection.username}@${connection.host}`
+      ? sessionUserAtHost(session, connection)
       : null;
 
   // ── Latency history buffer ────────────────────────────────────────────────
@@ -199,9 +193,7 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
       : "";
     if (!text) return;
     writeClipboard(text).catch(() => {});
-    setCopiedDistro(true);
-    if (copiedDistroTimeoutRef.current) clearTimeout(copiedDistroTimeoutRef.current);
-    copiedDistroTimeoutRef.current = setTimeout(() => setCopiedDistro(false), 1200);
+    flashCopiedDistro();
   };
 
   const handleLatencyMouseEnter = () => {
@@ -216,15 +208,11 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
 
   const handleCopySubtitle = () => {
     if (!subtitle) return;
-    writeClipboard(subtitle).then(() => {
-      setCopied(true);
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-      copyTimeoutRef.current = setTimeout(() => setCopied(false), 1200);
-    }).catch(() => {});
+    writeClipboard(subtitle).then(() => flashCopied()).catch(() => {});
   };
 
   const handleClosePane = () => {
-    closeSession(session.id);
+    if (closeSessionTabs([session.id]).closed.length === 0) return;
     const layout = useLayoutStore.getState();
     const nextLeaf = findLeaf(layout.root, layout.activePaneId);
     if (nextLeaf) useSessionStore.getState().setActive(nextLeaf.sessionId);
@@ -236,11 +224,11 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
   };
 
   const handleContextSplit = (position: SplitPosition) => {
-    const visibleSessionIds = new Set(getPaneSessionIds(useLayoutStore.getState().root));
-    const candidate = sessions.find((s) => !visibleSessionIds.has(s.id));
+    const { splitTabs } = useLayoutStore.getState();
+    const candidate = sessions.find((s) => !findSessionPane(splitTabs, s.id));
     if (!candidate) {
       useNotificationStore.getState().addToast({
-        source: { kind: "plugin", id: "core", name: "Voltius" },
+        source: APP_SOURCE,
         type: "toast",
         message: t("panes.header.noSessionToSplit"),
         severity: "info",
@@ -257,6 +245,7 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
     t,
     closeLabel: t("panes.header.closePane"),
     onClose: handleClosePane,
+    scope: "pane",
     onRename: () => setRenaming(true),
     extras: [
       {
@@ -361,9 +350,7 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
       </div>
 
       <div className="hidden sm:flex items-center gap-1.5 shrink-0 self-stretch">
-        <span className="px-1.5 py-0.5 rounded-sm border border-(--t-border) bg-(--t-bg-elevated) text-[10px] font-semibold">
-          {sessionBadge(session, t)}
-        </span>
+        <SessionTypeBadge type={session.type} />
         {mcpOwner && (
           <McpMark
             variant="chip"
@@ -416,13 +403,12 @@ export function PaneHeader({ paneId, session, active }: { paneId: string; sessio
         >
           <Icon icon={isMaximized ? "lucide:minimize-2" : "lucide:maximize-2"} width={13} />
         </button>
-        <button
-          className="h-full px-1.5 flex items-center justify-center hover:bg-(--t-bg-card-hover) transition-colors text-(--t-text-dim) hover:text-(--t-status-error)"
-          title={t("panes.header.closePane")}
-          onClick={handleClosePane}
-        >
-          <Icon icon="lucide:x" width={14} />
-        </button>
+        <TabCloseControl
+          variant="pane"
+          sessionIds={[session.id]}
+          closeTitle={t("panes.header.closePane")}
+          onClose={handleClosePane}
+        />
       </div>
       {pos && <ContextMenu items={menuItems} pos={pos} onClose={close} />}
 

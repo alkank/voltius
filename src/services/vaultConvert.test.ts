@@ -1,7 +1,8 @@
 import { test, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
-  createTeam: vi.fn(async (name: string) => ({ id: "team-1", name, owner_id: "u1", owner_tier: "pro", created_at: "", role_ids: [] })),
+  createTeam: vi.fn(async (name: string) => ({ id: "team-1", name, owner_id: "u1", created_at: "" })),
+  listTeams: vi.fn(async () => []),
   deleteTeam: vi.fn(async () => {}),
   markSelfDeparture: vi.fn(),
   migrateVaultToTeam: vi.fn(async () => {}),
@@ -13,11 +14,11 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: h.invoke }));
 vi.mock("@/i18n", () => ({ default: { t: (k: string) => k } }));
-vi.mock("@/services/teamService", () => ({ createTeam: h.createTeam, deleteTeam: h.deleteTeam }));
+vi.mock("@/services/teamService", () => ({ createTeam: h.createTeam, deleteTeam: h.deleteTeam, listTeams: h.listTeams }));
 vi.mock("@/services/teamOffboarding", () => ({ markSelfDeparture: h.markSelfDeparture }));
 vi.mock("@/services/vaultTeamMigration", () => ({ migrateVaultToTeam: h.migrateVaultToTeam }));
 vi.mock("@/services/teamVaultSync", () => ({ initTeamVaultKey: h.initTeamVaultKey }));
-vi.mock("@/stores/notificationStore", () => ({
+vi.mock("@/stores/notificationStore", () => ({ APP_SOURCE: { kind: "app" },
   useNotificationStore: { getState: () => ({ addToast: h.addToast, updateToast: h.updateToast }) },
 }));
 

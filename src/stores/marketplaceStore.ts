@@ -1,17 +1,20 @@
 import { create } from "zustand";
 import i18n from "@/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { getVersion } from "@tauri-apps/api/app";
 import { loadPlugin, unloadPlugin, getLoadedPlugins } from "@/plugins/runtime";
 import { importPluginModule, pluginRegisterOf, injectPluginStyle, type PluginModule } from "@/plugins/importPluginModule";
 import type { PluginManifest } from "@/plugins/api";
-import { usePluginRegistryStore } from "@/stores/pluginRegistryStore";
+import { installAllowed, usePluginRegistryStore } from "@/stores/pluginRegistryStore";
 import { appFetch } from "@/services/http";
-import { resolveVerifiedHash } from "@/plugins/integrity";
+import { PluginHashMismatchError, resolveVerifiedHash } from "@/plugins/integrity";
 import { assertValidPluginId } from "@/plugins/pluginId";
-import { PluginInstallInProgressError } from "@/plugins/installErrors";
+import { isRetiredPlugin } from "@/plugins/retired";
+import { PluginInstallInProgressError, PluginInstallManagedError } from "@/plugins/installErrors";
 import { satisfiesMinAppVersion, MinAppVersionError, beatsSeededVersion, isParsableVersion } from "@/plugins/version";
 import { useSeededTombstoneStore, loadSeededEntries } from "@/stores/seededTombstoneStore";
+
+export { PluginInstallManagedError };
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -32,7 +35,12 @@ export interface MarketplacePlugin {
   version: string;
   minAppVersion?: string;
   tags: string[];
+  permissions?: string[];
+  /** Iconify name for the entry, e.g. `simple-icons:cloudflare`. */
+  icon?: string;
   theme: boolean;
+  preview?: unknown;
+  desktopOnly?: boolean;
   sourceId: string;
   hash?: string;
   cssHash?: string;
@@ -191,6 +199,65 @@ function externalPluginActive(manifestId: string): boolean {
   return usePluginRegistryStore.getState().isEnabled(manifestId, true);
 }
 
+/** Fetches an external plugin's files and verifies them against the catalogue entry's hashes. */
+async function fetchVerifiedBundle(plugin: MarketplacePlugin, reviewedManifestText: string | undefined) {
+  const appVersion = await resolveAppVersion();
+  if (appVersion !== null && !satisfiesMinAppVersion(plugin, appVersion)) {
+    throw new MinAppVersionError(plugin.minAppVersion!, appVersion);
+  }
+
+  const base = plugin.repo.startsWith("http")
+    ? plugin.repo
+    : `https://github.com/${plugin.repo}/releases/latest/download`;
+
+  // When the caller previewed the manifest for consent, reuse that exact text so the executed
+  // permission set is precisely the one shown — closing the fetch→consent→load TOCTOU
+  // (manifest.json is not hash-pinned; index.js still is). Only fetch the manifest fresh when
+  // no reviewed copy was supplied (e.g. the review-disclosure setting is off).
+  const [manifestText, jsText, cssText] = await Promise.all([
+    reviewedManifestText !== undefined
+      ? Promise.resolve(reviewedManifestText)
+      : invoke<string>("plugin_fetch_url", { url: `${base}/manifest.json` }),
+    invoke<string>("plugin_fetch_url", { url: `${base}/index.js` }),
+    // CSS: only fetched when the catalogue hash-pins it. A device must never
+    // execute or inject a network-fetched file nothing can vouch for, so with
+    // no cssHash this makes no request at all — identical to before this hash
+    // existed, and third-party plugins without a pinned stylesheet stay unstyled.
+    plugin.cssHash ? invoke<string>("plugin_fetch_url", { url: `${base}/voltius.css` }) : Promise.resolve(undefined),
+  ]);
+
+  const manifest = JSON.parse(manifestText) as PluginManifest;
+
+  // The two ids must be the same id. Everything on disk and in installedMeta is
+  // keyed by the CATALOGUE id (plugins/<plugin.id>/…), while the runtime registry,
+  // the enable/disable override and the tombstone store are all keyed by the
+  // MANIFEST id. Let them differ and the install silently splits in half: the
+  // plugin runs under one id and uninstall/update/disable act on the other.
+  // Checked before the hash verification and before anything is written, so a
+  // mismatched bundle leaves nothing behind.
+  if (manifest.id !== plugin.id) {
+    throw new Error(
+      `Catalogue id "${plugin.id}" does not match the bundle's manifest id "${manifest.id}".`,
+    );
+  }
+
+  // Integrity: refuse to execute a bundle that doesn't match its reviewed hash.
+  // Both hashes must verify before anything is written — a failed check must
+  // leave no partial install on disk.
+  const verifiedHash = await resolveVerifiedHash(jsText, plugin.hash);
+  const verifiedCssHash = plugin.cssHash ? await resolveVerifiedHash(cssText!, plugin.cssHash) : null;
+
+  return { manifestText, manifest, jsText, cssText, verifiedHash, verifiedCssHash };
+}
+
+/** The same source's current entry for `plugin`, when a fresh catalogue now pins different bytes at the same repo. */
+async function refreshedCatalogEntry(plugin: MarketplacePlugin): Promise<MarketplacePlugin | null> {
+  await useMarketplaceStore.getState().fetchCatalog();
+  const fresh = useMarketplaceStore.getState().catalog.find((p) => p.id === plugin.id && p.sourceId === plugin.sourceId);
+  if (!fresh || fresh.repo !== plugin.repo) return null;
+  return fresh.hash !== plugin.hash || fresh.cssHash !== plugin.cssHash ? fresh : null;
+}
+
 let appVersionPromise: Promise<string | null> | null = null;
 
 /** Resolves the running app's version once and caches it for the session. Falls
@@ -224,6 +291,7 @@ interface MarketplaceState {
   catalog: MarketplacePlugin[];
   catalogLoading: boolean;
   catalogError: string | null;
+  sourceErrors: Record<string, string>;
   fetchCatalog: () => Promise<void>;
 
   // Installed externally (not bundled)
@@ -306,15 +374,17 @@ export const useMarketplaceStore = create<MarketplaceState>((set, get) => ({
   catalog: [],
   catalogLoading: false,
   catalogError: null,
+  sourceErrors: {},
 
   async fetchCatalog() {
     const { sources } = get();
     set({ catalogLoading: true, catalogError: null });
     const results: MarketplacePlugin[] = [];
+    const sourceErrors: Record<string, string> = {};
     for (const source of sources.filter((s) => s.enabled)) {
       try {
         const res = await appFetch(source.url);
-        if (!res.ok) continue;
+        if (!res.ok) { sourceErrors[source.id] = `HTTP ${res.status}`; continue; }
         const data = await res.json();
         const list: MarketplacePlugin[] = Array.isArray(data) ? data : (data.plugins ?? []);
         // `builtin` is never trusted from a remote source — it routes installPlugin
@@ -322,12 +392,13 @@ export const useMarketplaceStore = create<MarketplaceState>((set, get) => ({
         // a click into a trusted load. Stripped here alongside the sourceId overwrite,
         // same as `deletable: true` is forced on custom sources in loadSources.
         const plugins = list.map((p) => ({ ...p, sourceId: source.id, builtin: undefined }));
-        results.push(...plugins);
+        results.push(...plugins.filter((p) => !isRetiredPlugin(p.id)));
       } catch (e) {
         console.warn(`[marketplace] Failed to fetch source "${source.id}":`, e);
+        sourceErrors[source.id] = String(e);
       }
     }
-    set({ catalog: results, catalogLoading: false });
+    set({ catalog: results, catalogLoading: false, sourceErrors });
   },
 
   // ── Installed meta ────────────────────────────────────────────────────
@@ -362,7 +433,10 @@ export const useMarketplaceStore = create<MarketplaceState>((set, get) => ({
     // name, so it is checked before any path is built from it. The manifest id is
     // checked separately by loadPlugin, since the two are not required to match.
     assertValidPluginId(plugin.id);
+    if (isRetiredPlugin(plugin.id)) throw new Error(`Plugin "${plugin.id}" is retired`);
     const { installing, installedMeta } = get();
+    const alreadyInstalled = installedMeta.some((m) => m.id === plugin.id) || getLoadedPlugins().some((m) => m.id === plugin.id);
+    if (!installAllowed(plugin.id, alreadyInstalled)) throw new PluginInstallManagedError(plugin.id);
     // Refused, not silently skipped: resolving here told every caller the install
     // succeeded — a deep-link confirm sheet accepted while the Settings tab was
     // installing the same id closed reporting success having written nothing.
@@ -377,52 +451,18 @@ export const useMarketplaceStore = create<MarketplaceState>((set, get) => ({
         return;
       }
 
-      const appVersion = await resolveAppVersion();
-      if (appVersion !== null && !satisfiesMinAppVersion(plugin, appVersion)) {
-        throw new MinAppVersionError(plugin.minAppVersion!, appVersion);
+      let entry = plugin;
+      let bundle;
+      try {
+        bundle = await fetchVerifiedBundle(entry, reviewedManifestText);
+      } catch (e) {
+        // A catalogue fetched earlier this session can predate a release; only a still-mismatching bundle is refused.
+        const fresh = e instanceof PluginHashMismatchError ? await refreshedCatalogEntry(plugin) : null;
+        if (!fresh) throw e;
+        entry = fresh;
+        bundle = await fetchVerifiedBundle(entry, reviewedManifestText);
       }
-
-      const base = plugin.repo.startsWith("http")
-        ? plugin.repo
-        : `https://github.com/${plugin.repo}/releases/latest/download`;
-
-      // When the caller previewed the manifest for consent, reuse that exact text so the executed
-      // permission set is precisely the one shown — closing the fetch→consent→load TOCTOU
-      // (manifest.json is not hash-pinned; index.js still is). Only fetch the manifest fresh when
-      // no reviewed copy was supplied (e.g. the review-disclosure setting is off).
-      const [fetchedManifestText, jsText, cssText] = await Promise.all([
-        reviewedManifestText !== undefined
-          ? Promise.resolve(reviewedManifestText)
-          : invoke<string>("plugin_fetch_url", { url: `${base}/manifest.json` }),
-        invoke<string>("plugin_fetch_url", { url: `${base}/index.js` }),
-        // CSS: only fetched when the catalogue hash-pins it. A device must never
-        // execute or inject a network-fetched file nothing can vouch for, so with
-        // no cssHash this makes no request at all — identical to before this hash
-        // existed, and third-party plugins without a pinned stylesheet stay unstyled.
-        plugin.cssHash ? invoke<string>("plugin_fetch_url", { url: `${base}/voltius.css` }) : Promise.resolve(undefined),
-      ]);
-      const manifestText = fetchedManifestText;
-
-      const manifest = JSON.parse(manifestText) as PluginManifest;
-
-      // The two ids must be the same id. Everything on disk and in installedMeta is
-      // keyed by the CATALOGUE id (plugins/<plugin.id>/…), while the runtime registry,
-      // the enable/disable override and the tombstone store are all keyed by the
-      // MANIFEST id. Let them differ and the install silently splits in half: the
-      // plugin runs under one id and uninstall/update/disable act on the other.
-      // Checked before the hash verification and before anything is written, so a
-      // mismatched bundle leaves nothing behind.
-      if (manifest.id !== plugin.id) {
-        throw new Error(
-          `Catalogue id "${plugin.id}" does not match the bundle's manifest id "${manifest.id}".`,
-        );
-      }
-
-      // Integrity: refuse to execute a bundle that doesn't match its reviewed hash.
-      // Both hashes must verify before anything is written — a failed check must
-      // leave no partial install on disk.
-      const verifiedHash = await resolveVerifiedHash(jsText, plugin.hash);
-      const verifiedCssHash = plugin.cssHash ? await resolveVerifiedHash(cssText!, plugin.cssHash) : null;
+      const { manifestText, manifest, jsText, cssText, verifiedHash, verifiedCssHash } = bundle;
 
       await invoke("plugin_write_file", { id: plugin.id, filename: "manifest.json", content: manifestText });
       await invoke("plugin_write_file", { id: plugin.id, filename: "index.js", content: jsText });
@@ -461,8 +501,8 @@ export const useMarketplaceStore = create<MarketplaceState>((set, get) => ({
       const newMeta: InstalledPluginMeta[] = [
         ...installedMeta.filter((m) => m.id !== plugin.id),
         {
-          id: plugin.id, version: plugin.version, sourceId: plugin.sourceId,
-          hash: verifiedHash, cssHash: verifiedCssHash, repo: plugin.repo,
+          id: plugin.id, version: entry.version, sourceId: entry.sourceId,
+          hash: verifiedHash, cssHash: verifiedCssHash, repo: entry.repo,
         },
       ];
       await writeInstalledMeta(newMeta);
@@ -537,7 +577,7 @@ export const useMarketplaceStore = create<MarketplaceState>((set, get) => ({
 
     for (const id of ids) {
       if (id === "__meta__") continue;
-      if (knownIds.has(id)) continue;
+      if (knownIds.has(id) || isRetiredPlugin(id)) continue;
       try {
         const manifestText = await invoke<string>("plugin_read_file", { id, filename: "manifest.json" });
         const manifest = JSON.parse(manifestText) as PluginManifest;
@@ -575,7 +615,7 @@ export const useMarketplaceStore = create<MarketplaceState>((set, get) => ({
 export async function restoreMissingPlugins(): Promise<void> {
   const store = useMarketplaceStore.getState();
   const onDisk = new Set(await invoke<string[]>("plugins_list_installed"));
-  const missing = store.installedMeta.filter((m) => m.sourceId !== "local" && !onDisk.has(m.id));
+  const missing = store.installedMeta.filter((m) => m.sourceId !== "local" && !onDisk.has(m.id) && !isRetiredPlugin(m.id));
   if (missing.length === 0) return;
 
   if (store.catalog.length === 0) {
@@ -726,7 +766,7 @@ export async function loadInstalledPlugins(): Promise<void> {
 
   const ids = await invoke<string[]>("plugins_list_installed");
   for (const id of ids) {
-    if (id === "__meta__") continue;
+    if (id === "__meta__" || isRetiredPlugin(id)) continue;
     try {
       const manifestText = await invoke<string>("plugin_read_file", { id, filename: "manifest.json" });
       const manifest = JSON.parse(manifestText) as PluginManifest;

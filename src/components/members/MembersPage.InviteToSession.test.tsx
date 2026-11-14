@@ -41,6 +41,7 @@ vi.mock("react-i18next", () => ({
   initReactI18next: { type: "3rdParty", init: () => {} },
 }));
 vi.mock("@iconify/react", () => ({ Icon: () => null }));
+vi.mock("@/components/members/cards/JoinRequests", () => ({ JoinRequestsSection: () => null }));
 vi.mock("@/components/shared/StatusDot", () => ({ StatusDot: () => null }));
 vi.mock("@/components/shared/Panel", () => ({
   PanelShell: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -114,7 +115,7 @@ vi.mock("@/stores/teamVaultStateStore", () => ({ useTeamVaultStateStore: { getSt
 // Real runTeamAction + a stubbed notification store: exercises the actual
 // toast/error affordance instead of a passthrough mock, so a rejected
 // invite failing to surface an error is a real regression, not a vacuous one.
-vi.mock("@/stores/notificationStore", () => ({
+vi.mock("@/stores/notificationStore", () => ({ APP_SOURCE: { kind: "app" },
   useNotificationStore: { getState: () => ({ addToast: h.addToast, updateToast: h.updateToast }) },
 }));
 
@@ -155,7 +156,7 @@ vi.mock("@/stores/teamStore", () => {
 });
 vi.mock("@/stores/subscriptionStore", () => {
   // Pro: guest cap 1, the tier the cap guard has to hold for.
-  const state = { tier: "pro", isTeams: true, accountMode: "server", usedSeats: 1, totalSeats: 5, load: vi.fn() };
+  const state = { tier: "pro", isTeams: true, ownsTeamsPlan: true, accountMode: "server", usedSeats: 1, totalSeats: 5, load: vi.fn() };
   const useSubscriptionStore = Object.assign(
     (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state),
     { getState: () => state },
@@ -168,8 +169,8 @@ vi.mock("@/stores/uiStore", () => {
     membersSortMode: "name-asc",
     setMembersLayoutMode: vi.fn(),
     setMembersSortMode: vi.fn(),
-    membersInvitePending: false,
-    clearMembersInvitePending: vi.fn(),
+    membersPanelPending: null,
+    clearMembersPanelPending: vi.fn(),
     openSettings: vi.fn(),
     openCloudAuth: vi.fn(),
   };

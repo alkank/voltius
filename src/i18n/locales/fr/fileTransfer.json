@@ -4,6 +4,7 @@
       "localMachine": "Machine locale",
       "remoteFallback": "distant",
       "itemsCount_one": "{{count}} élément",
+      "itemsCount_many": "{{count}} éléments",
       "itemsCount_other": "{{count}} éléments"
     },
     "acceleratedBadge": {
@@ -11,6 +12,7 @@
       "description": "Regroupé dans une seule archive et extrait de l'autre côté — bien moins d'allers-retours que fichier par fichier.",
       "howItWorks": "Comment ça marche"
     },
+    "perFileBadge": { "reason": "Fichier par fichier : cet hôte ne peut pas transmettre tar en flux" },
     "conflict": {
       "title": "Ce fichier existe déjà",
       "conflictOf": "Conflit {{number}} sur {{total}}",
@@ -36,6 +38,7 @@
         "fileName": "Nom du fichier"
       },
       "emptyDirectory": "Dossier vide",
+      "refreshFailed": "Actualisation impossible : {{reason}}",
       "selection": {
         "selected": "{{count}} sélectionné(s)",
         "clear": "Effacer"
@@ -47,15 +50,21 @@
       },
       "menu": {
         "download_one": "Télécharger",
+        "download_many": "Télécharger {{count}} éléments",
         "download_other": "Télécharger {{count}} éléments",
         "copyToTarget_one": "Copier vers la cible",
+        "copyToTarget_many": "Copier {{count}} éléments vers la cible",
         "copyToTarget_other": "Copier {{count}} éléments vers la cible",
         "moveToTarget_one": "Déplacer vers la cible",
+        "moveToTarget_many": "Déplacer {{count}} éléments vers la cible",
         "moveToTarget_other": "Déplacer {{count}} éléments vers la cible",
         "delete_one": "Supprimer",
+        "delete_many": "Supprimer {{count}} éléments",
         "delete_other": "Supprimer {{count}} éléments",
         "copyPath_one": "Copier le chemin",
+        "copyPath_many": "Copier {{count}} chemins",
         "copyPath_other": "Copier {{count}} chemins",
+        "permissions": "Permissions…",
         "compress": "Compresser en .tar.gz",
         "extractHere": "Extraire ici",
         "openInTerminal": "Ouvrir dans un terminal",
@@ -76,6 +85,31 @@
         "permissions": "Droits"
       }
     },
+    "permissions": {
+      "items_one": "{{count}} élément",
+      "items_many": "{{count}} éléments",
+      "items_other": "{{count}} éléments",
+      "bit": "{{who}}: {{what}}",
+      "read": "Lecture",
+      "write": "Écriture",
+      "execute": "Exécution",
+      "owner": "Propriétaire",
+      "group": "Groupe",
+      "others": "Autres",
+      "octal": "Mode octal",
+      "uid": "uid {{id}}",
+      "gid": "gid {{id}}",
+      "mixed": "mixte",
+      "noShell": "Changer le propriétaire ou le contenu d'un dossier nécessite un shell POSIX sur l'hôte.",
+      "recurse": "Récursif",
+      "scopeAll": "Tout",
+      "scopeFiles": "Fichiers",
+      "scopeDirs": "Dossiers",
+      "apply": "Appliquer",
+      "applyItems_one": "Appliquer à {{count}}",
+      "applyItems_many": "Appliquer à {{count}}",
+      "applyItems_other": "Appliquer à {{count}}"
+    },
     "side": {
       "chooseHost": "Choisir un hôte…",
       "back": "Précédent",
@@ -84,6 +118,7 @@
       "uploadHere": "Envoyer des fichiers ici",
       "selectFilesToDownload": "Sélectionner des fichiers à télécharger",
       "download_one": "Télécharger « {{name}} »",
+      "download_many": "Télécharger {{count}} éléments",
       "download_other": "Télécharger {{count}} éléments",
       "viewOptions": "Options d'affichage",
       "moreOptions": "Plus d'options",
@@ -96,8 +131,10 @@
     },
     "page": {
       "transferLeftToRight_one": "Transférer « {{name}} » →",
+      "transferLeftToRight_many": "Transférer {{count}} éléments →",
       "transferLeftToRight_other": "Transférer {{count}} éléments →",
       "transferRightToLeft_one": "Transférer « {{name}} » ←",
+      "transferRightToLeft_many": "Transférer {{count}} éléments ←",
       "transferRightToLeft_other": "Transférer {{count}} éléments ←",
       "selectFileLeft": "Sélectionnez un fichier à gauche",
       "selectFileRight": "Sélectionnez un fichier à droite",
@@ -105,26 +142,35 @@
       "compareHint": "Sélectionnez un fichier de chaque côté pour comparer",
       "selectFilesToUpload": "Sélectionner des fichiers à envoyer",
       "downloadToFolder": "Télécharger vers un dossier",
-      "connectionLost": "Connexion perdue"
+      "connectionLost": "Connexion perdue",
+      "moveSourceNotDeleted": "Copié, mais impossible de supprimer l’original de {{names}} : {{error}}"
     },
     "queue": {
       "title": "Transferts",
       "transferCount_one": "{{count}} transfert",
+      "transferCount_many": "{{count}} transferts",
       "transferCount_other": "{{count}} transferts",
-      "activeSuffix_one": " · {{count}} actif",
-      "activeSuffix_other": " · {{count}} actifs",
       "combinedThroughput": "Débit combiné",
       "cancelAll": "Annuler tous les transferts",
       "clearFinished": "Effacer les transferts terminés",
       "cancelTransfer": "Annuler le transfert",
       "retryTransfer": "Réessayer le transfert",
+      "waiting": "En attente de connexion…",
+      "resumedAt": "Repris à {{size}}",
+      "resumedTooltip": "Reprise là où le transfert interrompu s'était arrêté",
+      "skipped_one": "{{count}} nom ignoré, impossible à enregistrer sur ce système :",
+      "skipped_many": "{{count}} noms ignorés, impossibles à enregistrer sur ce système :",
+      "skipped_other": "{{count}} noms ignorés, impossibles à enregistrer sur ce système :",
       "mcpTooltip": "Démarré par {{client}}",
       "mcpTooltipUnknown": "Démarré par un client MCP",
       "status": {
         "done": "Terminé",
         "error": "Erreur",
         "cancelled": "Annulé"
-      }
+      },
+      "transferCountActive_one": "{{transfers}} · {{count}} actif",
+      "transferCountActive_many": "{{transfers}} · {{count}} actifs",
+      "transferCountActive_other": "{{transfers}} · {{count}} actifs"
     },
     "editor": {
       "common": {
@@ -139,7 +185,9 @@
         "loading": "Chargement de la comparaison…",
         "previousChange": "Modification précédente",
         "nextChange": "Modification suivante",
-        "saveErrorLine": "{{label}} : {{msg}}"
+        "saveErrorLine": "{{label}} : {{msg}}",
+        "applyToRight": "Appliquer à droite (→)",
+        "applyToLeft": "Appliquer à gauche (←)"
       },
       "tab": {
         "autoSave": "Enregistrement automatique",
@@ -150,15 +198,41 @@
           "binary": "Fichier binaire — édition impossible. Téléchargez-le à la place."
         }
       },
+      "image": {
+        "fit": "Ajuster",
+        "toggleFit": "Ajuster à l'onglet ou taille réelle (0 / 1)",
+        "zoomIn": "Zoom avant (+)",
+        "zoomOut": "Zoom arrière (−)",
+        "copy": "Copier l'image",
+        "copied": "Image copiée dans le presse-papiers",
+        "copyFailed": "Impossible de copier l'image : {{error}}",
+        "download": "Télécharger",
+        "tooLarge": "Cette image fait {{size}}, au-delà de la limite d'aperçu de {{limit}}.",
+        "previewAnyway": "Afficher quand même"
+      },
       "tabStrip": {
         "filesTab": "Fichiers",
         "pendingNameFallback": "ce fichier",
         "pendingNameDiffFallback": "cette comparaison",
-        "diffTitlePrefix": "diff : {{name}}",
         "discardTitle": "Abandonner les modifications non enregistrées ?",
         "discardMessage": "« {{name}} » contient des modifications non enregistrées. Fermer cet onglet les abandonnera.",
-        "discard": "Abandonner"
+        "discard": "Abandonner",
+        "diffTitle": "diff : {{name}}"
       }
+    },
+    "myDevices": {
+      "title": "Mes appareils",
+      "fileAccessOff": "L'accès aux fichiers est désactivé sur cet appareil",
+      "needsAccount": "L'accès aux fichiers entre vos appareils nécessite un compte Voltius.",
+      "offlineSeen": "Hors ligne · vu {{ago}}",
+      "offline": "Hors ligne",
+      "routeChip": "{{route}} · {{ms}} ms",
+      "readOnlyBadge": "Lecture seule",
+      "readOnlyShare": "{{name}} partage ces dossiers en lecture seule."
+    },
+    "connect": {
+      "deviceDialing": "Connexion…",
+      "deviceApproval": "En attente d'approbation sur {{name}}…"
     }
   }
 }

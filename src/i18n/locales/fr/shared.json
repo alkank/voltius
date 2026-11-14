@@ -1,13 +1,34 @@
 {
   "shared": {
+    "signOutConfirm": {
+      "title": "Se déconnecter et effacer les données de cet appareil ?",
+      "noServerCopy": "Les hôtes, clés et snippets de ce compte sont stockés uniquement sur cet appareil. La déconnexion les efface définitivement.",
+      "unsynced": "La synchronisation est en pause ou n'a pas pu joindre le serveur : les modifications récentes de cet appareil n'y sont peut-être pas enregistrées. La déconnexion efface la copie de cet appareil.",
+      "confirm": "Effacer et se déconnecter"
+    },
+    "deleteAccount": {
+      "action": "Supprimer le compte",
+      "actionSub": "Supprime définitivement votre compte cloud Voltius et ses données",
+      "title": "Supprimer votre compte Voltius ?",
+      "message": "Cette action supprime définitivement votre compte cloud, votre coffre chiffré et toutes les données de synchronisation du serveur Voltius. Vous quittez aussi les équipes dont vous êtes membre. Cette action est irréversible.",
+      "deviceNote": "Cet appareil est ensuite déconnecté et sa copie locale de vos hôtes, clés et snippets est effacée, comme lors d'une déconnexion. Les copies sur vos autres appareils ne sont pas supprimées à distance.",
+      "subscriptionNote": "Votre abonnement est annulé avec votre compte : il ne sera pas renouvelé et vous ne serez plus prélevé.",
+      "typeToConfirm": "Saisissez {{target}} pour confirmer",
+      "confirm": "Supprimer le compte",
+      "deleting": "Suppression…",
+      "deletedTitle": "Compte supprimé",
+      "deleted": "Votre compte Voltius a été supprimé.",
+      "failed": "Impossible de supprimer votre compte (erreur {{status}}). Réessayez plus tard ou contactez le support.",
+      "ownsTeamWithMembers": "Vous êtes le seul propriétaire d'une équipe qui a encore d'autres membres ({{teams}}). Nommez un autre membre propriétaire, retirez les membres ou supprimez l'équipe, puis réessayez.",
+      "subscriptionCancelFailed": "Votre abonnement n'a pas pu être annulé, votre compte n'a donc pas été supprimé. Réessayez dans quelques minutes ou contactez le support."
+    },
     "errorBanner": {
       "dismiss": "ignorer"
     },
     "trialExpiredModal": {
       "title": "Votre essai Pro est terminé",
       "subtitle": "Ces trois fonctionnalités s'arrêtent aujourd'hui :",
-      "freeNote": "Le coffre-fort local, les journaux d'audit et la synchronisation GitHub Gist restent gratuits, pour toujours.",
-      "teamsPrompt": "Vous travaillez à plusieurs ? Teams ajoute les coffres-forts partagés et les sièges.",
+      "teamsPrompt": "Vous travaillez à plusieurs ? Essayez Teams gratuitement pendant {{days}} jours (carte bancaire requise).",
       "upgradeButton": "Passer à Pro",
       "laterButton": "Plus tard"
     },
@@ -47,6 +68,7 @@
     },
     "avatarStack": {
       "participantCount_one": "{{count}} participant",
+      "participantCount_many": "{{count}} participants",
       "participantCount_other": "{{count}} participants"
     },
     "presence": {
@@ -63,14 +85,17 @@
       "memberBadge": "membre"
     },
     "pickers": {
-      "thisComputer": "Cet ordinateur"
+      "thisComputer": "Cet ordinateur",
+      "recent": "Récents"
     },
     "sessionPicker": {
       "insertTitle": "Insérer dans...",
       "executeTitle": "Exécuter dans...",
       "insertConfirm_one": "Insérer dans {{count}} cible",
+      "insertConfirm_many": "Insérer dans {{count}} cibles",
       "insertConfirm_other": "Insérer dans {{count}} cibles",
       "executeConfirm_one": "Exécuter dans {{count}} cible",
+      "executeConfirm_many": "Exécuter dans {{count}} cibles",
       "executeConfirm_other": "Exécuter dans {{count}} cibles",
       "noActiveSessions": "Aucune session active",
       "activeSessionsHeader": "Sessions actives",
@@ -86,7 +111,8 @@
       "localMachineName": "Machine locale",
       "wslSub": "WSL",
       "noHostsConfigured": "Aucun hôte configuré",
-      "noHostsMatch": "Aucun hôte ne correspond"
+      "noHostsMatch": "Aucun hôte ne correspond",
+      "allVaults": "Tous les coffres"
     },
     "sort": {
       "nameAsc": "A → Z",
@@ -103,15 +129,13 @@
       "noTagsMatch": "Aucun tag ne correspond à \"{{search}}\"",
       "deleteTagTitle": "Supprimer le tag \"{{tag}}\" ?",
       "deleteTagBody_one": "Ceci retirera le tag de {{count}} hôte. Les hôtes eux-mêmes ne seront pas supprimés.",
+      "deleteTagBody_many": "Ceci retirera le tag de {{count}} hôtes. Les hôtes eux-mêmes ne seront pas supprimés.",
       "deleteTagBody_other": "Ceci retirera le tag de {{count}} hôtes. Les hôtes eux-mêmes ne seront pas supprimés.",
       "renameTagTitle": "Renommer le tag",
       "deleteTagButtonTitle": "Supprimer le tag"
     },
     "vaultUnavailable": {
       "note": "Le coffre n'a pas pu être lu, les secrets enregistrés ne sont donc pas affichés ici. Laissez un champ vide pour conserver ce qui est enregistré ; saisir une nouvelle valeur la remplace."
-    },
-    "storedSecrets": {
-      "forbidden": "Votre rôle dans ce coffre ne permet pas de voir les secrets enregistrés : ces champs restent vides. La connexion fonctionne quand même — l'identifiant enregistré est utilisé sans être affiché."
     },
     "teamCredentials": {
       "unavailable": "Les identifiants enregistrés de ce coffre d'équipe n'ont pas pu être chargés : les hôtes qui utilisent un mot de passe, une clé ou une phrase secrète enregistrés échoueront à la connexion. Demandez à un administrateur du coffre d'accorder à votre rôle l'accès aux secrets du coffre."
@@ -130,6 +154,52 @@
     },
     "tunnelStatus": {
       "noRemoteListener": "Rien n'écoute sur le port distant"
-    }
+    },
+    "permissions": {
+      "everyone": "@tout le monde",
+      "moveWarning": {
+        "title": "Les permissions vont changer",
+        "body": "Le déplacement applique les permissions de ce dossier :",
+        "bodyUnknown": "Le déplacement applique les permissions de ce dossier.",
+        "line": "{{subject}} · {{permission}} : {{before}} → {{after}}",
+        "confirm": "Déplacer",
+        "cancelled": "Déplacement annulé"
+      },
+      "section": {
+        "title": "Permissions",
+        "titleKey": "Qui peut utiliser cette clé",
+        "titleIdentity": "Qui peut utiliser cette identité",
+        "adminNote": "Les propriétaires et les administrateurs peuvent toujours utiliser toutes les clés.",
+        "syncedWith": "Synchronisé avec {{folder}}",
+        "syncedTeam": "Utilise les permissions de l'équipe",
+        "notSynced": "Non synchronisé",
+        "syncNow": "Synchroniser",
+        "ownPermissions": "Permissions propres",
+        "useTeams": "Utiliser celles de l'équipe",
+        "addSubject": "Ajouter un rôle ou un membre",
+        "searchSubjects": "Rechercher des rôles et des membres…",
+        "noSubjectsLeft": "Tous les rôles et membres sont déjà listés",
+        "use": "Utiliser",
+        "requiresConnect": "Nécessite {{connect}}",
+        "roleCount_one": "{{count}} rôle",
+        "roleCount_many": "{{count}} rôles",
+        "roleCount_other": "{{count}} rôles",
+        "loadFailed": "Impossible de charger les permissions"
+      }
+    },
+    "businessLock": {
+      "title": "Fonctionnalité du forfait Business",
+      "upgrade": "Passer à Business",
+      "ownerOnly": "Seul le propriétaire de l'équipe peut changer de forfait.",
+      "removeRules": "Supprimer les règles",
+      "confirmClear": "Cliquez à nouveau pour supprimer",
+      "rolesBody": "Les rôles personnalisés nécessitent le forfait Business de l'équipe.",
+      "memberLapsed": "Forfait Business expiré : les permissions accordées à {{name}} sont désactivées ; les restrictions restent appliquées.",
+      "objectLapsed": "Forfait Business expiré : les règles d'autorisation sont désactivées ; les règles de refus restent appliquées.",
+      "memberLine": "Les permissions par membre nécessitent le forfait Business.",
+      "objectLine": "Les permissions par objet nécessitent le forfait Business.",
+      "removeOverrides": "Supprimer les dérogations"
+    },
+    "availableWith": "Disponible avec {{plan}}"
   }
 }

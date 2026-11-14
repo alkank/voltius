@@ -7,21 +7,28 @@
       "noActiveSession": "Etkin oturum yok"
     },
     "historyPanel": {
-      "relativeTime": {
-        "justNow": "az önce",
-        "secondsAgo": "{{count}} sn önce",
-        "minutesAgo": "{{count}} dk önce",
-        "hoursAgo": "{{count}} sa önce",
-        "daysAgo": "{{count}} gün önce"
-      },
+      "historyOff": "Komut geçmişi kapalı.\nAyarlar › Terminal bölümünden açabilirsiniz.",
       "removeFromHistory": "Geçmişten kaldır",
       "searchPlaceholder": "Geçmişte ara…",
-      "showCurrentOnly": "Yalnızca geçerli bağlantı gösteriliyor",
       "showAllConnections": "Tüm bağlantıları göster",
       "clearAllTitle": "Tüm geçmişi temizle",
       "noCommandsMatch": "Eşleşen komut yok",
       "noHistoryForConnection": "Bu bağlantı için henüz geçmiş yok",
-      "noHistoryYet": "Henüz komut geçmişi yok.\nYazdığınız komutlar burada görünür."
+      "noHistoryYet": "Henüz komut geçmişi yok.\nYazdığınız komutlar burada görünür.",
+      "favorites": "Favoriler",
+      "recent": "Son kullanılanlar",
+      "addFavorite": "Favorilere ekle",
+      "addFavoriteTeam": "Favorilere ekle. Favoriler hesabınıza kaydedilir ve eşitlenir; ekipten ayrılsanız bile kalır.",
+      "removeFavorite": "Favorilerden çıkar",
+      "saveAsSnippet": "Kod parçacığı olarak kaydet…",
+      "showOnlyHost": "Yalnızca {{host}} göster",
+      "clearHostFilter": "Sunucu filtresini kaldır",
+      "showCurrentHost": "Yalnızca geçerli sunucuyu göster",
+      "clearConfirm_one": "{{count}} komut temizlensin mi?",
+      "clearConfirm_other": "{{count}} komut temizlensin mi?",
+      "favoritesStay_one": "Favoriniz kalır.",
+      "favoritesStay_other": "{{count}} favoriniz kalır.",
+      "clear": "Temizle"
     },
     "multiplayerBar": {
       "ended": "Sona erdi",
@@ -37,7 +44,9 @@
       "stopSharingTitle": "Paylaşımı durdur",
       "leaveSessionTitle": "Oturumdan ayrıl",
       "stop": "Durdur",
-      "leave": "Ayrıl"
+      "leave": "Ayrıl",
+      "waitingForKey": "Ana bilgisayar bekleniyor…",
+      "keyFailed": "Ana bilgisayar anahtarı paylaşmadı"
     },
     "sftp": {
       "hostLabel": {
@@ -85,7 +94,16 @@
         "tooManyParts": "Port veya uzak:yerel biçimini kullanın",
         "invalidRemotePort": "Port 1–65535 arasında olmalıdır",
         "invalidLocalPort": "Yerel port 1–65535 arasında olmalıdır"
-      }
+      },
+      "toast": {
+        "viewPorts": "Portları görüntüle →",
+        "forwardedOne": "{{port}} portu → localhost:{{localPort}} yönlendirildi",
+        "forwardedMany_one": "{{count}} port yönlendirildi",
+        "forwardedMany_other": "{{count}} port yönlendirildi",
+        "autoForwardCapped_one": "Otomatik yönlendirme duraklatıldı — {{count}} port zaten yönlendirildi",
+        "autoForwardCapped_other": "Otomatik yönlendirme duraklatıldı — {{count}} port zaten yönlendirildi"
+      },
+      "portLabel": "Port {{port}}"
     },
     "rightPanel": {
       "font": "Yazı tipi",
@@ -95,9 +113,11 @@
       "themeCustom": "özel",
       "createNewTheme": "Yeni tema oluştur",
       "closePanelTitle": "Paneli kapat",
+      "resizeHandle": "Boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın",
       "sections": {
         "history": "Geçmiş",
-        "sftp": "SFTP"
+        "sftp": "SFTP",
+        "notes": "Notlar"
       },
       "pluginUnavailable": "Bu panel artık kullanılamıyor. Paneli sağlayan eklenti kaldırıldı veya devre dışı bırakıldı.",
       "pluginUnavailableAction": "Temalara dön"
@@ -227,11 +247,8 @@
         "openingShell": "Kabuk açılıyor",
         "sftpSubsystem": "SFTP alt sistemi",
         "openingPort": "Port açılıyor",
-        "ready": "Hazır"
-      },
-      "connectionLost": {
-        "title": "Bağlantı koptu",
-        "subtitle": "Yeniden bağlanılıyor…"
+        "ready": "Hazır",
+        "portKnock": "Port vuruşu"
       },
       "reconnectWait": {
         "offline": {
@@ -247,17 +264,17 @@
       "connectionError": {
         "title": "Bağlantı başarısız",
         "retry": "Tekrar dene",
+        "enableLegacyAndRetry": "Eski algoritmaları aç ve tekrar dene",
         "dismiss": "Kapat"
       },
       "hostKeyConflict": {
         "title": "SUNUCU ANAHTARI DEĞİŞTİ",
-        "descriptionPrefix": "Şu sunucunun parmak izi değişti: ",
-        "descriptionSuffix": ".",
         "replace": "Değiştir",
         "addAsNew": "Yeni olarak ekle",
         "abort": "İptal et",
         "stored": "Kayıtlı",
-        "received": "Alınan"
+        "received": "Alınan",
+        "description": "<host>{{address}}</host> sunucusunun parmak izi değişti."
       },
       "passphrasePrompt": {
         "title": "ANAHTAR PAROLA İFADESİ GEREKLİ",
@@ -286,6 +303,24 @@
         "unlock": "Kasanın kilidini aç",
         "retry": "Tekrar dene",
         "dismiss": "Sekmeyi kapat"
+      },
+      "identityPick": {
+        "title": "Kimliğiniz kullanılamıyor",
+        "missingBody": "{{host}} için bir kimlik seçtiniz, ancak bu cihazda yok veya kaldırılmış. Bağlantı denenmedi.",
+        "forbiddenBody": "{{host}} için {{identity}} kimliğini seçtiniz, ancak artık kullanamazsınız. Bağlantı denenmedi.",
+        "choose": "Başka bir kimlik seç",
+        "useHostNamed": "Bu sefer {{name}} (sunucu) kullan",
+        "useHost": "Bu sefer sunucunun kimlik bilgisini kullan"
+      },
+      "saveTarget": {
+        "rememberFor": "Şunun için hatırla",
+        "saveFor": "Şunun için kaydet",
+        "thisHost": "Bu sunucu",
+        "allVaultHosts": "Tüm {{vault}} sunucuları",
+        "everyone": "Herkes",
+        "onlyMe": "Yalnızca ben",
+        "ownNote": "Yalnızca siz. Ekip arkadaşlarınız sunucunun kendi ayarlarını kullanmaya devam eder.",
+        "teamNote": "Herkes, {{host}} sunucusunu tüm ekip için günceller. Yalnızca ben, sunucuyu olduğu gibi bırakır."
       }
     },
     "statusBar": {
@@ -306,6 +341,10 @@
       "serialReopen": "Seri portu yeniden aç",
       "serialAutoReconnectOn": "Otomatik yeniden bağlanma açık — portu yeniden almayı durdurmak için tıklayın",
       "serialAutoReconnectOff": "Otomatik yeniden bağlanma kapalı — bağlantı koptuğunda port serbest kalır",
+      "serialLineOn": "{{line}} açık — kapatmak için tıklayın",
+      "serialLineOff": "{{line}} kapalı — açmak için tıklayın",
+      "serialRtsFlowControlled": "RTS, RTS/CTS akış denetimi tarafından yönetiliyor",
+      "serialBreak": "Break sinyali gönder",
       "systemMetricsTitle": "Sistem ölçümleri",
       "activeTunnels_one": "{{count}} etkin tünel",
       "activeTunnels_other": "{{count}} etkin tünel",
@@ -315,6 +354,25 @@
       "sparklineMin": "en az {{value}} ms",
       "sparklineAvg": "ort. {{value}} ms",
       "sparklineMax": "en çok {{value}} ms"
+    },
+    "xterm": {
+      "linkTooltip": "Açmak için Alt+tıklayın",
+      "sessionClosed": "Oturum kapandı",
+      "serialClosed": "Seri bağlantı kapandı"
+    },
+    "pasteImage": {
+      "uploading": "Ekran görüntüsü yükleniyor",
+      "uploadingDetail": "{{host}} hedefine · {{size}} · {{width}}×{{height}}",
+      "pasted": "Ekran görüntüsü yapıştırıldı",
+      "pastedDetail": "{{host}} · {{name}}",
+      "firstUse": "Sunucuda 7 gün durur, yalnızca siz okuyabilirsiniz",
+      "settings": "Görsel yapıştırma ayarları",
+      "deleteFromHost": "Sunucudan sil",
+      "deleted": "Ekran görüntüsü sunucudan silindi",
+      "deleteFailed": "Ekran görüntüsü silinemedi",
+      "failed": "Ekran görüntüsü yüklenemedi",
+      "retry": "Yeniden dene",
+      "broadcast": "Aynı anda birden fazla bölmeye yazarken görsel yapıştırma kapalıdır."
     }
   }
 }

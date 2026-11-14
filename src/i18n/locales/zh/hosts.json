@@ -8,10 +8,11 @@
       "importExport": "导入/导出",
       "import": "导入…",
       "export": "导出…",
-      "fromImporter": "从 {{label}}",
+      "importFrom": "导入自",
       "newHost": "新建主机",
       "newSerialHost": "新建串口主机",
-      "newFolder": "新建文件夹"
+      "newFolder": "新建文件夹",
+      "systemShell": "系统默认"
     },
     "card": {
       "pin": "置顶",
@@ -31,30 +32,31 @@
       "copyHostnameIp": "复制主机名/IP",
       "copiedHost": "已复制 {{host}}",
       "executeSnippet": "执行代码片段",
-      "cloudSyncDisabled": "云同步已禁用",
-      "enableCloudSync": "启用云同步",
-      "disableCloudSync": "禁用云同步",
       "enableReachability": "启用可达性检查",
       "disableReachability": "禁用可达性检查",
       "connectTitle": "连接（或双击）",
       "openFilesTitle": "打开文件（或双击）",
       "inUseBy": "正在被 {{name}} 使用",
       "inUseByOverflow_one": "正在被 {{name}} + {{count}} 人使用",
-      "inUseByOverflow_other": "正在被 {{name}} + {{count}} 人使用"
+      "inUseByOverflow_other": "正在被 {{name}} + {{count}} 人使用",
+      "filesSuffix": "文件",
+      "knockProtected": "受端口敲门保护。仅在 Voltius 敲门后检测。",
+      "knockWindowOpen": "敲门窗口已打开",
+      "knockProtectedShort": "受敲门保护"
     },
     "page": {
       "all": "全部",
       "folders": "文件夹",
       "new": "新建",
       "pinned": "已置顶",
-      "folderEmpty": "此文件夹为空",
-      "addHost": "添加主机",
       "noSearchResults": "没有匹配 \"{{search}}\" 的主机",
       "ejectMoveTo": "移动到 {{name}}",
       "ejectRemoveFromFolder": "从文件夹中移除",
       "emptyState": {
         "title": "暂无主机",
-        "subtitle": "添加您的第一台 SSH 主机开始使用"
+        "subtitle": "添加服务器，一键即可连接。",
+        "import": "导入主机",
+        "quickConnect": "直接连接（不保存）"
       },
       "draft": {
         "unsaved": "未保存"
@@ -72,8 +74,6 @@
         "moveItemsTo_other": "移动 {{count}} 个项目到",
         "copyItemsTo_one": "复制 {{count}} 个项目到",
         "copyItemsTo_other": "复制 {{count}} 个项目到",
-        "enableCloudSync": "启用云同步 ({{count}})",
-        "disableCloudSync": "禁用云同步 ({{count}})",
         "enableReachability": "启用可达性检查 ({{count}})",
         "disableReachability": "禁用可达性检查 ({{count}})",
         "exportHosts": "导出 {{count}} 台主机",
@@ -97,21 +97,21 @@
     },
     "remoteSessions": {
       "title": "其他设备上的实时会话",
-      "justNow": "刚刚",
-      "minutesAgo": "{{count}} 分钟前",
-      "hoursAgo": "{{count}} 小时前",
-      "daysAgo": "{{count}} 天前",
       "kill": "结束会话",
+      "join": "加入会话",
       "killing": "正在结束会话…",
       "undo": "撤销",
       "killFailed": "无法远程结束 — 打开会话以将其关闭",
-      "dismiss": "关闭"
+      "dismiss": "关闭",
+      "deviceActive": "{{device}} · {{age}}活跃",
+      "unknownDevice": "未知设备"
     },
     "teamSessions": {
       "title": "团队会话",
       "joinByCode": "通过代码加入",
-      "emptyHint": "队友共享的终端会显示在这里。有邀请码？粘贴到搜索框即可加入。",
+      "emptyHint": "队友共享的终端会显示在这里。有邀请链接或邀请码？使用“通过代码加入”。",
       "live": "实时",
+      "sharedBy": "{{name}} 正在共享",
       "pasteInviteCode": "粘贴邀请链接或代码以加入私有会话：",
       "inviteCodePlaceholder": "voltius://join?… 或 sessionId:token",
       "join": "加入",
@@ -142,6 +142,22 @@
       "failed": "{{host}} 的主机命令执行失败：{{error}}",
       "missingSnippet": "{{host}} 的主机命令代码片段缺失",
       "postPromptTimedOut": "{{host}} 的后置命令已跳过：60 秒内无响应"
+    },
+    "connectAs": {
+      "title": "以…身份连接",
+      "yours": "你的",
+      "hostDefault": "主机默认",
+      "vaultDefault": "我在 {{vault}} 的身份…",
+      "clearPick": "清除我的选择"
+    },
+    "managed": {
+      "badge": "ssh config",
+      "tooltip": "由 ~/.ssh/config 管理 · 别名 {{alias}}",
+      "bannerTitle": "由 ~/.ssh/config 管理",
+      "bannerBodyBefore": "别名 ",
+      "bannerBodyAfter": "。锁定的字段跟随该文件。",
+      "detach": "分离",
+      "detachMenu": "从 ~/.ssh/config 分离"
     }
   }
 }

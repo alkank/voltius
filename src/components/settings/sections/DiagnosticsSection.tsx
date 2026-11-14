@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { Toggle } from "@/components/shared/Toggle";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { SETTINGS_SURFACE } from "./shared";
+import { APP_SOURCE, useNotificationStore } from "@/stores/notificationStore";
 import { setVerboseLogging, createBugReport } from "@/services/diagnostics";
 import { getLoggerVerbose } from "@/lib/logger";
 
@@ -31,7 +32,7 @@ export default function DiagnosticsSection() {
       const name = path.split(/[\\/]/).pop() ?? "report.zip";
       setReportState("done");
       addToast({
-        source: { kind: "plugin", id: "core", name: "Voltius" }, type: "toast",
+        source: APP_SOURCE, type: "toast",
         message: t("settings.diagnostics.toastSaved", { name }),
         severity: "success", duration: 4000,
       });
@@ -39,7 +40,7 @@ export default function DiagnosticsSection() {
     } catch (e) {
       setReportState("idle");
       addToast({
-        source: { kind: "plugin", id: "core", name: "Voltius" }, type: "toast",
+        source: APP_SOURCE, type: "toast",
         message: t("settings.diagnostics.toastError", { reason: String(e) }),
         severity: "error", duration: 6000,
       });
@@ -52,7 +53,7 @@ export default function DiagnosticsSection() {
     : t("settings.diagnostics.createButton");
 
   return (
-    <div className="p-6 max-w-lg space-y-6">
+    <div className="p-6 space-y-6">
       <p className="text-sm text-(--t-text-dim)">{t("settings.diagnostics.intro")}</p>
 
       {/* Troubleshooting */}
@@ -60,8 +61,8 @@ export default function DiagnosticsSection() {
         <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
           {t("settings.diagnostics.troubleshootingTitle")}
         </h3>
-        <div className="rounded-lg px-4 py-3 space-y-3 bg-(--t-bg-elevated) border border-(--t-border)">
-          <div className="flex items-start justify-between gap-3">
+        <div data-settings-card className={`${SETTINGS_SURFACE} px-4 py-3 space-y-3`}>
+          <div data-setting-row className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-sm text-(--t-text-primary)">{t("settings.diagnostics.verboseLabel")}</p>
               <p className="text-xs mt-0.5 text-(--t-text-dim)">{t("settings.diagnostics.verboseSub")}</p>
@@ -87,12 +88,12 @@ export default function DiagnosticsSection() {
         <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-(--t-text-dim)">
           {t("settings.diagnostics.reportTitle")}
         </h3>
-        <div className="rounded-lg px-4 py-3 space-y-3 bg-(--t-bg-elevated) border border-(--t-border)">
+        <div data-settings-card className={`${SETTINGS_SURFACE} px-4 py-3 space-y-3`}>
           <button
             type="button"
             onClick={() => void onCreate()}
             disabled={reportState === "working"}
-            className="w-full flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium bg-(--t-accent) text-white disabled:opacity-60"
+            className="w-full flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium bg-(--t-accent) text-(--t-on-accent) disabled:opacity-60"
           >
             <Icon
               icon={reportState === "working" ? "lucide:loader-circle" : reportState === "done" ? "lucide:check" : "lucide:bug"}

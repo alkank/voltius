@@ -1,8 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import type { Connection, ConnectionFormData } from "@/types";
 
 export async function listConnections(): Promise<Connection[]> {
   return invoke("connection_list");
+}
+
+export async function listDeletedConnections(): Promise<Record<string, string>> {
+  return invoke("connection_deleted_at");
 }
 
 export async function saveConnection(data: ConnectionFormData): Promise<Connection> {
@@ -22,8 +26,8 @@ export async function deleteConnection(id: string): Promise<void> {
   return invoke("connection_delete", { id });
 }
 
-export async function setConnectionDistro(id: string, distro: string): Promise<void> {
-  return invoke("connection_set_distro", { id, distro });
+export async function setConnectionDistro(id: string, distro: string, clearIcon: boolean): Promise<void> {
+  return invoke("connection_set_distro", { id, distro, clearIcon });
 }
 
 export async function setConnectionLastUsed(id: string): Promise<void> {

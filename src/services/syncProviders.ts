@@ -1,0 +1,193 @@
+import type { PluginManifest, SettingsPage, SyncProviderAvailability, SyncProviderSummary } from "@/plugins/api";
+import type { MarketplacePlugin } from "@/stores/marketplaceStore";
+import { attributePage } from "@/plugins/attributePage";
+import { uninstalledEntries } from "@/plugins/uninstalledEntries";
+import type { SyncStatus } from "./sync";
+import {
+  NOT_CONFIGURED_SYNC_STATE,
+  sanitizeSyncProviderState,
+  statusHasReason,
+  warnPluginStateOnce,
+  type SyncProviderSnapshot,
+} from "./syncStatus";
+import { compareStrings } from "@/utils/localeFormat";
+
+export const SYNC_PROVIDER_PERMISSION = "sync:write";
+export const VOLTIUS_PROVIDER_ID = "voltius";
+const DEFAULT_PROVIDER_ICON = "lucide:refresh-cw";
+
+export type SyncProviderAction =
+  | { kind: "signIn" }
+  | { kind: "upgrade" }
+  | { kind: "pause" }
+  | { kind: "resume" }
+  | { kind: "enable" }
+  | { kind: "configure"; pageId: string | null }
+  | { kind: "showDevices" };
+
+export interface SyncProviderView {
+  id: string;
+  label: string;
+  icon: string;
+  availability: SyncProviderAvailability;
+  state: SyncProviderSnapshot;
+  syncNow: (() => Promise<void>) | null;
+  action: SyncProviderAction | null;
+  pauseToggle: SyncProviderAction | null;
+}
+
+export interface LoadedPluginInfo {
+  manifest: PluginManifest;
+  active: boolean;
+  exposed: unknown;
+  publishedState: unknown;
+}
+
+export interface VoltiusSyncInput {
+  label: string;
+  state: { status: SyncStatus; lastSync: Date | null; error: string | null; blobSizeBytes: number | null };
+  accountMode: string | null;
+  isPro: boolean;
+  canUpgrade: boolean;
+  paused: boolean;
+  syncNow: () => Promise<void>;
+}
+
+export interface SyncProviderInputs {
+  voltius: VoltiusSyncInput;
+  plugins: LoadedPluginInfo[];
+  settingsPages: SettingsPage[];
+}
+
+export interface EffectiveSync {
+  configured: boolean;
+  /** Voltius sync is paused on this device and nothing else is syncing. */
+  paused: boolean;
+  status: SyncStatus;
+  lastSync: Date | null;
+  error: string | null;
+  errorSource: string | null;
+  nearby: number;
+}
+
+const STATUS_RANK: Record<SyncStatus, number> = { idle: 0, success: 1, partial: 2, syncing: 3, offline: 4, error: 5 };
+
+const VOLTIUS_ACTIONS: Partial<Record<SyncProviderAvailability, SyncProviderAction>> = {
+  locked: { kind: "signIn" },
+  needs_upgrade: { kind: "upgrade" },
+  paused: { kind: "resume" },
+};
+
+const VOLTIUS_PAUSE_TOGGLES: Partial<Record<SyncProviderAvailability, SyncProviderAction>> = {
+  active: { kind: "pause" },
+  paused: { kind: "resume" },
+};
+
+function voltiusProvider(v: VoltiusSyncInput): SyncProviderView {
+  const availability: SyncProviderAvailability =
+    v.accountMode !== "server" ? "locked" : v.paused ? "paused" : !v.isPro ? "needs_upgrade" : "active";
+  const active = availability === "active";
+  return {
+    id: VOLTIUS_PROVIDER_ID,
+    label: v.label,
+    icon: "lucide:cloud",
+    availability,
+    state: { ...v.state, configured: active },
+    syncNow: active || availability === "paused" ? v.syncNow : null,
+    action: availability === "needs_upgrade" && !v.canUpgrade ? null : VOLTIUS_ACTIONS[availability] ?? null,
+    pauseToggle: VOLTIUS_PAUSE_TOGGLES[availability] ?? null,
+  };
+}
+
+function exposedSyncNow(pluginId: string, exposed: unknown): (() => Promise<void>) | null {
+  let fn: unknown;
+  try {
+    fn = (exposed as { syncNow?: unknown } | null)?.syncNow;
+  } catch {
+    fn = undefined;
+  }
+  if (typeof fn === "function") return async () => { await (fn as () => unknown).call(exposed); };
+  warnPluginStateOnce(pluginId, "syncNow", "sync provider exposes no syncNow function");
+  return null;
+}
+
+function pluginProvider(p: LoadedPluginInfo, page: SettingsPage | undefined): SyncProviderView {
+  const { id, name } = p.manifest;
+  const state = p.publishedState === undefined ? NOT_CONFIGURED_SYNC_STATE : sanitizeSyncProviderState(p.publishedState, id);
+  const availability: SyncProviderAvailability = !p.active ? "disabled" : state.configured ? "active" : "not_configured";
+  return {
+    id,
+    label: name,
+    icon: page?.icon ?? DEFAULT_PROVIDER_ICON,
+    availability,
+    state,
+    syncNow: availability === "active" ? exposedSyncNow(id, p.exposed) : null,
+    action: availability === "disabled" ? { kind: "enable" } : { kind: "configure", pageId: page?.id ?? null },
+    pauseToggle: null,
+  };
+}
+
+export function buildSyncProviders(inputs: SyncProviderInputs): SyncProviderView[] {
+  const pluginIds = inputs.plugins.map((p) => p.manifest.id);
+  const plugins = inputs.plugins
+    .filter((p) => p.manifest.permissions.includes(SYNC_PROVIDER_PERMISSION))
+    .map((p) => pluginProvider(p, inputs.settingsPages.find((page) => attributePage(page.id, pluginIds) === p.manifest.id)))
+    .sort((a, b) => compareStrings(a.label, b.label));
+  return [voltiusProvider(inputs.voltius), ...plugins];
+}
+
+export function splitCloudProvider(providers: SyncProviderView[]): { cloud?: SyncProviderView; others: SyncProviderView[] } {
+  return { cloud: providers.find((p) => p.id === VOLTIUS_PROVIDER_ID), others: providers.filter((p) => p.id !== VOLTIUS_PROVIDER_ID) };
+}
+
+export function isNearbyOnly(sync: EffectiveSync): boolean {
+  return sync.nearby > 0 && sync.status !== "error" && (!sync.configured || sync.status === "offline");
+}
+
+export function aggregateSyncStatus(providers: SyncProviderView[], nearby = 0): EffectiveSync {
+  const active = providers.filter((p) => p.availability === "active");
+  if (active.length === 0) {
+    const voltius = providers.find((p) => p.id === VOLTIUS_PROVIDER_ID);
+    // A free account's login sync ends in a 402; that is the plan, not a sync failure.
+    const fallback = voltius && voltius.availability !== "needs_upgrade" ? voltius.state : NOT_CONFIGURED_SYNC_STATE;
+    return {
+      configured: false,
+      paused: voltius?.availability === "paused",
+      status: fallback.status,
+      lastSync: fallback.lastSync,
+      error: fallback.error,
+      errorSource: null,
+      nearby,
+    };
+  }
+  const worst = active.reduce((w, p) => (STATUS_RANK[p.state.status] > STATUS_RANK[w.state.status] ? p : w));
+  const lastSync = active.reduce<Date | null>(
+    (latest, p) => (p.state.lastSync && (!latest || p.state.lastSync > latest) ? p.state.lastSync : latest),
+    null,
+  );
+  const failing = worst.state.status === "error";
+  return {
+    configured: true,
+    paused: false,
+    status: worst.state.status,
+    lastSync,
+    error: statusHasReason(worst.state.status) ? worst.state.error : null,
+    errorSource: failing ? worst.label : null,
+    nearby,
+  };
+}
+
+export function availableCatalogProviders(catalog: MarketplacePlugin[], installedIds: ReadonlySet<string>): MarketplacePlugin[] {
+  return uninstalledEntries(catalog, installedIds).filter((p) => Boolean(p.permissions?.includes(SYNC_PROVIDER_PERMISSION)));
+}
+
+export function toSyncProviderSummary(p: SyncProviderView): SyncProviderSummary {
+  return {
+    id: p.id,
+    label: p.label,
+    availability: p.availability,
+    status: p.state.status,
+    lastSync: p.state.lastSync ? p.state.lastSync.toISOString() : null,
+    error: p.state.error,
+  };
+}

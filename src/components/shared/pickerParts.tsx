@@ -31,6 +31,7 @@ export function PickerTrigger({
       ref={buttonRef}
       type="button"
       onClick={onToggle}
+      data-picker-trigger
       className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
       style={{
         background: "var(--t-bg-base)",
@@ -174,4 +175,8 @@ export function PickerSearch({
       />
     </div>
   );
+}
+
+export function PickerSectionLabel({ children }: { children: React.ReactNode }) {
+  return <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-(--t-text-dim)">{children}</p>;
 }

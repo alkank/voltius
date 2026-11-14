@@ -3,16 +3,15 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Icon } from "@iconify/react";
 import { useAllConnections } from "@/hooks/useAllConnections";
-import { useSessionStore } from "@/stores/sessionStore";
-import { useVaultStore } from "@/stores/vaultStore";
-import { useTeamStore } from "@/stores/teamStore";
 import { ConnectionAvatar } from "@/components/shared/ConnectionAvatar";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { VaultBadge } from "@/components/shared/VaultBadge";
 import { pingStatusTone } from "@/utils/statusTone";
-import { parseQuickConnect, type QuickConnectIntent } from "@/services/quickConnect";
+import { parseQuickConnect } from "@/services/quickConnect";
+import { quickConnectLabel, type QuickConnectRowIntent } from "@/components/omni/quickConnectLabel";
 import { launchHost, launchQuickConnect, launchLocalShell } from "@/services/launch";
+import { partitionRecentHosts } from "@/utils/recentHosts";
 import {
-  partitionLauncherHosts,
   shellLabel,
   shellIcon,
   localShellNeedsPath,
@@ -20,71 +19,49 @@ import {
 } from "@/components/layout/newSessionItems";
 import { useLocalShells } from "@/hooks/useLocalShells";
 import { useHostPingStore } from "@/stores/hostPingStore";
-import { useIsAndroid } from "@/utils/platform";
+import { useIsMobile } from "@/utils/platform";
+import { useAnchoredPopover } from "@/hooks/useAnchoredPopover";
 import type { Connection } from "@/types";
 
 interface NewSessionPopoverProps {
+  open: boolean;
   anchorRef: React.RefObject<HTMLButtonElement | null>;
   onClose: () => void;
 }
 
 type Row =
-  | { kind: "quick-connect"; intent: Exclude<QuickConnectIntent, null> }
+  | { kind: "quick-connect"; intent: QuickConnectRowIntent }
   | { kind: "host"; connection: Connection }
   | { kind: "local-shell"; shell: ShellOption | null };
 
-function VaultBadge({ vaultId }: { vaultId: string | undefined }) {
-  const vaults = useVaultStore((s) => s.vaults);
-  const teams = useTeamStore((s) => s.teams);
-  const effectiveId = vaultId ?? "personal";
-  const vault = vaults.find((v) => v.id === effectiveId || v.teamId === effectiveId);
-  const team = !vault ? teams.find((t) => t.id === effectiveId) : undefined;
-  const name = vault?.name ?? team?.name ?? "Personal";
-  const isPersonal = effectiveId === "personal";
-  return (
-    <span
-      className="shrink-0 flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-sm border"
-      style={isPersonal
-        ? { background: "var(--t-bg-elevated)", color: "var(--t-text-muted)", borderColor: "var(--t-border)" }
-        : { background: "color-mix(in srgb, var(--t-accent) 12%, transparent)", color: "var(--t-accent)", borderColor: "color-mix(in srgb, var(--t-accent) 30%, transparent)" }}
-    >
-      <Icon icon="lucide:vault" width={10} />
-      {name}
-    </span>
-  );
+export function NewSessionPopover({ open, anchorRef, onClose }: NewSessionPopoverProps) {
+  const popover = useAnchoredPopover(open, onClose, anchorRef);
+  if (!popover.mounted) return null;
+  return <NewSessionPanel popover={popover} anchorRef={anchorRef} onClose={onClose} />;
 }
 
-export function NewSessionPopover({ anchorRef, onClose }: NewSessionPopoverProps) {
+function NewSessionPanel({ popover, anchorRef, onClose }: {
+  popover: ReturnType<typeof useAnchoredPopover>;
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
 
   const connections = useAllConnections();
-  const sessions = useSessionStore((s) => s.sessions);
   const shells = useLocalShells();
   // Android sandbox can't spawn a local PTY — hide local-shell launchers there.
-  const isAndroid = useIsAndroid();
+  const isMobile = useIsMobile();
 
   // One launcher per detected shell; fall back to a single default shell.
   const localShells: (ShellOption | null)[] = useMemo(
-    () => (isAndroid ? [] : shells.length ? shells : [null]),
-    [shells, isAndroid],
+    () => (isMobile ? [] : shells.length ? shells : [null]),
+    [shells, isMobile],
   );
   const shellNeedsPath = useMemo(() => localShellNeedsPath(shells), [shells]);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (panelRef.current?.contains(target)) return;
-      if (anchorRef.current?.contains(target)) return; // let the "+" button's onClick toggle it closed
-      onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose, anchorRef]);
 
   // Position under the anchor button.
   useEffect(() => {
@@ -95,17 +72,7 @@ export function NewSessionPopover({ anchorRef, onClose }: NewSessionPopoverProps
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => { setSelected(0); }, [query]);
 
-  const activeConnectionIds = useMemo(
-    () => new Set(
-      sessions.filter((s) => s.status === "connected" || s.status === "connecting").map((s) => s.connectionId),
-    ),
-    [sessions],
-  );
-
-  const { recent, hosts } = useMemo(
-    () => partitionLauncherHosts(connections, activeConnectionIds, query, 5, true),
-    [connections, activeConnectionIds, query],
-  );
+  const { recent, hosts } = useMemo(() => partitionRecentHosts(connections, query), [connections, query]);
 
   // Local shells live in the dedicated Local section, so drop the redundant
   // local Quick Connect row.
@@ -125,8 +92,10 @@ export function NewSessionPopover({ anchorRef, onClose }: NewSessionPopoverProps
   }, [quickIntent, recent, hosts, localShells]);
 
   const activate = useCallback((row: Row) => {
-    if (row.kind === "quick-connect") launchQuickConnect(row.intent);
-    else if (row.kind === "host") launchHost(row.connection.id);
+    if (row.kind === "quick-connect") {
+      if (row.intent.kind === "invalid-port") return;
+      launchQuickConnect(row.intent);
+    } else if (row.kind === "host") launchHost(row.connection.id);
     else launchLocalShell(row.shell?.path);
     onClose();
   }, [onClose]);
@@ -206,17 +175,13 @@ export function NewSessionPopover({ anchorRef, onClose }: NewSessionPopoverProps
     </>
   );
 
-  const quickLabel = quickIntent && (
-    quickIntent.kind === "ssh"
-      ? { t: t("layout.newSession.connectTo", { user: quickIntent.user, host: quickIntent.host }), s: t("layout.newSession.portSsh", { port: quickIntent.port }), i: "lucide:arrow-right" }
-      : { t: t("layout.newSession.serialConnection"), s: quickIntent.port ?? t("layout.newSession.configurePortBaud"), i: "lucide:ethernet-port" }
-  );
+  const quickLabel = quickIntent && quickConnectLabel(quickIntent, t);
 
   return createPortal(
     <div
-      ref={panelRef}
-      className="fixed z-100 w-[22rem] overflow-hidden surface-glass-solid animate-fadeIn shadow-xl"
-      style={{ top: pos.top, left: pos.left, borderRadius: "var(--r-lg)" }}
+      ref={popover.panelRef}
+      className={`fixed z-100 w-[22rem] overflow-hidden surface-glass-solid shadow-xl ${popover.className}`}
+      style={{ ...popover.style, top: pos.top, left: pos.left, borderRadius: "var(--r-lg)" }}
     >
       <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-b-(--t-border)">
         <Icon icon="lucide:search" width={15} className="text-(--t-accent) shrink-0" />
@@ -241,11 +206,11 @@ export function NewSessionPopover({ anchorRef, onClose }: NewSessionPopoverProps
               style={{ background: selected === quickIdx ? "var(--t-border-hover)" : "transparent" }}
             >
               <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 bg-(--t-bg-toolbar)">
-                <Icon icon={quickLabel.i} width={13} className="text-(--t-accent)" />
+                <Icon icon={quickLabel.icon} width={13} className={quickLabel.invalid ? "text-(--t-text-dim)" : "text-(--t-accent)"} />
               </div>
               <div className="flex-1 min-w-0">
-                <span className="text-sm font-medium" style={{ color: selected === quickIdx ? "var(--t-accent)" : "var(--t-text-primary)" }}>{quickLabel.t}</span>
-                <p className="text-xs mt-0.5 text-(--t-text-dim)">{quickLabel.s}</p>
+                <span className="text-sm font-medium" style={{ color: selected === quickIdx ? "var(--t-accent)" : "var(--t-text-primary)" }}>{quickLabel.title}</span>
+                <p className="text-xs mt-0.5 text-(--t-text-dim)">{quickLabel.subtitle}</p>
               </div>
             </button>
           </>
@@ -271,7 +236,7 @@ export function NewSessionPopover({ anchorRef, onClose }: NewSessionPopoverProps
           </p>
         )}
 
-        {!isAndroid && (
+        {!isMobile && (
           <>
             {sectionHeader(t("layout.newSession.sectionLocal"), !!quickIntent || recent.length > 0 || hosts.length > 0)}
             {localShells.map((shell, i) => shellRow(shell, localStart + i))}

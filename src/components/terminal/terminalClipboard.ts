@@ -2,11 +2,19 @@ import type { Terminal } from "@xterm/xterm";
 import { ClipboardAddon, type IClipboardProvider } from "@xterm/addon-clipboard";
 import { writeClipboard, readClipboard } from "@/utils/clipboard";
 import { getToggle } from "@/stores/toggleSettingsStore";
+import { logFailure } from "@/lib/logger";
+import { primaryOnly } from "@/utils/primaryModifier";
+import { findPane } from "./tmuxPanes";
+import { createPaneSelection, type Cell } from "./paneSelection";
+
+const MOUSE_MOVE = 32;
 
 export interface TerminalClipboardHandle {
   /** Returns false to consume the event, true to let xterm process it,
    *  or null when the event is not a clipboard shortcut. */
   handleKeyEvent(e: KeyboardEvent): boolean | null;
+  /** The selected text, whether xterm's own selection or one held to a tmux pane. */
+  selectionText(): string;
   dispose(): void;
 }
 
@@ -14,12 +22,14 @@ export interface TerminalClipboardOptions {
   /** Enable OSC 52: let the remote program write the local clipboard.
    *  Reads (paste-requests) are always refused. Off by default. */
   osc52?: boolean;
+  /** Called by a paste whose clipboard holds no text, e.g. a screenshot. */
+  pasteImage?: () => Promise<void>;
 }
 
 /**
  * Wire the full terminal clipboard behavior onto a terminal + its container:
  * copy-on-select (with feedback badge), smart Ctrl+C / Ctrl+Shift+C, paste
- * (Ctrl+V / Ctrl+Shift+V / right-click), and optionally OSC 52.
+ * (Ctrl+V / Ctrl+Shift+V / right-click, text or `pasteImage`), and optionally OSC 52.
  *
  * Mouse/selection listeners are owned here; key handling is exposed via
  * `handleKeyEvent` so callers can fold it into their own key handler.
@@ -90,20 +100,69 @@ export function attachTerminalClipboard(
   // ── drag-selects-text over an app that holds the mouse ───────────────────
   const core = (term as unknown as {
     _core?: {
-      coreMouseService?: { activeProtocol: string };
+      coreService?: { triggerDataEvent(data: string, wasUserInput?: boolean): void };
+      coreMouseService?: { activeProtocol: string; triggerMouseEvent(e: { action: number; ctrl?: boolean }): boolean };
       _selectionService?: { disable(): void; _enabled: boolean };
     };
   })._core;
   const mouseService = core?.coreMouseService;
 
+  // xterm clears the selection on any user input, motion reports included, so an
+  // app tracking every motion (tmux, Claude Code) wipes it as soon as the mouse moves.
+  const coreService = core?.coreService;
+  const triggerMouseEvent = mouseService?.triggerMouseEvent;
+  const triggerDataEvent = coreService?.triggerDataEvent;
+  let motionReport = false;
+  // tmux binds no Ctrl+drag, so a Ctrl drag handed to the app arrives as a plain one.
+  let ctrlHandoff = false;
+  if (mouseService && coreService && triggerMouseEvent && triggerDataEvent) {
+    mouseService.triggerMouseEvent = (ev) => {
+      motionReport = ev.action === MOUSE_MOVE;
+      const report = ctrlHandoff ? { ...ev, ctrl: false } : ev;
+      try { return triggerMouseEvent.call(mouseService, report); } finally { motionReport = false; }
+    };
+    coreService.triggerDataEvent = (data, wasUserInput) =>
+      triggerDataEvent.call(coreService, data, !!wasUserInput && !motionReport);
+  }
+  const restoreReporting = () => {
+    if (mouseService && triggerMouseEvent) mouseService.triggerMouseEvent = triggerMouseEvent;
+    if (coreService && triggerDataEvent) coreService.triggerDataEvent = triggerDataEvent;
+  };
+
   let parkedProtocol: string | null = null;
   let pressed: MouseEvent | null = null;
   let replaying = false;
+  let paneDrag = false;
+  const paneSelection = createPaneSelection(term);
+  const selectionText = () => paneSelection.text() || term.getSelection();
 
-  const dragSelectsText = () =>
-    !!mouseService &&
-    term.modes.mouseTrackingMode !== "none" &&
-    getToggle("drag-selects-text");
+  const appHoldsMouse = () => !!mouseService && term.modes.mouseTrackingMode !== "none";
+  const dragSelectsText = () => appHoldsMouse() && getToggle("drag-selects-text");
+
+  const screenRect = () => (term.element?.querySelector(".xterm-screen") ?? container).getBoundingClientRect();
+  const cellAt = (e: MouseEvent): Cell | null => {
+    const r = screenRect();
+    if (!r.width || !r.height) return null;
+    const clampTo = (v: number, n: number) => Math.min(Math.max(Math.floor(v), 0), n - 1);
+    return {
+      col: clampTo(((e.clientX - r.left) / r.width) * term.cols, term.cols),
+      row: clampTo(((e.clientY - r.top) / r.height) * term.rows, term.rows),
+    };
+  };
+
+  // Single and triple clicks inside a split tmux window select within that pane.
+  const paneUnder = (e: MouseEvent) => {
+    if (e.detail === 2 || term.buffer.active.type !== "alternate") return null;
+    if (appHoldsMouse() && !getToggle("drag-selects-text")) return null;
+    const at = cellAt(e);
+    const pane = at && findPane(term.buffer.active, term.cols, term.rows, at.col, at.row);
+    return pane && at ? { pane, at } : null;
+  };
+
+  const setNativeSelection = (on: boolean) => {
+    const selection = core?._selectionService;
+    if (selection) selection._enabled = on;
+  };
 
   const cloneMouse = (type: string, src: MouseEvent) =>
     new MouseEvent(type, {
@@ -126,15 +185,34 @@ export function attachTerminalClipboard(
     parkedProtocol = null;
   };
 
-  // The app was skipped on press, so a click that never became a drag is
-  // handed to it now, press and release together.
-  const replayToApp = (src: MouseEvent) => {
+  // The app was skipped on press, so it gets the press now: with its release for
+  // a click that never became a drag, alone for a drag it takes over.
+  const replayToApp = (src: MouseEvent, withRelease: boolean) => {
     const target = src.target as HTMLElement | null;
     if (!target) return;
     replaying = true;
     target.dispatchEvent(cloneMouse("mousedown", src));
-    document.dispatchEvent(cloneMouse("mouseup", src));
+    if (withRelease) document.dispatchEvent(cloneMouse("mouseup", src));
     replaying = false;
+  };
+
+  // The alternate screen has no scrollback here (tmux keeps it), so a drag past
+  // its edge goes to the app, which scrolls and selects from the same press.
+  const handleMouseMove = (e: MouseEvent) => {
+    const press = pressed;
+    if (!press || replaying || !(e.buttons & 1) || term.buffer.active.type !== "alternate") return;
+    const { top, bottom } = screenRect();
+    if (e.clientY >= top && e.clientY < bottom) return;
+    pressed = null;
+    term.clearSelection();
+    paneSelection.clear();
+    unpark();
+    replayToApp(press, false);
+  };
+  const handlePaneDrag = (e: MouseEvent) => {
+    if (!paneDrag || !(e.buttons & 1)) return;
+    const at = cellAt(e);
+    if (at) paneSelection.extend(at);
   };
 
   // A drag that starts in the terminal often ends outside it (window padding,
@@ -144,50 +222,81 @@ export function attachTerminalClipboard(
   const handleMouseDown = (e: MouseEvent) => {
     if (replaying || e.button !== 0) return;
     dragging = true;
+    paneSelection.clear();
+    if (e.ctrlKey && dragSelectsText()) ctrlHandoff = true;
     if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
-    if (!dragSelectsText() || !mouseService) return;
+    const inPane = paneUnder(e);
+    if (!inPane && !dragSelectsText()) return;
     // Parking at NONE before xterm's own listeners run re-enables its
     // selection; the app gets the mouse back on release.
-    if (parkedProtocol === null) parkedProtocol = mouseService.activeProtocol;
-    mouseService.activeProtocol = "NONE";
-    pressed = e;
+    if (mouseService && appHoldsMouse()) {
+      if (parkedProtocol === null) parkedProtocol = mouseService.activeProtocol;
+      mouseService.activeProtocol = "NONE";
+      pressed = e;
+    }
+    if (inPane) {
+      term.clearSelection();
+      setNativeSelection(false);
+      paneDrag = true;
+      paneSelection.start(inPane.pane, inPane.at, e.detail === 3);
+    }
   };
   const handleMouseUp = (e: MouseEvent) => {
     if (replaying) return;
     const press = pressed;
     pressed = null;
+    ctrlHandoff = false;
     unpark();
+    if (paneDrag) setNativeSelection(!appHoldsMouse());
+    paneDrag = false;
+    if (!press && !dragging) return;
+    const sel = selectionText();
     if (press) {
       const moved = Math.abs(e.clientX - press.clientX) + Math.abs(e.clientY - press.clientY) >= 4;
-      if (!moved && !term.getSelection()) replayToApp(press);
+      if (!moved && !sel) replayToApp(press, true);
     }
     if (!dragging) return;
     dragging = false;
     // Copy-on-select is opt-out: when the "Select to Copy" toggle is off, a
     // selection must NOT touch the clipboard (#50). Explicit Ctrl+Shift+C still
     // copies regardless.
-    if (!getToggle("select-to-copy")) return;
-    setTimeout(() => {
-      const sel = term.getSelection();
-      if (sel) {
-        writeClipboard(sel);
-        showBadge(e.clientX, e.clientY);
-      }
-    }, 20);
+    if (!getToggle("select-to-copy") || !sel) return;
+    writeClipboard(sel).then(
+      () => showBadge(e.clientX, e.clientY),
+      logFailure("copy-on-select"),
+    );
   };
   container.addEventListener("mousedown", handleMouseDown, true);
+  window.addEventListener("mousemove", handleMouseMove, true);
+  window.addEventListener("mousemove", handlePaneDrag);
   window.addEventListener("mouseup", handleMouseUp);
-  window.addEventListener("blur", unpark);
+  const handleBlur = () => {
+    ctrlHandoff = false;
+    unpark();
+  };
+  window.addEventListener("blur", handleBlur);
+
+  const pasteClipboard = async () => {
+    const text = await readClipboard().catch(() => "");
+    if (text) term.paste(text);
+    else await opts.pasteImage?.();
+  };
 
   const handleContextMenu = (e: MouseEvent) => {
     e.preventDefault();
-    readClipboard().then((text) => { if (text) term.paste(text); });
+    void pasteClipboard();
   };
   container.addEventListener("contextmenu", handleContextMenu);
 
   const selectionDispose = term.onSelectionChange(() => {
-    if (!term.getSelection()) hideBadge();
+    if (term.getSelection()) paneSelection.clear();
+    else hideBadge();
   });
+  const paneSelectionResets = [
+    term.onKey(() => paneSelection.clear()),
+    term.onResize(() => paneSelection.clear()),
+    term.buffer.onBufferChange(() => paneSelection.clear()),
+  ];
 
   // ── OSC 52: route remote clipboard writes through our Tauri-aware path; refuse reads ──
   let clipboardAddon: ClipboardAddon | null = null;
@@ -201,33 +310,19 @@ export function attachTerminalClipboard(
   }
 
   const handleKeyEvent = (e: KeyboardEvent): boolean | null => {
-    if (e.ctrlKey && e.shiftKey && e.key === "C") {
-      if (e.type === "keydown") {
-        const sel = term.getSelection();
-        if (sel) writeClipboard(sel);
-      }
-      return false;
-    }
-    if (e.ctrlKey && e.shiftKey && e.key === "V") {
-      e.preventDefault();
-      if (e.type === "keydown") {
-        readClipboard().then((text) => { if (text) term.paste(text); });
-      }
-      return false;
-    }
-    if (e.ctrlKey && !e.shiftKey && e.key === "c") {
-      const sel = term.getSelection();
+    if (!primaryOnly(e) || e.altKey) return null;
+    const key = e.key.toLowerCase();
+    if (key === "c") {
+      const sel = selectionText();
       if (sel) {
         if (e.type === "keydown") writeClipboard(sel);
         return false;
       }
-      return true;
+      return !e.shiftKey;
     }
-    if (e.ctrlKey && !e.shiftKey && e.key === "v") {
+    if (key === "v") {
       e.preventDefault();
-      if (e.type === "keydown") {
-        readClipboard().then((text) => { if (text) term.paste(text); });
-      }
+      if (e.type === "keydown") void pasteClipboard();
       return false;
     }
     return null;
@@ -235,13 +330,19 @@ export function attachTerminalClipboard(
 
   return {
     handleKeyEvent,
+    selectionText,
     dispose() {
       unpark();
+      restoreReporting();
       container.removeEventListener("mousedown", handleMouseDown, true);
+      window.removeEventListener("mousemove", handleMouseMove, true);
+      window.removeEventListener("mousemove", handlePaneDrag);
       window.removeEventListener("mouseup", handleMouseUp);
-      window.removeEventListener("blur", unpark);
+      window.removeEventListener("blur", handleBlur);
       container.removeEventListener("contextmenu", handleContextMenu);
       selectionDispose.dispose();
+      for (const d of paneSelectionResets) d.dispose();
+      paneSelection.clear();
       hideBadge();
       clipboardAddon?.dispose();
     },

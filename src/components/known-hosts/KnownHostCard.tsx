@@ -1,10 +1,11 @@
-import { Icon } from "@iconify/react";
 import { useTranslation } from "react-i18next";
 import { AvatarTile } from "@/components/shared/AvatarTile";
 import { BaseCard } from "@/components/shared/BaseCard";
+import { fingerprintLabel, isTlsPin } from "@/services/knownHosts";
 import { vaultMenuItems } from "@/utils/vaultMenuItems";
 import { getShortcutHint } from "@/stores/shortcutStore";
 import type { KnownHost, VaultOption } from "@/types";
+import { CardActionButton, CardMenuButton } from "@/components/shared/CardActionButton";
 
 interface KnownHostCardProps {
   host: KnownHost;
@@ -43,6 +44,14 @@ export function KnownHostCard({
   onCopyVault,
 }: KnownHostCardProps) {
   const { t } = useTranslation();
+  const tlsBadge = isTlsPin(host.fingerprint) && (
+    <span className="ml-1.5 px-1 py-px rounded text-[10px] font-semibold bg-(--t-bg-elevated) text-(--t-text-dim)" data-tls-badge>
+      {t("knownHosts.tlsBadge")}
+    </span>
+  );
+  const fingerprint = fingerprintLabel(host.fingerprint, t, truncateFingerprint);
+  const address = `${host.host}:${host.port}`;
+  const title = host.name ?? address;
   const contextMenuItems = [
     ...vaultMenuItems(otherVaults, canEdit, onMoveVault, onCopyVault, t),
     ...(canEdit && onDelete
@@ -67,56 +76,36 @@ export function KnownHostCard({
       bulkContextMenuItems={bulkContextMenuItems}
       data-selectable-id={host.id}
     >
-      {/* Fingerprint icon */}
       <AvatarTile icon="lucide:fingerprint-pattern" iconSize={isList ? 14 : 18} className={`rounded-xl ${isList ? "w-7 h-7" : "w-10 h-10"}`} />
 
       <div className="min-w-0 flex-1">
         {isList ? (
-          /* List layout */
           <div className="flex items-center gap-4">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-(--t-text-primary) truncate">
-                {host.name ?? `${host.host}:${host.port}`}
-              </p>
-              {host.name && (
-                <p className="text-xs text-(--t-text-dim) truncate">
-                  {host.host}:{host.port}
-                </p>
-              )}
-            </div>
-            <p className="text-xs text-(--t-text-dim) font-mono shrink-0 hidden md:block">
-              {truncateFingerprint(host.fingerprint)}
+            <p className="text-sm font-medium text-(--t-text-primary) truncate w-52 shrink-0">
+              {title}
+              {tlsBadge}
             </p>
+            <p className="text-xs text-(--t-text-dim) truncate flex-1 min-w-0">{host.name && address}</p>
+            <p className="text-xs text-(--t-text-dim) font-mono shrink-0 hidden md:block">{fingerprint}</p>
           </div>
         ) : (
-          /* Grid layout */
           <>
             <p className="text-sm font-medium text-(--t-text-primary) truncate">
-              {host.name ?? `${host.host}:${host.port}`}
+              {title}
+              {tlsBadge}
             </p>
-            {host.name && (
-              <p className="text-xs text-(--t-text-dim) truncate mt-0.5">
-                {host.host}:{host.port}
-              </p>
-            )}
+            {host.name && <p className="text-xs text-(--t-text-dim) truncate mt-0.5">{address}</p>}
             <p className="text-xs text-(--t-text-dim) font-mono truncate mt-1">
-              {truncateFingerprint(host.fingerprint)}
+              {fingerprint}
             </p>
           </>
         )}
       </div>
 
-      {/* Delete action (visible on hover) */}
-      {canEdit && onDelete && (
-        <button
-          className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-(--t-text-dim) opacity-0 group-hover:opacity-100 transition-opacity hover:text-status-error hover:bg-status-error/10"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          title={t("common.action.delete")}
-          type="button"
-        >
-          <Icon icon="lucide:trash-2" width={14} />
-        </button>
-      )}
+      <div className="flex items-center gap-0.5 shrink-0">
+        {isList && canEdit && onDelete && <CardActionButton icon="lucide:trash-2" title={t("common.action.delete")} danger width={14} onClick={onDelete} />}
+        <CardMenuButton width={14} />
+      </div>
     </BaseCard>
   );
 }

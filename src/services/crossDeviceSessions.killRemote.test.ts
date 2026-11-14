@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Connection } from "@/types";
 
@@ -17,7 +18,7 @@ vi.mock("@/stores/crossDeviceSessionsStore", () => ({
   useCrossDeviceSessionsStore: { getState: () => ({ markClosed }) },
 }));
 vi.mock("@/stores/connectionStore", () => ({
-  useConnectionStore: { getState: () => ({ connections: conns, teamConnections: {} }) },
+  findAnyConnection: (id: string) => conns.find((c) => c.id === id),
 }));
 
 let conns: Connection[] = [];

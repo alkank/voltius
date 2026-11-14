@@ -13,6 +13,7 @@
       "description": "Объединяется в один архив и распаковывается на другой стороне — значительно меньше обращений, чем при пофайловой передаче.",
       "howItWorks": "Как это работает"
     },
+    "perFileBadge": { "reason": "Пофайлово: этот хост не может передавать tar потоком" },
     "conflict": {
       "title": "Файл уже существует",
       "conflictOf": "Конфликт {{number}} из {{total}}",
@@ -38,6 +39,7 @@
         "fileName": "Имя файла"
       },
       "emptyDirectory": "Пустой каталог",
+      "refreshFailed": "Не удалось обновить: {{reason}}",
       "selection": {
         "selected": "Выбрано: {{count}}",
         "clear": "Очистить"
@@ -71,6 +73,7 @@
         "copyPath_few": "Копировать {{count}} пути",
         "copyPath_many": "Копировать {{count}} путей",
         "copyPath_other": "Копировать {{count}} путей",
+        "permissions": "Права доступа…",
         "compress": "Сжать в .tar.gz",
         "extractHere": "Извлечь сюда",
         "openInTerminal": "Открыть в терминале",
@@ -90,6 +93,33 @@
         "modified": "Изменён",
         "permissions": "Права"
       }
+    },
+    "permissions": {
+      "items_one": "{{count}} элемент",
+      "items_few": "{{count}} элемента",
+      "items_many": "{{count}} элементов",
+      "items_other": "{{count}} элементов",
+      "bit": "{{who}}: {{what}}",
+      "read": "Чтение",
+      "write": "Запись",
+      "execute": "Выполнение",
+      "owner": "Владелец",
+      "group": "Группа",
+      "others": "Остальные",
+      "octal": "Восьмеричный режим",
+      "uid": "uid {{id}}",
+      "gid": "gid {{id}}",
+      "mixed": "разные",
+      "noShell": "Для смены владельца или содержимого папки нужна POSIX-оболочка на хосте.",
+      "recurse": "Рекурсивно",
+      "scopeAll": "Все",
+      "scopeFiles": "Файлы",
+      "scopeDirs": "Папки",
+      "apply": "Применить",
+      "applyItems_one": "Применить к {{count}}",
+      "applyItems_few": "Применить к {{count}}",
+      "applyItems_many": "Применить к {{count}}",
+      "applyItems_other": "Применить к {{count}}"
     },
     "side": {
       "chooseHost": "Выберите хост…",
@@ -126,7 +156,8 @@
       "compareHint": "Выберите по одному файлу с каждой стороны для сравнения",
       "selectFilesToUpload": "Выберите файлы для загрузки",
       "downloadToFolder": "Скачать в папку",
-      "connectionLost": "Подключение потеряно"
+      "connectionLost": "Подключение потеряно",
+      "moveSourceNotDeleted": "Скопировано, но не удалось удалить исходный файл {{names}}: {{error}}"
     },
     "queue": {
       "title": "Передачи",
@@ -134,22 +165,29 @@
       "transferCount_few": "{{count}} передачи",
       "transferCount_many": "{{count}} передач",
       "transferCount_other": "{{count}} передач",
-      "activeSuffix_one": " · {{count}} активна",
-      "activeSuffix_few": " · {{count}} активны",
-      "activeSuffix_many": " · {{count}} активны",
-      "activeSuffix_other": " · {{count}} активны",
       "combinedThroughput": "Суммарная скорость",
       "cancelAll": "Отменить все передачи",
       "clearFinished": "Очистить завершённые передачи",
       "cancelTransfer": "Отменить передачу",
       "retryTransfer": "Повторить передачу",
+      "waiting": "Ожидание соединения…",
+      "resumedAt": "Продолжено с {{size}}",
+      "resumedTooltip": "Продолжено с места, где прервалась передача",
+      "skipped_one": "Пропущено {{count}} имя, недопустимое в этой системе:",
+      "skipped_few": "Пропущено {{count}} имени, недопустимых в этой системе:",
+      "skipped_many": "Пропущено {{count}} имён, недопустимых в этой системе:",
+      "skipped_other": "Пропущено {{count}} имени, недопустимых в этой системе:",
       "mcpTooltip": "Запущено клиентом {{client}}",
       "mcpTooltipUnknown": "Запущено MCP-клиентом",
       "status": {
         "done": "Готово",
         "error": "Ошибка",
         "cancelled": "Отменено"
-      }
+      },
+      "transferCountActive_one": "{{transfers}} · {{count}} активна",
+      "transferCountActive_few": "{{transfers}} · {{count}} активны",
+      "transferCountActive_many": "{{transfers}} · {{count}} активны",
+      "transferCountActive_other": "{{transfers}} · {{count}} активны"
     },
     "editor": {
       "common": {
@@ -164,7 +202,9 @@
         "loading": "Загрузка сравнения…",
         "previousChange": "Предыдущее изменение",
         "nextChange": "Следующее изменение",
-        "saveErrorLine": "{{label}}: {{msg}}"
+        "saveErrorLine": "{{label}}: {{msg}}",
+        "applyToRight": "Применить справа (→)",
+        "applyToLeft": "Применить слева (←)"
       },
       "tab": {
         "autoSave": "Автосохранение",
@@ -175,15 +215,41 @@
           "binary": "Двоичный файл — редактирование невозможно. Скачайте его вместо этого."
         }
       },
+      "image": {
+        "fit": "Вписать",
+        "toggleFit": "Вписать во вкладку или показать в реальном размере (0 / 1)",
+        "zoomIn": "Увеличить (+)",
+        "zoomOut": "Уменьшить (−)",
+        "copy": "Копировать изображение",
+        "copied": "Изображение скопировано в буфер обмена",
+        "copyFailed": "Не удалось скопировать изображение: {{error}}",
+        "download": "Скачать",
+        "tooLarge": "Размер изображения {{size}} превышает лимит предпросмотра {{limit}}.",
+        "previewAnyway": "Всё равно показать"
+      },
       "tabStrip": {
         "filesTab": "Файлы",
         "pendingNameFallback": "этот файл",
         "pendingNameDiffFallback": "это сравнение",
-        "diffTitlePrefix": "сравнение: {{name}}",
         "discardTitle": "Отменить несохранённые изменения?",
         "discardMessage": "\"{{name}}\" содержит несохранённые изменения. Закрытие вкладки приведёт к их потере.",
-        "discard": "Отменить"
+        "discard": "Отменить",
+        "diffTitle": "сравнение: {{name}}"
       }
+    },
+    "myDevices": {
+      "title": "Мои устройства",
+      "fileAccessOff": "Доступ к файлам на этом устройстве выключен",
+      "needsAccount": "Для доступа к файлам между вашими устройствами нужна учётная запись Voltius.",
+      "offlineSeen": "Не в сети · замечено {{ago}}",
+      "offline": "Не в сети",
+      "routeChip": "{{route}} · {{ms}} мс",
+      "readOnlyBadge": "Только чтение",
+      "readOnlyShare": "{{name}} предоставляет эти папки только для чтения."
+    },
+    "connect": {
+      "deviceDialing": "Подключение…",
+      "deviceApproval": "Ожидание подтверждения на {{name}}…"
     }
   }
 }

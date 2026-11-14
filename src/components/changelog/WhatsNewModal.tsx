@@ -5,12 +5,15 @@ import { Icon } from "@iconify/react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Modal, ModalCard } from "@/components/shared/Modal";
+import { Toggle } from "@/components/shared/Toggle";
 import { useUIStore } from "@/stores/uiStore";
+import { useUpdaterPrefStore } from "@/stores/updaterPrefStore";
+import { useIsMobile } from "@/utils/platform";
 import {
-  getUpdaterState,
-  onUpdaterStateChange,
+  useUpdaterStatus,
   installUpdate,
   checkForUpdate,
+  downloadUpdate,
   openDownloadPage,
   type UpdaterStatus,
 } from "@/services/updater";
@@ -44,8 +47,11 @@ function WhatsNewInner() {
   const [installed, setInstalled] = useState<string | null>(null);
   const [entries, setEntries] = useState<ChangelogEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [updater, setUpdater] = useState<UpdaterStatus>(getUpdaterState);
+  const updater = useUpdaterStatus();
   const [showOlder, setShowOlder] = useState(false);
+  const isMobile = useIsMobile();
+  const autoUpdate = useUpdaterPrefStore((s) => s.autoUpdate);
+  const setAutoUpdate = useUpdaterPrefStore((s) => s.setAutoUpdate);
 
   useEffect(() => {
     let alive = true;
@@ -53,9 +59,8 @@ function WhatsNewInner() {
     fetchChangelog()
       .then((raw) => { if (alive) setEntries(raw ? parseChangelog(raw) : null); })
       .finally(() => { if (alive) setLoading(false); });
-    const unsub = onUpdaterStateChange(() => setUpdater(getUpdaterState()));
     checkForUpdate().catch(() => {});
-    return () => { alive = false; unsub(); };
+    return () => { alive = false; };
   }, []);
 
   function handleClose() {
@@ -77,6 +82,19 @@ function WhatsNewInner() {
         <div className="flex items-center gap-2.5 px-5 py-4 border-b border-(--t-border) shrink-0">
           <Icon icon="lucide:megaphone" width={18} className="text-(--t-accent)" />
           <h2 className="text-sm font-semibold text-(--t-text-primary)">{t("changelog.title")}</h2>
+          {!isMobile && (
+            <div
+              className="flex items-center gap-2 ml-3 pl-3 border-l border-(--t-border)"
+              title={t("settings.about.autoDownload.desc")}
+            >
+              <span className="text-xs text-(--t-text-dim)">{t("changelog.autoDownload")}</span>
+              <Toggle
+                checked={autoUpdate}
+                onChange={setAutoUpdate}
+                aria-label={t("settings.about.autoDownload.title")}
+              />
+            </div>
+          )}
           <div className="ml-auto flex items-center gap-1">
             {getQuickLinks(t).map(({ icon, href, title }) => (
               <button
@@ -175,7 +193,8 @@ function UpdateBanner({ state }: { state: UpdaterStatus }) {
     );
   }
 
-  if (state.status === "externalUpdate") {
+  if (state.status === "available" || state.status === "externalUpdate") {
+    const download = state.status === "available" ? downloadUpdate : openDownloadPage;
     return (
       <div className="flex items-center gap-3 px-5 py-3 border-b border-(--t-border) bg-(--t-bg-elevated) shrink-0">
         <Icon icon="lucide:sparkles" width={15} className="text-(--t-accent) shrink-0" />
@@ -183,7 +202,7 @@ function UpdateBanner({ state }: { state: UpdaterStatus }) {
           {t("changelog.updateBanner.available", { version: state.version })}
         </span>
         <button
-          onClick={() => openDownloadPage().catch(() => {})}
+          onClick={() => download().catch(() => {})}
           className="btn btn-primary ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0"
         >
           <Icon icon="lucide:download" width={13} />
@@ -228,6 +247,7 @@ function EntryBlock({ entry, installed }: { entry: ChangelogEntry; installed: st
       {entry.groups.map((g) => (
         <div key={g.label} className="space-y-1.5">
           <span
+            lang="en"
             className="inline-block px-1.5 py-0.5 rounded text-[0.65rem] font-bold uppercase tracking-wide"
             style={groupChipStyle(g.label)}
           >

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { test, expect } from "vitest";
 import { groupPeople } from "./teamSharing";
 
@@ -31,4 +32,16 @@ test("a person in both Recent and Your teams appears once, under Recent", () => 
   const g = groupPeople({ query: "", teammates: [mate], recent: [recentMate], results: [] });
   expect(g.recent.map((p) => p.user_id)).toEqual(["m1"]);
   expect(g.teammates).toEqual([]);
+});
+
+test("a teammate is found by member name as well as handle", () => {
+  const named = { ...mate, member_name: "Jan Kowalski" };
+  const g = groupPeople({ query: "kowal", teammates: [named], recent: [], results: [] });
+  expect(g.teammates.map((p) => p.user_id)).toEqual(["m1"]);
+});
+
+test("a Recent person is found by the name resolved from the rosters", () => {
+  const nameOf = (id: string) => (id === "r1" ? "Kevin Parker" : null);
+  const g = groupPeople({ query: "parker", teammates: [], recent: [recent], results: [], nameOf });
+  expect(g.recent.map((p) => p.user_id)).toEqual(["r1"]);
 });

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { SerialConnectParams } from "@/types";
+import type { ConnectionType, SerialConnectParams } from "@/types";
 import type { AppTheme } from "@/themes/types";
 import type { Locale } from "@/stores/localeStore";
 import type { PluginAuditAction } from "@/services/auditContext";
@@ -14,6 +14,7 @@ import type { SubscriptionView } from "./domains/account";
 import type { PluginView, SourceView } from "./domains/plugins";
 import type { MarketplacePlugin } from "@/stores/marketplaceStore";
 import type { ExportResult, ExportType, ImportResult } from "./domains/importexport";
+import type { SyncSummary } from "@/services/sshConfig/sync";
 export type { ExportResult, ExportType, ImportResult } from "./domains/importexport";
 
 export type { PluginAuditAction } from "@/services/auditContext";
@@ -55,7 +56,7 @@ export interface PluginConnection extends PluginObjectPlacement {
   // Display-only fields — already present at runtime (runtime.ts:389 returns
   // full Connection records cast to PluginConnection[]); exposed here so the
   // agent UI can render a real per-host avatar. Optional and additive.
-  connection_type?: "ssh" | "serial" | "ftp";
+  connection_type?: ConnectionType;
   icon?: string;
   distro?: string;
   serial_port?: string;
@@ -170,16 +171,47 @@ export interface PluginTransfer {
   speed?: number;
   eta?: number;
   error?: string;
+  /** Remote paths left out because the local OS can't hold the name. */
+  skipped?: string[];
   /** Name of the MCP client that started it; absent for the user's own. */
   owner?: string;
 }
 
+/** `partial`: the sync finished but some sources could not be read. */
+export type SyncProviderStatus = "idle" | "syncing" | "success" | "partial" | "error" | "offline";
+
+export type SyncProviderAvailability = "active" | "not_configured" | "disabled" | "locked" | "needs_upgrade" | "paused";
+
+/** What a sync provider plugin publishes under `publishState("sync-state", …)`. */
+export interface SyncProviderState {
+  status: SyncProviderStatus;
+  lastSync: Date | string | number | null;
+  error: string | null;
+  blobSizeBytes: number | null;
+  configured: boolean;
+}
+
+/** What a sync provider plugin passes to `plugins.expose`. */
+export interface SyncProviderPublicApi {
+  syncNow(): Promise<void>;
+}
+
+export interface SyncProviderSummary {
+  id: string;
+  label: string;
+  availability: SyncProviderAvailability;
+  status: SyncProviderStatus;
+  lastSync: string | null;
+  error: string | null;
+}
+
 export interface PluginSyncState {
-  status: "idle" | "syncing" | "success" | "error" | "offline";
+  status: SyncProviderStatus;
   lastSync: string | null;
   error: string | null;
   cloudActive: boolean;
   blobSizeBytes: number | null;
+  providers: SyncProviderSummary[];
 }
 
 export interface PluginHostPing {
@@ -194,6 +226,8 @@ export interface PluginPane {
   paneId: string;
   sessionId: string;
   connectionName: string;
+  /** The session's user-given name, or null when its label is the connection name. */
+  title: string | null;
   active: boolean;
   maximized: boolean;
 }
@@ -203,6 +237,8 @@ export interface PluginPane {
 export interface PluginPaneTab {
   tabId: string;
   kind: "split" | "session";
+  /** A split tab's own name (null: the label follows the active pane); a standalone tab's session name. */
+  title: string | null;
   active: boolean;
   panes: PluginPane[];
   broadcastActive: boolean;
@@ -319,10 +355,10 @@ export interface PluginObjectMoveOutcome {
 
 export interface OmniCommand {
   id: string;
-  label: string;
+  label: PluginLabel;
   icon: string;
   keywords?: string[];
-  section?: string;
+  section?: PluginLabel;
   /** Optional keyboard shortcut. Format: "ctrl+k", "meta+shift+p". First-registered wins on conflict. */
   keybinding?: string;
   /** ID of a core shortcut to resolve as the hint (reactive, updates when user rebinds). */
@@ -385,8 +421,10 @@ export interface MobileScreenProps {
 }
 
 export interface MobileScreen {
+  /** Same id as a right panel section: phones open this screen for that panel instead of
+   *  its desktop component. */
   id: string;
-  /** Screen key MobileShell looks up on navigation, e.g. "docker", "metrics". */
+  /** Key that `pushMobileScreen` entries address, e.g. "docker-logs". */
   kind: string;
   render: React.FC<MobileScreenProps>;
 }
@@ -418,6 +456,10 @@ export interface PluginSession {
   type: string;
   /** Local sessions only: the shell path/name to use for a spawned exec PTY. */
   localShell?: string;
+  /** The user-given name its tab shows; unset, the tab shows `connectionName`. */
+  title?: string;
+  /** The user locked this tab: `sessions.close` rejects with `tab_locked`. */
+  locked?: boolean;
 }
 
 // ─── Files (SFTP / FTP / local) ────────────────────────────────────────────
@@ -606,8 +648,13 @@ export interface I18nAPI {
    *  before rendering anything that resolves keys. */
   register(catalog: PluginI18nCatalog): void;
   /** Resolve `key` against the host's active locale. Falls back to the "en" entry,
-   *  then to `key` itself (visible, never blank) if neither has it. */
+   *  then to `key` itself (visible, never blank) if neither has it. A numeric
+   *  `vars.count` picks a plural form the way i18next does: `key_one`, `key_few`,
+   *  `key_many`… per the locale's CLDR rules, then `key_other`, then `key`. */
   t(key: string, vars?: Record<string, string | number>): string;
+  /** A timestamp relative to now in the active locale ("5 minutes ago", "now"),
+   *  via Intl.RelativeTimeFormat. Call it during render, next to `t()`. */
+  formatRelativeTime(time: Date | number): string;
   /** The host's current active locale. */
   getLocale(): PluginLocale;
   /** Fires whenever the host's active locale changes. Re-call `t()` and re-render
@@ -920,6 +967,10 @@ export interface PluginAPI {
    * strictly less than the ungated sessions:write, and detaching a pane leaves
    * the session open. Writes never throw — they return a PluginPaneResult whose
    * `error` says why, because every underlying store method fails silently.
+   *
+   * `rename` names a session, `renameTab` a split tab; a blank title clears the
+   * name. A title escape the remote program writes (OSC 0/2) never reaches
+   * either name — Voltius does not read them — so a name set here always holds.
    */
   panes: {
     list(): PluginPaneTab[];
@@ -927,6 +978,8 @@ export interface PluginAPI {
     move(input: { sessionId: string; targetSessionId: string; position: PluginPanePosition }): PluginPaneResult;
     detach(sessionId: string): PluginPaneResult;
     focus(sessionId: string, maximize?: boolean): PluginPaneResult;
+    rename(sessionId: string, title: string | null): PluginPaneResult;
+    renameTab(tabId: string, title: string | null): PluginPaneResult;
   };
 
   /**
@@ -1122,7 +1175,7 @@ export interface PluginAPI {
     /** Publish a plain, serialisable state snapshot for host UI to read, keyed
      *  by `<pluginId>::<key>`. Host surfaces subscribe to this instead of
      *  importing the plugin's runtime module. Cleared on unload/disable. */
-    publishState(key: string, value: unknown): void;
+    publishState<K extends string>(key: K, value: K extends "sync-state" ? SyncProviderState : unknown): void;
   };
 
   // Plugin-scoped key-value storage
@@ -1289,9 +1342,10 @@ export interface PluginAPI {
     /**
      * CRDT-merge one or more remote encrypted blobs into local state, then
      * reload all entity stores. blobs: base64-encoded (same format as exportState).
-     * Requires sync:write.
+     * Unreadable blobs are skipped and their indices returned; rejects if none
+     * could be read. Requires sync:write.
      */
-    importStates(encKey: string, blobs: string[]): Promise<void>;
+    importStates(encKey: string, blobs: string[]): Promise<{ unreadable: number[] }>;
   };
 
   // Inter-plugin communication (always available), plus plugin inventory and
@@ -1327,6 +1381,7 @@ export interface PluginAPI {
     import(opts: {
       content: string; vaultId: string; passphrase?: string; dryRun: boolean;
     }): Promise<DomainResult<ImportResult>>;
+    sshConfigSync(): Promise<DomainResult<SyncSummary>>;
   };
 
   // MCP tool contributions — GATED (mcp:contribute). Tools run with THIS
@@ -1358,6 +1413,9 @@ export interface PluginManifest {
    *  at build time when the manifest omits it. */
   minAppVersion?: string;
   description?: string;
+  /** Iconify id (e.g. "lucide:cpu", "custom:docker") shown in the plugin list. Restricted to
+   *  host-bundled prefixes at render time (see `catalogIcon`); falls back to a puzzle icon. */
+  icon?: string;
   permissions: string[];
   defaultEnabled?: boolean;
   /** Hidden in the plugin list on mobile (uses host-only resources, e.g. local fs). */

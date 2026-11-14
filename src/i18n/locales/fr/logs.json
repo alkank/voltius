@@ -44,6 +44,8 @@
         "portForwardDeleted": "Redirection de port supprimée",
         "vaultRenamed": "Coffre renommé",
         "vaultKeyRotated": "Clé changée",
+        "teamLockPolicySet": "Règle de verrouillage définie",
+        "teamLockPolicyRemoved": "Règle de verrouillage supprimée",
         "roleCreated": "Rôle créé",
         "roleUpdated": "Rôle modifié",
         "roleDeleted": "Rôle supprimé",
@@ -52,7 +54,13 @@
         "secretViewed": "Secret révélé",
         "sessionStarted": "Session démarrée",
         "sessionEnded": "Session terminée",
-        "sessionJoined": "Session rejointe"
+        "sessionJoined": "Session rejointe",
+        "memberRenamed": "Membre renommé",
+        "permissionGranted": "Permission accordée",
+        "permissionRevoked": "Permission révoquée",
+        "sessionLeft": "Session quittée",
+        "vaultCreated": "Coffre créé",
+        "vaultDeleted": "Coffre supprimé"
       }
     },
     "timeRange": {
@@ -73,18 +81,27 @@
     },
     "badges": {
       "client": "client",
-      "clientTooltip": "Signalé par l'application cliente — non-officiel"
+      "clientTooltip": "Signalé par l'application cliente — non-officiel",
+      "ownKey": "clé personnelle",
+      "ownKeyTooltip": "Connecté avec l'identité du membre ; elle ne quitte jamais son appareil",
+      "shared": "partagée · {{name}}",
+      "sharedUnknown": "partagée"
     },
     "eventLabels": {
       "memberInvited": "a invité {{name}}",
       "memberJoined": "a rejoint l'équipe en tant que {{role}}",
       "memberRemoved": "a retiré {{name}}",
+      "memberRenamed": "a nommé {{name}} « {{to}} »",
+      "memberNameRemoved": "a retiré le nom de {{name}}",
       "memberRoleChanged": "a changé le rôle de {{name}}",
       "memberPermissionsChanged": "a changé les permissions de {{name}}",
       "vaultCreated": "a créé le coffre « {{name}} »",
       "vaultDeleted": "a supprimé le coffre « {{name}} »",
       "vaultRenamed": "a renommé le coffre en « {{name}} »",
       "vaultKeyRotated": "a changé la clé du coffre « {{name}} »",
+      "lockPolicySet": "a défini la règle de verrouillage (verrouillage auto : {{timeout}})",
+      "lockPolicySetVault": "a défini la règle de verrouillage (verrouillage auto : {{timeout}}, « Verrouiller le coffre » imposé)",
+      "lockPolicyRemoved": "a supprimé la règle de verrouillage",
       "roleCreated": "a créé le rôle « {{name}} »",
       "roleUpdated": "a modifié le rôle « {{name}} »",
       "roleDeleted": "a supprimé le rôle « {{name}} »",
@@ -119,7 +136,8 @@
       "fallbackMember": "un membre",
       "fallbackRole": "membre",
       "fallbackResource": "une ressource",
-      "fallbackHost": "un hôte"
+      "fallbackHost": "un hôte",
+      "you": "Vous"
     },
     "timeline": {
       "today": "Aujourd'hui",
