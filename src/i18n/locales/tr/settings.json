@@ -588,8 +588,11 @@
         "seatsUsed": "{{used}} / {{total}} kullanılıyor",
         "upgradeToPro": "Bulut eşitleme ve daha fazlasının kilidini açmak için yükseltin",
         "upgrade": "Yükselt",
-        "upgradeToTeams": "Teams'i {{days}} gün ücretsiz deneyin: ekibiniz için paylaşılan kasalar ve roller. Kart gerekir.",
-        "teamsButton": "Ücretsiz dene →",
+        "upgradeToTeams": "Teams'i {{days}} gün ücretsiz deneyin — kredi kartı gerekmez",
+        "teamsButton": "Denemeyi başlat",
+        "activateTrial": "14 günlük Pro'yu etkinleştir",
+        "activate": "Etkinleştir",
+        "upgradeToTeamsPlain": "Teams'e geçin: ekibiniz için paylaşılan kasalar ve roller.",
         "viewAllPlans": "Tüm planları gör →",
         "everythingIn": "{{plan}} planındaki her şey, artı:",
         "nextAdds": "{{plan}} şunları ekler:",
@@ -1118,13 +1121,13 @@
           "syncNow": "Şimdi senkronize et"
         },
         "off": {
-          "title": "Sürekli senkronizasyon kapatılsın mı?",
+          "title": "Sürekli eşitleme kapatılsın mı?",
           "message_one": "Yönetilen ana makine Voltius'ta kalır ve normal bir ana makineye dönüşür: hiçbir bilgisayarınızda artık ~/.ssh/config'i izlemez.",
           "message_other": "{{count}} yönetilen ana makine Voltius'ta kalır ve normal ana makinelere dönüşür: hiçbir bilgisayarınızda artık ~/.ssh/config'i izlemezler.",
           "confirm": "Kapat"
         },
         "dialog": {
-          "activateTitle": "Sürekli senkronizasyonu aç",
+          "activateTitle": "Sürekli eşitleme aç",
           "reviewTitle": "~/.ssh/config ana makineleri",
           "intro": "Bağlanan ana makineler adlarını, klasörlerini ve ayarlarını korur. Dosyayı yalnızca onun belirttikleri (adres, port ve varsa kullanıcı, anahtar veya atlama ana makineleri) izler; bu tüm bilgisayarlarınızda geçerlidir.",
           "turnOn": "Aç",
@@ -1137,7 +1140,7 @@
         "row": {
           "create": "Oluşturulacak",
           "link": {
-            "legacy": "“{{name}}” ile bağlanacak · önceki senkronizasyon",
+            "legacy": "“{{name}}” ile bağlanacak · önceki eşitleme",
             "detached": "“{{name}}” ile bağlanacak · daha önce ayrılmış",
             "name": "“{{name}}” ile bağlanacak · aynı ad ve adres",
             "address": "“{{name}}” ile bağlanacak · aynı adres"
@@ -1145,7 +1148,7 @@
           "ambiguous": "Belirsiz ({{names}} eşleşiyor) · yeni bir ana makine oluşturulacak",
           "managed": "Yönetilen · “{{name}}”",
           "detached": "Ayrıldı · “{{name}}” artık dosyayı izlemiyor",
-          "deleted": "Silindi · senkronizasyon yeniden oluşturmaz",
+          "deleted": "Silindi · eşitleme yeniden oluşturmaz",
           "ignored": "Yok sayıldı · senkronize edilmeyecek",
           "identityReplaced": "“{{name}}” kimliği dosyadaki anahtarla değiştirilecek",
           "skipped": {
